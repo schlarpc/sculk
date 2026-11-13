@@ -1,0 +1,17 @@
+# Gradle
+.gradle/
+build/
+!**/src/**/build/
+# Loader dev runs
+run/
+runs/
+# IDEs
+.idea/
+*.iml
+.vscode/
+out/
+bin/
+# direnv / nix
+.direnv/
+result
+result-*
