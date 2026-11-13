@@ -38,7 +38,8 @@ import sculk.core.util.Bytes;
  * <p>Whoever can call this server can run code in the game process and inject
  * packets, so it is off unless {@code -Dsculk.control=<port>} is set, and:
  * <ul>
- *   <li>it listens on the loopback address only;</li>
+ *   <li>it listens on the loopback addresses only: 127.0.0.1 and, when the
+ *       system has it, ::1, on the same port;</li>
  *   <li>every request needs {@code Authorization: Bearer <token>}. The token
  *       is random per launch and written, with the port, to a file only the
  *       user can read ({@code sculk-control.json} in the working directory,
@@ -85,7 +86,9 @@ public final class ControlServer {
 
     private final Sculk engine;
     private final EventStore store;
-    private final HttpServer server;
+    /** One per loopback address: 127.0.0.1 always, ::1 when available. */
+    private final List<HttpServer> servers = new java.util.ArrayList<>();
+    private final int port;
     private final String token;
     private final Set<String> hosts;
     private final Path file;
@@ -108,20 +111,22 @@ public final class ControlServer {
         }
         this.token = token;
 
-        // 127.0.0.1 explicitly: getLoopbackAddress() is ::1 under
-        // -Djava.net.preferIPv6Addresses=system, which Forge and NeoForge dev runs set.
-        InetAddress loopback = InetAddress.getByAddress("localhost", new byte[] {127, 0, 0, 1});
-        server = HttpServer.create(new InetSocketAddress(loopback, port), 16);
+        int bound = bind(port);
+        this.port = bound;
+        Set<String> names = new java.util.HashSet<>(Set.of("127.0.0.1:" + bound, "localhost:" + bound));
+        if (servers.size() > 1) names.add("[::1]:" + bound);
+        hosts = Set.copyOf(names);
         AtomicInteger threads = new AtomicInteger();
-        server.setExecutor(Executors.newCachedThreadPool(r -> {
+        var executor = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "sculk-control-" + threads.incrementAndGet());
             t.setDaemon(true);
             return t;
-        }));
-        int bound = server.getAddress().getPort();
-        hosts = Set.of("127.0.0.1:" + bound, "localhost:" + bound);
-        server.createContext("/", this::handle);
-        server.start();
+        });
+        for (HttpServer server : servers) {
+            server.setExecutor(executor);
+            server.createContext("/", this::handle);
+            server.start();
+        }
         writeFile(bound);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
@@ -130,15 +135,56 @@ public final class ControlServer {
                 // Best effort.
             }
         }, "sculk-control-cleanup"));
-        Sculk.LOG.info("control server on http://127.0.0.1:{} (token in {})", bound, this.file);
+        Sculk.LOG.info("control server on http://127.0.0.1:{}{} (token in {})",
+                bound, servers.size() > 1 ? " and http://[::1]:" + bound : "", this.file);
     }
 
-    public int port() { return server.getAddress().getPort(); }
+    /**
+     * Binds 127.0.0.1, then ::1 on the same port. Addresses are explicit:
+     * getLoopbackAddress() picks one family, and Forge and NeoForge dev runs
+     * set -Djava.net.preferIPv6Addresses=system, which makes it ::1. Without
+     * IPv6 loopback, serves IPv4 only. With port 0, retries when another
+     * process holds the chosen port on ::1.
+     */
+    private int bind(int requested) throws IOException {
+        InetAddress v4 = InetAddress.getByAddress("localhost", new byte[] {127, 0, 0, 1});
+        InetAddress v6 = InetAddress.getByAddress("localhost", new byte[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1});
+        for (int attempt = 0; ; attempt++) {
+            HttpServer first = HttpServer.create(new InetSocketAddress(v4, requested), 16);
+            int bound = first.getAddress().getPort();
+            try {
+                HttpServer second = HttpServer.create(new InetSocketAddress(v6, bound), 16);
+                servers.add(first);
+                servers.add(second);
+                return bound;
+            } catch (java.net.BindException e) {
+                if (requested == 0 && attempt < 5 && !noIpv6(e)) {
+                    first.stop(0);
+                    continue;
+                }
+                Sculk.LOG.warn("control server: cannot also listen on [::1]:{} ({}); IPv4 only", bound, e.getMessage());
+            } catch (java.net.SocketException e) {
+                Sculk.LOG.warn("control server: no IPv6 loopback ({}); IPv4 only", e.getMessage());
+            }
+            servers.add(first);
+            return bound;
+        }
+    }
+
+    /** True for bind failures that mean "no IPv6 here" rather than "port taken". */
+    private static boolean noIpv6(java.net.BindException e) {
+        String m = String.valueOf(e.getMessage()).toLowerCase(java.util.Locale.ROOT);
+        return m.contains("assign requested address") || m.contains("not available") || m.contains("protocol family");
+    }
+
+    public int port() { return port; }
+    /** True when the server also listens on ::1. */
+    public boolean ipv6() { return servers.size() > 1; }
     public String token() { return token; }
     public Path file() { return file; }
 
     public void stop() {
-        server.stop(0);
+        for (HttpServer server : servers) server.stop(0);
     }
 
     /** Writes port and token where only the user can read them. */

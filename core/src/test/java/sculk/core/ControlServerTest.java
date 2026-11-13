@@ -122,6 +122,21 @@ class ControlServerTest {
     }
 
     @Test
+    void listensOnBothLoopbackAddresses() throws IOException {
+        org.junit.jupiter.api.Assumptions.assumeTrue(server().ipv6(), "no IPv6 loopback on this machine");
+        InetAddress v6 = InetAddress.getByName("::1");
+        try (Socket socket = new Socket(v6, server().port())) {
+            socket.setSoTimeout(10_000);
+            socket.getOutputStream().write(("GET /status HTTP/1.1\r\nHost: [::1]:" + server().port() + "\r\n" + auth()
+                    + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            String raw = new String(socket.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(raw.startsWith("HTTP/1.1 200"), raw);
+        }
+        assertEquals(403, request("GET", "/status", null, auth(), "Host: [::2]:" + server().port()).status());
+        assertEquals(200, request("POST", "/eval", "1", auth(), "Origin: http://[::1]:" + server().port()).status());
+    }
+
+    @Test
     void refusesCrossOriginRequests() throws IOException {
         assertEquals(403, request("POST", "/eval", "1", auth(), "Origin: http://evil.example").status());
         assertEquals(403, request("POST", "/eval", "1", auth(), "Origin: null").status());

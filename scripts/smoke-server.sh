@@ -67,6 +67,14 @@ for name, needle in [("", b"<title>sculk</title>"), ("app.js", b"sculk"), ("mono
     body = urllib.request.urlopen(f"{url}/ui/{name}", timeout=10).read()
     assert needle in body[:65536], f"/ui/{name} does not contain {needle}"
 PY
+    if grep -q 'and http://\[::1\]' "$log"; then
+        python3 - "$control" <<'PY' || { echo "FAIL: control server on ::1"; ok=0; }
+import json, sys, urllib.request
+info = json.load(open(sys.argv[1]))
+req = urllib.request.Request(f"http://[::1]:{info['port']}/status", headers={"Authorization": "Bearer " + info["token"]})
+assert json.load(urllib.request.urlopen(req, timeout=10))["platform"]
+PY
+    fi
 else
     echo "FAIL: no control file at $control"; ok=0
 fi

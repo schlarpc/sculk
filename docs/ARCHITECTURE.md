@@ -276,13 +276,15 @@ matches when any element does). Operators are `== != < <= > >=`,
 Anyone who can call this server can run code in the game and inject packets,
 so:
 
-- it is off by default, and listens on 127.0.0.1 only (not `::1`, even
-  when the JVM prefers IPv6, as Forge and NeoForge dev runs do);
+- it is off by default, and listens on loopback only: 127.0.0.1 and `::1`
+  on the same port, bound explicitly (Forge and NeoForge dev runs make the
+  JVM prefer IPv6, so "the" loopback address would be `::1` alone). Without
+  IPv6 loopback it serves IPv4 only;
 - every request needs `Authorization: Bearer <token>`. The token is random
   per launch and is written, with the port, to `sculk-control.json` in the
   game directory (or `-Dsculk.controlFile`), readable by the user only, and
   deleted on exit;
-- the `Host` header must be `127.0.0.1` or `localhost` with this port,
+- the `Host` header must be `127.0.0.1`, `[::1]` or `localhost` with this port,
   which stops DNS rebinding; a request with any other `Origin` is refused,
   which stops browsers' cross-site requests;
 - anything that changes state is a `POST`; every eval (HTTP or MCP) is
