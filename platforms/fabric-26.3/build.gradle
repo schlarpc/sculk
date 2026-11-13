@@ -1,0 +1,40 @@
+// Fabric 26.3 (protocol era C, unobfuscated, Java 25). Uses the
+// non-remapping Loom plugin: 26.x ships without obfuscation, so there is no
+// intermediary and no mappings line.
+plugins {
+    id 'java-library'
+    id 'net.fabricmc.fabric-loom'
+}
+
+base.archivesName = "${mod_id}-fabric-${minecraft_version}"
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+sourceSets.main.java.srcDir rootProject.file('core/src/main/java')
+
+loom {
+    runs {
+        configureEach { runDir = 'run' }
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+
+    include(implementation("org.mozilla:rhino:${rhino_version}"))
+}
+
+processResources {
+    var props = [
+        version         : mod_version,
+        mod_id          : mod_id,
+        mod_name        : mod_name,
+        mod_license     : mod_license,
+        mod_description : mod_description,
+        minecraft_version: minecraft_version,
+        loader_version  : fabric_loader_version,
+    ]
+    inputs.properties props
+    filesMatching('fabric.mod.json') { expand props }
+}

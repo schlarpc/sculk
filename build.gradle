@@ -1,0 +1,16 @@
+// Loader plugins are declared once here (and not applied) so every subproject
+// shares a single plugin classloader. Each platform applies the one it needs.
+plugins {
+    id 'net.fabricmc.fabric-loom' version "${loom_version}" apply false
+    id 'net.neoforged.moddev' version "${moddev_version}" apply false
+    id 'net.neoforged.moddev.legacyforge' version "${moddev_version}" apply false
+}
+
+subprojects {
+    group = 'sculk'
+    version = rootProject.mod_version
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+    }
+}

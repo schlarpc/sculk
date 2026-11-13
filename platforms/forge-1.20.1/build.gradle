@@ -1,0 +1,67 @@
+// Forge 1.20.1 (protocol era A, SRG member names at runtime, Java 17).
+// MDG Legacy compiles against Mojang names and reobfuscates the jar to SRG;
+// the mixin annotation processor writes a refmap so injections resolve too.
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev.legacyforge'
+}
+
+base.archivesName = "${mod_id}-forge-${minecraft_version}"
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+sourceSets.main.java.srcDir rootProject.file('core/src/main/java')
+
+legacyForge {
+    version = "${minecraft_version}-${forge_version}"
+    parchment {
+        minecraftVersion = parchment_minecraft_version
+        mappingsVersion = parchment_mappings_version
+    }
+    runs {
+        client { client() }
+        server { server(); programArgument '--nogui' }
+        configureEach {
+            gameDirectory = project.file('run')
+        }
+    }
+    mods {
+        "${mod_id}" { sourceSet sourceSets.main }
+    }
+}
+
+mixin {
+    add sourceSets.main, "${mod_id}.refmap.json"
+    config "${mod_id}.mixins.json"
+}
+
+dependencies {
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+    jarJar(implementation("org.mozilla:rhino")) {
+        version { strictly "[${rhino_version},2)"; prefer rhino_version }
+    }
+    // Dev runs only see mods on the module path; plain libraries need this.
+    additionalRuntimeClasspath "org.mozilla:rhino:${rhino_version}"
+}
+
+jar {
+    manifest.attributes('MixinConfigs': "${mod_id}.mixins.json")
+}
+
+var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    var props = [
+        minecraft_version_range: minecraft_version_range,
+        forge_version_range    : forge_version_range,
+        loader_version_range   : loader_version_range,
+        mod_id                 : mod_id,
+        mod_name               : mod_name,
+        mod_license            : mod_license,
+        mod_version            : mod_version,
+        mod_description        : mod_description,
+    ]
+    inputs.properties props
+    expand props
+    from 'src/main/templates'
+    into layout.buildDirectory.dir('generated/sources/modMetadata')
+}
+sourceSets.main.resources.srcDir generateModMetadata
+legacyForge.ideSyncTask generateModMetadata

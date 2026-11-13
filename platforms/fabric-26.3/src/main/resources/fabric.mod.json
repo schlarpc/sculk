@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${version}",
+  "name": "${mod_name}",
+  "description": "${mod_description}",
+  "license": "${mod_license}",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["sculk.fabric.SculkFabric"]
+  },
+  "mixins": ["${mod_id}.mixins.json"],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "minecraft": "~${minecraft_version}",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

@@ -1,0 +1,56 @@
+// NeoForge 1.21.1 (protocol era C, Mojang names at runtime, Java 21).
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev'
+}
+
+base.archivesName = "${mod_id}-neoforge-${minecraft_version}"
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+// Shared engine sources are compiled into this jar (see core/build.gradle).
+sourceSets.main.java.srcDir rootProject.file('core/src/main/java')
+
+neoForge {
+    version = neo_version
+    parchment {
+        minecraftVersion = parchment_minecraft_version
+        mappingsVersion = parchment_mappings_version
+    }
+    runs {
+        client { client() }
+        server { server(); programArgument '--nogui' }
+        configureEach {
+            gameDirectory = project.file('run')
+        }
+    }
+    mods {
+        "${mod_id}" { sourceSet sourceSets.main }
+    }
+}
+
+dependencies {
+    jarJar(implementation("org.mozilla:rhino")) {
+        version { strictly "[${rhino_version},2)"; prefer rhino_version }
+    }
+    // Dev runs only see mods on the module path; plain libraries need this.
+    additionalRuntimeClasspath "org.mozilla:rhino:${rhino_version}"
+}
+
+var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    var props = [
+        minecraft_version_range: minecraft_version_range,
+        neo_version            : neo_version,
+        loader_version_range   : loader_version_range,
+        mod_id                 : mod_id,
+        mod_name               : mod_name,
+        mod_license            : mod_license,
+        mod_version            : mod_version,
+        mod_description        : mod_description,
+    ]
+    inputs.properties props
+    expand props
+    from 'src/main/templates'
+    into layout.buildDirectory.dir('generated/sources/modMetadata')
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata

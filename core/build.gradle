@@ -1,0 +1,35 @@
+// sculk-core: the loader- and version-agnostic engine.
+//
+// Rules for this module:
+//   * No Minecraft, Mixin, or mod-loader classes. Ever.
+//   * Netty and SLF4J are compileOnly: every supported Minecraft version ships
+//     them, so the game provides them at runtime.
+//   * Bytecode targets Java 17, the oldest JVM any platform runs on (1.20.1).
+//
+// Platforms compile these sources straight into their own mod jar (see
+// platforms/*/build.gradle), so this project's jar is only used for tests.
+plugins {
+    id 'java-library'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnlyApi 'io.netty:netty-transport:4.1.97.Final'
+    compileOnlyApi 'org.slf4j:slf4j-api:2.0.9'
+    api "org.mozilla:rhino:${rootProject.rhino_version}"
+
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'io.netty:netty-transport:4.1.97.Final'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.9'
+}
+
+test {
+    useJUnitPlatform()
+}
