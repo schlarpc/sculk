@@ -1,9 +1,16 @@
 {
   "required": true,
-  "refmap": "sculk.refmap.json",
   "minVersion": "0.8",
+  "refmap": "sculk.refmap.json",
   "package": "sculk.forge.mixin",
   "compatibilityLevel": "JAVA_17",
-  "mixins": ["ConnectionMixin"],
+  "mixins": [
+    "ConnectionMixin",
+    "IndexedMessageCodecAccessor",
+    "IndexedMessageCodecMixin",
+    "MessageHandlerAccessor",
+    "PacketDecoderMixin",
+    "PacketEncoderMixin"
+  ],
   "injectors": { "defaultRequire": 1 }
 }

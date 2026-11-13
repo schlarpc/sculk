@@ -3,6 +3,11 @@
   "minVersion": "0.8",
   "package": "sculk.neoforge.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["ConnectionMixin"],
+  "mixins": [
+    "ConnectionMixin",
+    "NetworkRegistryMixin",
+    "PacketDecoderMixin",
+    "PacketEncoderMixin"
+  ],
   "injectors": { "defaultRequire": 1 }
 }
