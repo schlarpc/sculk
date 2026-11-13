@@ -55,7 +55,10 @@
               pkgs.python3 # scripts/*.py
             ]
             ++ lib.optionals stdenv.hostPlatform.isLinux [
-              pkgs.xvfb-run # headless clients for integration tests
+              # headless clients for integration tests, and screenshots of them
+              pkgs.xorg-server
+              pkgs.xwd
+              pkgs.imagemagick
             ];
 
             JAVA17_HOME = pkgs.jdk17.home;

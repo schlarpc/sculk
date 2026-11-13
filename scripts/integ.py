@@ -54,11 +54,9 @@ def wait_for(predicate, timeout, procs, what):
     raise SystemExit(f"timed out after {timeout}s waiting for {what}")
 
 
-def gradle(platform, task, props, log, env=None, xvfb=False):
+def gradle(platform, task, props, log, env=None):
     cmd = ["gradle", "--console=plain", f":platforms:{platform}:{task}", "-Psculk.integ=true"]
     cmd += [f"-P{k}={v}" for k, v in props.items()]
-    if xvfb:
-        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24"] + cmd
     return subprocess.Popen(
         cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         env=env, start_new_session=True)
@@ -71,6 +69,25 @@ def stop(p):
             p.wait(20)
         except Exception:
             os.killpg(p.pid, signal.SIGKILL)
+
+
+def start_xvfb():
+    """Starts a private X server; returns (process, display)."""
+    for n in range(90, 140):
+        if not Path(f"/tmp/.X11-unix/X{n}").exists() and not Path(f"/tmp/.X{n}-lock").exists():
+            p = subprocess.Popen(["Xvfb", f":{n}", "-screen", "0", "1280x720x24", "-nolisten", "tcp"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            time.sleep(1)
+            if p.poll() is None:
+                return p, f":{n}"
+    raise SystemExit("could not start Xvfb")
+
+
+def screenshot(display, path):
+    subprocess.run(f"xwd -root -display {display} | magick xwd:- {path}", shell=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if path.exists():
+        print(f"[integ] client screenshot: {path}")
 
 
 def software_gl_env():
@@ -201,10 +218,13 @@ def main():
         "joinedFirstServer:true", "pauseOnLostFocus:false", "soundCategory_master:0.0",
     ]) + "\n")
     server_log, client_log = out / "server.jsonl", out / "client.jsonl"
+    (out / "client-failure.png").unlink(missing_ok=True)
     for f in (server_log, client_log):
         f.unlink(missing_ok=True)
 
     procs = {}
+    xvfb, display = start_xvfb()
+    finished = False
     try:
         with open(out / "server.out", "w") as so, open(out / "client.out", "w") as co:
             print(f"[integ] {args.platform}: starting server on port {port}")
@@ -213,9 +233,11 @@ def main():
             wait_for(lambda: "Done (" in (out / "server.out").read_text(errors="replace"),
                      args.timeout, procs, "server startup")
             print("[integ] server up; starting headless client")
+            env = software_gl_env()
+            env["DISPLAY"] = display
             procs["client"] = gradle(args.platform, "runClient", {
                 "sculk.eventLog": client_log, "sculk.scripts": ROOT / "tests/integ/client.js",
-                "sculk.quickPlay": f"localhost:{port}"}, co, env=software_gl_env(), xvfb=True)
+                "sculk.quickPlay": f"localhost:{port}"}, co, env=env)
             def client_finished():
                 events = read_jsonl(client_log)
                 if any(e["kind"] == "disconnect" for e in events):
@@ -224,9 +246,13 @@ def main():
                     raise SystemExit("client was disconnected before finishing: " + "; ".join(reasons[-2:]))
                 return any(e["kind"] == "script" and e["data"].get("step") == "done" for e in events)
             wait_for(client_finished, args.timeout, procs, "client script to finish")
+            finished = True
     finally:
+        if not finished and "client" in procs:
+            screenshot(display, out / "client-failure.png")
         for p in procs.values():
             stop(p)
+        stop(xvfb)
 
     server, client = read_jsonl(server_log), read_jsonl(client_log)
     print(f"[integ] {args.platform}: {len(server)} server events, {len(client)} client events")
