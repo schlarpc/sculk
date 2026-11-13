@@ -15,10 +15,13 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for goals, design and roadmap.
 
 ## Status
 
-Scaffold. Every target builds, loads, starts the Rhino script engine, and
-hooks new game connections. `scripts/smoke-server.sh` checks this on a
-dedicated server. The client uses the same hook, but it has not been
-exercised yet. No interception yet.
+Early, but working on all three targets: capture, drop, replace and inject
+frames and packets in both directions on both sides; attribute payloads to
+the mod that owns them; decode them with the mod's own codec; script all of
+it in JavaScript; and drive it live from a local control server (CLI, web UI,
+MCP). Unit, smoke and real-mod integration tests cover each target. See the
+roadmap in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#roadmap) for what is
+next.
 
 | Target | Loader | Minecraft | Java | Why |
 |---|---|---|---|---|
