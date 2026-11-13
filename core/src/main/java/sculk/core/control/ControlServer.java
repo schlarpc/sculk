@@ -78,7 +78,10 @@ public final class ControlServer {
         new SecureRandom().nextBytes(random);
         this.token = Bytes.hex(random);
 
-        server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 16);
+        // 127.0.0.1 explicitly: getLoopbackAddress() is ::1 under
+        // -Djava.net.preferIPv6Addresses=system, which Forge and NeoForge dev runs set.
+        InetAddress loopback = InetAddress.getByAddress("localhost", new byte[] {127, 0, 0, 1});
+        server = HttpServer.create(new InetSocketAddress(loopback, port), 16);
         AtomicInteger threads = new AtomicInteger();
         server.setExecutor(Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "sculk-control-" + threads.incrementAndGet());
@@ -86,7 +89,7 @@ public final class ControlServer {
             return t;
         }));
         int bound = server.getAddress().getPort();
-        hosts = Set.of("127.0.0.1:" + bound, "localhost:" + bound, "[::1]:" + bound);
+        hosts = Set.of("127.0.0.1:" + bound, "localhost:" + bound);
         server.createContext("/", this::handle);
         server.start();
         writeFile(bound);
