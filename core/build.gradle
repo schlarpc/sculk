@@ -2,8 +2,9 @@
 //
 // Rules for this module:
 //   * No Minecraft, Mixin, or mod-loader classes. Ever.
-//   * Netty and SLF4J are compileOnly: every supported Minecraft version ships
-//     them, so the game provides them at runtime.
+//   * Netty, SLF4J and Gson are compileOnly: every supported Minecraft version
+//     ships them, so the game provides them at runtime. Pin the oldest version
+//     any target ships so we never compile against newer APIs.
 //   * Bytecode targets Java 17, the oldest JVM any platform runs on (1.20.1).
 //
 // Platforms compile these sources straight into their own mod jar (see
@@ -21,6 +22,7 @@ repositories {
 dependencies {
     compileOnlyApi 'io.netty:netty-transport:4.1.97.Final'
     compileOnlyApi 'org.slf4j:slf4j-api:2.0.9'
+    compileOnlyApi 'com.google.code.gson:gson:2.10.1'
     // Relocated Rhino (sculk.shaded.org.mozilla); see libs/rhino.
     api project(path: ':libs:rhino', configuration: 'shaded')
 
@@ -28,6 +30,8 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testImplementation 'io.netty:netty-transport:4.1.97.Final'
+    testImplementation 'io.netty:netty-codec:4.1.97.Final'
+    testImplementation 'com.google.code.gson:gson:2.10.1'
     testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.9'
 }
 

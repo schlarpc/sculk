@@ -1,13 +1,16 @@
 package sculk.core.script;
 
 import sculk.shaded.org.mozilla.javascript.Context;
+import sculk.shaded.org.mozilla.javascript.Function;
 import sculk.shaded.org.mozilla.javascript.RhinoException;
 import sculk.shaded.org.mozilla.javascript.Scriptable;
 import sculk.shaded.org.mozilla.javascript.ScriptableObject;
 
 /**
- * Embeds Rhino. Scripts see only the core packet model and the action API,
- * never raw Minecraft classes, so one script runs on every platform.
+ * Embeds Rhino. One global scope per host. Rhino scopes are not thread-safe
+ * and hooks fire on Netty threads, so every entry point is synchronized.
+ * Scripts see only the core API, never raw Minecraft classes, so one script
+ * runs on every platform.
  */
 public final class ScriptHost {
     private final ScriptableObject scope;
@@ -21,14 +24,42 @@ public final class ScriptHost {
     private static Context enter() {
         Context cx = Context.enter();
         cx.setLanguageVersion(Context.VERSION_ES6);
+        // Hand Java Strings/numbers/booleans to scripts as JS primitives, so
+        // that e.channel === 'mod:x' works as script authors expect.
+        cx.getWrapFactory().setJavaPrimitiveWrap(false);
         return cx;
     }
 
     /** Exposes a Java object to scripts as a global. */
-    public void bind(String name, Object value) {
+    public synchronized void bind(String name, Object value) {
         try (Context cx = enter()) {
             ScriptableObject.putProperty(scope, name, Context.javaToJS(value, scope, cx));
         }
+    }
+
+    /** Evaluates {@code source} and returns the result converted to a Java object. */
+    public synchronized Object eval(String sourceName, String source) {
+        try (Context cx = enter()) {
+            Object result = cx.evaluateString(scope, source, sourceName, 1, null);
+            return toJava(result);
+        }
+    }
+
+    /** Calls a script function with Java arguments. */
+    public synchronized Object call(Function fn, Object... args) {
+        try (Context cx = enter()) {
+            Object[] jsArgs = new Object[args.length];
+            for (int i = 0; i < args.length; i++) jsArgs[i] = Context.javaToJS(args[i], scope, cx);
+            return toJava(fn.call(cx, scope, scope, jsArgs));
+        }
+    }
+
+    /** Converts script values to plain Java: JS objects and arrays become Maps and Lists (Rhino implements both). */
+    static Object toJava(Object value) {
+        if (value instanceof sculk.shaded.org.mozilla.javascript.Wrapper w) return w.unwrap();
+        if (value instanceof Scriptable) return value;
+        if (value == Context.getUndefinedValue()) return null;
+        return Context.jsToJava(value, Object.class);
     }
 
     /**
@@ -53,13 +84,5 @@ public final class ScriptHost {
             throw new IllegalStateException("Rhino message bundle missing: " + message);
         }
         return "rhino " + Context.class.getPackage().getName() + " ok";
-    }
-
-    /** Evaluates {@code source} and returns the result converted to a Java object. */
-    public Object eval(String sourceName, String source) {
-        try (Context cx = enter()) {
-            Object result = cx.evaluateString(scope, source, sourceName, 1, null);
-            return result instanceof Scriptable ? result : Context.jsToJava(result, Object.class);
-        }
     }
 }
