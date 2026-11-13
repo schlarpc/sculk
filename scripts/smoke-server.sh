@@ -8,7 +8,7 @@ set -euo pipefail
 platform=${1:?usage: smoke-server.sh <platform-dir-name>}
 port=${2:-25599}
 root=$(cd "$(dirname "$0")/.." && pwd)
-run="$root/platforms/$platform/run"
+run="$root/platforms/$platform/run/server"
 log="$run/smoke.log"
 
 mkdir -p "$run"

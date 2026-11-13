@@ -27,3 +27,23 @@ def unpackRhino = tasks.register('unpackShadedRhino', Sync) {
     into layout.buildDirectory.dir('shaded/rhino')
 }
 sourceSets.main.output.dir(layout.buildDirectory.dir('shaded/rhino'), builtBy: unpackRhino)
+
+// Real mods from Modrinth, used by integration tests (-Psculk.integ).
+repositories {
+    exclusiveContent {
+        forRepository { maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' } }
+        filter { includeGroup 'maven.modrinth' }
+    }
+}
+
+// -Psculk.integ adds each platform's integration test mods to dev runs.
+ext.sculkInteg = providers.gradleProperty('sculk.integ').isPresent()
+
+// sculk.* settings forwarded from Gradle properties to dev runs as system
+// properties, for example -Psculk.eventLog=/tmp/events.jsonl.
+ext.sculkRunProperties = ['sculk.eventLog', 'sculk.scripts']
+        .findAll { providers.gradleProperty(it).isPresent() }
+        .collectEntries { [(it): providers.gradleProperty(it).get()] }
+
+// -Psculk.quickPlay=host:port makes runClient join that server on startup.
+ext.sculkQuickPlay = providers.gradleProperty('sculk.quickPlay').getOrNull()

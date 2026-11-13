@@ -13,7 +13,16 @@ apply from: rootProject.file('gradle/platform-common.gradle')
 
 loom {
     runs {
-        configureEach { runDir = 'run' }
+        client {
+            runDir = 'run/client'
+            if (sculkQuickPlay) programArgs '--quickPlayMultiplayer', sculkQuickPlay, '--width', '640', '--height', '360'
+        }
+        server {
+            runDir = 'run/server'
+        }
+        configureEach {
+            sculkRunProperties.each { k, v -> property k, v }
+        }
     }
 }
 
@@ -21,6 +30,14 @@ dependencies {
     minecraft "com.mojang:minecraft:${minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+
+    if (sculkInteg) {
+        // Integration test mods (Modrinth version ids). See tests/integ/.
+        runtimeOnly 'maven.modrinth:appleskin:PHjDtQay'  // 3.0.10+mc26.3
+        runtimeOnly 'maven.modrinth:balm:MYj31XNG'       // 26.3.0.3+fabric-26.3
+        runtimeOnly 'maven.modrinth:shogi:9gkJoFhj'      // 26.3.0.3+fabric-26.3 (Waystones dependency)
+        runtimeOnly 'maven.modrinth:waystones:FHxw949T'  // 26.3.0.2+fabric-26.3
+    }
 }
 
 processResources {

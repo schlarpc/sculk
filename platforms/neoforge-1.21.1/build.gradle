@@ -16,14 +16,31 @@ neoForge {
         mappingsVersion = parchment_mappings_version
     }
     runs {
-        client { client() }
-        server { server(); programArgument '--nogui' }
+        client {
+            client()
+            gameDirectory = project.file('run/client')
+            if (sculkQuickPlay) programArguments.addAll('--quickPlayMultiplayer', sculkQuickPlay, '--width', '640', '--height', '360')
+        }
+        server {
+            server()
+            programArgument '--nogui'
+            gameDirectory = project.file('run/server')
+        }
         configureEach {
-            gameDirectory = project.file('run')
+            sculkRunProperties.each { k, v -> systemProperty k, v }
         }
     }
     mods {
         "${mod_id}" { sourceSet sourceSets.main }
+    }
+}
+
+dependencies {
+    if (sculkInteg) {
+        // Integration test mods (Modrinth version ids). See tests/integ/.
+        runtimeOnly 'maven.modrinth:appleskin:uAKA6Laj'  // 3.0.9+mc1.21
+        runtimeOnly 'maven.modrinth:balm:gMedgtzL'       // 21.0.67+neoforge-1.21.1
+        runtimeOnly 'maven.modrinth:waystones:6Z6MQ6os'  // 21.1.46+neoforge-1.21.1
     }
 }
 

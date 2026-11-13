@@ -15,3 +15,4 @@ bin/
 .direnv/
 result
 result-*
+__pycache__/

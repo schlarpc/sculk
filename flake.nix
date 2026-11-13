@@ -52,7 +52,10 @@
             packages = [
               gradle
               pkgs.jdk25
-              pkgs.python3 # scripts/status-ping.py
+              pkgs.python3 # scripts/*.py
+            ]
+            ++ lib.optionals stdenv.hostPlatform.isLinux [
+              pkgs.xvfb-run # headless clients for integration tests
             ];
 
             JAVA17_HOME = pkgs.jdk17.home;
@@ -61,6 +64,10 @@
             JAVA_HOME = pkgs.jdk25.home;
 
             LD_LIBRARY_PATH = lib.makeLibraryPath clientRuntimeLibs;
+
+            # Software OpenGL for headless clients. scripts/integ.py points only
+            # the clients it launches at this; normal runClient uses the host GPU.
+            SCULK_MESA = lib.optionalString stdenv.hostPlatform.isLinux "${pkgs.mesa}";
           };
         }
       );
