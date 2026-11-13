@@ -54,8 +54,10 @@ def wait_for(predicate, timeout, procs, what):
     raise SystemExit(f"timed out after {timeout}s waiting for {what}")
 
 
-def gradle(platform, task, props, log, env=None):
-    cmd = ["gradle", "--console=plain", f":platforms:{platform}:{task}", "-Psculk.integ=true"]
+def gradle(platform, task, props, log, env=None, integ=True):
+    cmd = ["gradle", "--console=plain", f":platforms:{platform}:{task}"]
+    if integ:
+        cmd.append("-Psculk.integ=true")
     cmd += [f"-P{k}={v}" for k, v in props.items()]
     return subprocess.Popen(
         cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -103,6 +105,27 @@ def software_gl_env():
     if icds:
         env["VK_ICD_FILENAMES"] = str(icds[0])
     return env
+
+
+def seed_run_dirs(run: Path, port: int):
+    """Writes server.properties (offline, flat, on `port`) and client options for a quiet headless join."""
+    (run / "server").mkdir(parents=True, exist_ok=True)
+    (run / "server" / "eula.txt").write_text("eula=true\n")
+    (run / "server" / "server.properties").write_text(
+        f"server-port={port}\nonline-mode=false\nlevel-type=minecraft\\:flat\n"
+        "spawn-protection=0\nenforce-secure-profile=false\nsync-chunk-writes=false\n"
+        # Newer versions whitelist by default.
+        "white-list=false\nenforce-whitelist=false\n")
+    # A fresh client opens the accessibility onboarding screen before Quick
+    # Play, and its blurred background is very slow under software GL. Seed
+    # options that skip it and keep rendering cheap.
+    (run / "client").mkdir(parents=True, exist_ok=True)
+    (run / "client" / "options.txt").write_text("\n".join([
+        "onboardAccessibility:false", "menuBackgroundBlurriness:0", "renderDistance:2",
+        "simulationDistance:5", "maxFps:20", "graphicsMode:0", "renderClouds:\"false\"",
+        "particles:2", "narrator:0", "tutorialStep:none", "skipMultiplayerWarning:true",
+        "joinedFirstServer:true", "pauseOnLostFocus:false", "soundCategory_master:0.0",
+    ]) + "\n")
 
 
 # ---------------------------------------------------------------- assertions
@@ -200,23 +223,7 @@ def main():
     out = run / "integ"
     out.mkdir(parents=True, exist_ok=True)
     port = free_port()
-    (run / "server").mkdir(parents=True, exist_ok=True)
-    (run / "server" / "eula.txt").write_text("eula=true\n")
-    (run / "server" / "server.properties").write_text(
-        f"server-port={port}\nonline-mode=false\nlevel-type=minecraft\\:flat\n"
-        "spawn-protection=0\nenforce-secure-profile=false\nsync-chunk-writes=false\n"
-        # Newer versions whitelist by default.
-        "white-list=false\nenforce-whitelist=false\n")
-    # A fresh client opens the accessibility onboarding screen before Quick
-    # Play, and its blurred background is very slow under software GL. Seed
-    # options that skip it and keep rendering cheap.
-    (run / "client").mkdir(parents=True, exist_ok=True)
-    (run / "client" / "options.txt").write_text("\n".join([
-        "onboardAccessibility:false", "menuBackgroundBlurriness:0", "renderDistance:2",
-        "simulationDistance:5", "maxFps:20", "graphicsMode:0", "renderClouds:\"false\"",
-        "particles:2", "narrator:0", "tutorialStep:none", "skipMultiplayerWarning:true",
-        "joinedFirstServer:true", "pauseOnLostFocus:false", "soundCategory_master:0.0",
-    ]) + "\n")
+    seed_run_dirs(run, port)
     server_log, client_log = out / "server.jsonl", out / "client.jsonl"
     (out / "client-failure.png").unlink(missing_ok=True)
     for f in (server_log, client_log):

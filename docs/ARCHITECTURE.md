@@ -248,6 +248,9 @@ movement frame with X nudged by one ulp. It then checks the two event logs:
 The integration test runs the dev environment (Mojang names). It does not yet
 cover the reobfuscated Forge jar.
 
+Rhino note for script authors: a `const` inside a loop body is bound once per
+function, not once per iteration. Use `let` in loops.
+
 ## Build layout
 
 ```

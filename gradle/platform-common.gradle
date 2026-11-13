@@ -39,6 +39,12 @@ repositories {
 // -Psculk.integ adds each platform's integration test mods to dev runs.
 ext.sculkInteg = providers.gradleProperty('sculk.integ').isPresent()
 
+// -Psculk.mods=slug:versionId,... adds more Modrinth mods to dev runs, for
+// testing against a specific mod.
+providers.gradleProperty('sculk.mods').getOrElse('').split(',').findAll { it }.each {
+    dependencies.add('runtimeOnly', "maven.modrinth:${it.trim()}")
+}
+
 // sculk.* settings forwarded from Gradle properties to dev runs as system
 // properties, for example -Psculk.eventLog=/tmp/events.jsonl.
 ext.sculkRunProperties = ['sculk.eventLog', 'sculk.scripts']
