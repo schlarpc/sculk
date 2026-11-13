@@ -307,15 +307,25 @@ Decisions:
 
 ## Roadmap
 
-1. **Byte taps:** inbound and outbound raw frame capture, re-anchored across
-   state changes. Raw injection.
-2. **Object hooks:** `send` / `channelRead0`, packet type and state
-   resolution (`ProtocolView`).
-3. **Payload registry and attribution:** list every mod channel with its
-   codec and owner, on both sides.
-4. **Dissector:** recording `ByteBuf`, field tree with byte spans, re-encode.
-5. **Intercept queue and rules engine**, then **scripting API** over all of
-   the above.
-6. **Control server and UI.**
-7. **Actions** (legit and raw, client and server).
-8. **More targets:** Fabric 1.21.1 / 1.20.1, NeoForge 26.x.
+Done:
+
+- Codec hooks: capture every frame with its packet, both directions, both
+  sides; drop, replace, and replace-frame verdicts.
+- Injection: frames and packets, inbound and outbound; replay.
+- Payload registry and attribution (owner, registeredVia), on all three
+  targets.
+- Decoding mod payloads with the mods' own codecs, including Forge
+  SimpleChannel; round-trip checks.
+- Scripting API and JSON Lines event log.
+- Unit, smoke and real-mod integration tests for all three targets.
+
+Next:
+
+1. **Dissector:** recording `ByteBuf`, field tree with byte spans.
+2. **Vanilla packets caused by mods:** stack attribution at `Connection.send`.
+3. **Login phase:** Forge `fml:loginwrapper`, custom queries; NeoForge split
+   payloads; in-memory (singleplayer) connections.
+4. **Actions** (legit and raw, client and server).
+5. **Control server and UI.**
+6. **Production jar tests**, especially the reobfuscated Forge jar.
+7. **More targets:** Fabric 1.21.1 / 1.20.1, NeoForge 26.x.
