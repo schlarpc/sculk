@@ -228,7 +228,8 @@ goes up by one per entry, and `kind` and `t` (epoch millis).
 ## Control server
 
 `-Dsculk.control=PORT` (dev runs: `-Psculk.control=0` for a free port)
-starts an HTTP server for tools and, later, the UI. It keeps the most recent
+starts one HTTP listener for tools, agents and, later, the UI: a
+filterable live event log, a REPL into the script scope, and an MCP server. It keeps the most recent
 events in memory with their whole frames (the event log cuts long frames
 short), whether or not `sculk.eventLog` is set.
 
@@ -239,10 +240,21 @@ GET  /events/stream?filter=&after=      server-sent events, live (backlog first 
 GET  /frame?id=                         a packet event's whole frame, as hex
 POST /eval      body: JavaScript        runs in the live script scope: {"ok":true,"result":...}
 POST /reload                            drops script globals, listeners and timers; loads startup scripts again
+POST /mcp       body: JSON-RPC          Model Context Protocol, Streamable HTTP transport (JSON responses)
 ```
 
 `scripts/sculkctl.py` wraps it (`status`, `events`, `tail`, `frame`, `eval`,
 `repl`, `reload`) and finds the server through its control file.
+
+The MCP server offers the same powers as tools: `sculk_status`,
+`sculk_events`, `sculk_wait_events` (long-polls up to 60 s for new matches,
+since tool calls cannot stream), `sculk_frame`, `sculk_eval` and
+`sculk_reload`. The tool descriptions carry the filter syntax, event fields
+and script API. `scripts/sculkctl.py mcp-config` prints the client
+configuration, including the `Authorization` header. The token changes with
+every launch; `-Dsculk.controlToken=<16+ chars>` fixes it for a static
+client configuration (and then anyone who can read that configuration can
+drive the game).
 
 Filters are Wireshark-style:
 
@@ -272,17 +284,20 @@ so:
 - the `Host` header must be `127.0.0.1` or `localhost` with this port,
   which stops DNS rebinding; a request with any other `Origin` is refused,
   which stops browsers' cross-site requests;
-- anything that changes state is a `POST`; every `/eval` is logged.
+- anything that changes state is a `POST`; every eval (HTTP or MCP) is
+  logged. MCP shares all of these checks.
 
 Memory is bounded by `-Dsculk.controlEvents` (default 100000) and
 `-Dsculk.controlFrameBytes` (default 256 MiB); the oldest events go first.
+Every `sculk.control*` property can be given to dev runs as a Gradle
+property (`-Psculk.control=0`).
 
 ## Testing
 
 | Layer | Command | What it proves |
 |---|---|---|
-| Unit | `gradle :core:test` | Netty plumbing against a fake game: pairing, drop/replace, all four injection paths, replay, attribution, scripting; control server over real HTTP, including token, Host and Origin checks; event filters |
-| Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server, the control server answers `sculkctl.py` |
+| Unit | `gradle :core:test` | Netty plumbing against a fake game: pairing, drop/replace, all four injection paths, replay, attribution, scripting; control server and MCP over real HTTP, including token, Host and Origin checks; event filters |
+| Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server, the control server answers `sculkctl.py` and MCP |
 | Integration | `scripts/integ.py <target>` | a real server and a real headless client with real mods (below) |
 
 The integration test starts a dev server and a dev client (Xvfb plus Mesa
@@ -376,7 +391,7 @@ Done:
   SimpleChannel; round-trip checks.
 - Scripting API and JSON Lines event log.
 - Control server: query, filter and tail events, whole frames, eval in the
-  live script scope, script reload; `sculkctl.py`.
+  live script scope, script reload; MCP server; `sculkctl.py`.
 - Unit, smoke and real-mod integration tests for all three targets.
 
 Next:

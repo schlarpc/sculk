@@ -308,6 +308,125 @@ class ControlServerTest {
         }
     }
 
+    // ---- MCP ----
+
+    private static JsonObject mcp(String method, String params) throws IOException {
+        Response r = post("/mcp", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"" + method + "\",\"params\":" + params + "}");
+        assertEquals(200, r.status(), r.body());
+        return r.json();
+    }
+
+    private static JsonObject callTool(String name, String arguments) throws IOException {
+        JsonObject r = mcp("tools/call", "{\"name\":\"" + name + "\",\"arguments\":" + arguments + "}");
+        assertTrue(r.has("result"), r.toString());
+        return r.getAsJsonObject("result");
+    }
+
+    private static String toolText(JsonObject result) {
+        return result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString();
+    }
+
+    @Test
+    void mcpHandshake() throws IOException {
+        JsonObject init = mcp("initialize",
+                "{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"1\"}}");
+        JsonObject result = init.getAsJsonObject("result");
+        assertEquals("2025-06-18", result.get("protocolVersion").getAsString());
+        assertEquals("sculk", result.getAsJsonObject("serverInfo").get("name").getAsString());
+        assertTrue(result.getAsJsonObject("capabilities").has("tools"));
+
+        String unknownVersion = mcp("initialize", "{\"protocolVersion\":\"1999-01-01\"}")
+                .getAsJsonObject("result").get("protocolVersion").getAsString();
+        assertEquals("2025-11-25", unknownVersion);
+
+        Response note = post("/mcp", "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+        assertEquals(202, note.status());
+        assertEquals("", note.body());
+
+        assertEquals("{}", mcp("ping", "{}").getAsJsonObject("result").toString());
+
+        List<String> tools = new ArrayList<>();
+        mcp("tools/list", "{}").getAsJsonObject("result").getAsJsonArray("tools")
+                .forEach(t -> tools.add(t.getAsJsonObject().get("name").getAsString()));
+        assertEquals(List.of("sculk_status", "sculk_events", "sculk_wait_events", "sculk_frame", "sculk_eval", "sculk_reload"), tools);
+    }
+
+    @Test
+    void mcpProtocolErrors() throws IOException {
+        assertEquals(-32601, mcp("nope", "{}").getAsJsonObject("error").get("code").getAsInt());
+        assertEquals(-32700, post("/mcp", "{oops").json().getAsJsonObject("error").get("code").getAsInt());
+        assertEquals(-32600, post("/mcp", "[]").json().getAsJsonObject("error").get("code").getAsInt());
+        assertEquals(-32602, mcp("tools/call", "{\"name\":\"sculk_nope\"}").getAsJsonObject("error").get("code").getAsInt());
+        assertEquals(405, get("/mcp").status());
+    }
+
+    @Test
+    void mcpSharesTheAccessChecks() throws IOException {
+        String init = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+        assertEquals(401, request("POST", "/mcp", init).status());
+        assertEquals(403, request("POST", "/mcp", init, auth(), "Origin: http://evil.example").status());
+        assertEquals(403, request("POST", "/mcp", init, auth(), "Host: evil.example:" + server().port()).status());
+    }
+
+    @Test
+    void mcpTools() throws IOException {
+        JsonObject status = GSON.fromJson(toolText(callTool("sculk_status", "{}")), JsonObject.class);
+        assertTrue(status.get("lastEventId").getAsLong() > 0);
+
+        String marker = "ctl-mcp-" + System.nanoTime();
+        EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
+        ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|x")));
+        JsonObject events = callTool("sculk_events", "{\"filter\":\"channel contains '" + marker + "'\"}");
+        assertFalse(events.get("isError").getAsBoolean());
+        List<JsonObject> found = lines(toolText(events));
+        assertEquals(1, found.size());
+        long id = found.get(0).get("id").getAsLong();
+
+        String hex = toolText(callTool("sculk_frame", "{\"id\":" + id + "}"));
+        assertEquals(Bytes.hex(FakeGame.frame(1, "othermod:" + marker + "|x")), hex);
+
+        JsonObject bad = callTool("sculk_events", "{\"filter\":\"kind ==\"}");
+        assertTrue(bad.get("isError").getAsBoolean());
+        assertTrue(toolText(bad).contains("expected a value"), toolText(bad));
+
+        JsonObject eval = callTool("sculk_eval", "{\"code\":\"var mcpValue = 6; mcpValue * 7\"}");
+        assertFalse(eval.get("isError").getAsBoolean());
+        assertEquals("42", toolText(eval));
+        JsonObject evalError = callTool("sculk_eval", "{\"code\":\"throw new Error('mcp kaput')\"}");
+        assertTrue(evalError.get("isError").getAsBoolean());
+        assertTrue(toolText(evalError).contains("mcp kaput"));
+        assertTrue(callTool("sculk_eval", "{}").get("isError").getAsBoolean());
+    }
+
+    @Test
+    void mcpWaitEvents() throws Exception {
+        String marker = "ctl-wait-" + System.nanoTime();
+        long after = FakeGame.sculk().lastEventId();
+        JsonObject none = callTool("sculk_wait_events",
+                "{\"after\":" + after + ",\"timeoutMs\":100,\"filter\":\"channel contains '" + marker + "'\"}");
+        assertEquals("(no matching events)", toolText(none));
+
+        EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
+        Thread later = new Thread(() -> {
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                return;
+            }
+            ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|late")));
+        });
+        later.start();
+        long start = System.nanoTime();
+        JsonObject waited = callTool("sculk_wait_events",
+                "{\"after\":" + after + ",\"timeoutMs\":10000,\"filter\":\"channel contains '" + marker + "'\"}");
+        long millis = (System.nanoTime() - start) / 1_000_000;
+        later.join();
+        List<JsonObject> found = lines(toolText(waited));
+        assertEquals(1, found.size(), toolText(waited));
+        assertEquals("late", found.get(0).get("payload").getAsString());
+        assertTrue(millis < 5000, "returned when the event arrived, not at the timeout: " + millis + "ms");
+    }
+
     // ---- helpers ----
 
     private static List<JsonObject> lines(String body) {

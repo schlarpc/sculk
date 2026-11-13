@@ -58,6 +58,7 @@ import sculk.core.util.Bytes;
  *   GET  /frame?id=                         the whole frame of a packet event
  *   POST /eval      body: JavaScript        {"ok":true,"result":...}
  *   POST /reload                            drops all script state, loads the startup scripts again
+ *   POST /mcp       body: JSON-RPC          Model Context Protocol (Streamable HTTP); see {@link McpHandler}
  * </pre>
  */
 public final class ControlServer {
@@ -69,14 +70,24 @@ public final class ControlServer {
     private final String token;
     private final Set<String> hosts;
     private final Path file;
+    private final McpHandler mcp;
 
-    public ControlServer(Sculk engine, EventStore store, int port, Path file) throws IOException {
+    /**
+     * @param token the bearer token to require, or null for a random one. A
+     *              fixed token lets MCP clients keep a static configuration.
+     */
+    public ControlServer(Sculk engine, EventStore store, int port, Path file, String token) throws IOException {
         this.engine = engine;
         this.store = store;
         this.file = file.toAbsolutePath();
-        byte[] random = new byte[32];
-        new SecureRandom().nextBytes(random);
-        this.token = Bytes.hex(random);
+        this.mcp = new McpHandler(engine, store);
+        if (token != null && token.length() < 16) throw new IllegalArgumentException("control token must be at least 16 characters");
+        if (token == null) {
+            byte[] random = new byte[32];
+            new SecureRandom().nextBytes(random);
+            token = Bytes.hex(random);
+        }
+        this.token = token;
 
         // 127.0.0.1 explicitly: getLoopbackAddress() is ::1 under
         // -Djava.net.preferIPv6Addresses=system, which Forge and NeoForge dev runs set.
@@ -115,6 +126,7 @@ public final class ControlServer {
     private void writeFile(int port) throws IOException {
         Map<String, Object> info = new LinkedHashMap<>();
         info.put("url", "http://127.0.0.1:" + port);
+        info.put("mcp", "http://127.0.0.1:" + port + "/mcp");
         info.put("port", port);
         info.put("token", token);
         info.put("pid", ProcessHandle.current().pid());
@@ -150,14 +162,19 @@ public final class ControlServer {
             Map<String, String> query = query(ex.getRequestURI().getRawQuery());
             try {
                 switch (method + " " + path) {
-                    case "GET /status" -> json(ex, 200, status());
+                    case "GET /status" -> json(ex, 200, status(engine, store));
                     case "GET /events" -> events(ex, query);
                     case "GET /events/stream" -> stream(ex, query);
                     case "GET /frame" -> frame(ex, query);
                     case "POST /eval" -> json(ex, 200, engine.scripts().evalForRepl(body(ex)));
                     case "POST /reload" -> json(ex, 200, engine.reloadScripts());
+                    case "POST /mcp" -> {
+                        Map<String, Object> response = mcp.handle(body(ex));
+                        if (response == null) ex.sendResponseHeaders(202, -1);
+                        else json(ex, 200, response);
+                    }
                     default -> {
-                        boolean known = Set.of("/status", "/events", "/events/stream", "/frame", "/eval", "/reload").contains(path);
+                        boolean known = Set.of("/status", "/events", "/events/stream", "/frame", "/eval", "/reload", "/mcp").contains(path);
                         json(ex, known ? 405 : 404, Map.of("error", known ? "wrong method for " + path : "no such endpoint " + path));
                     }
                 }
@@ -186,7 +203,7 @@ public final class ControlServer {
         return null;
     }
 
-    private Map<String, Object> status() {
+    static Map<String, Object> status(Sculk engine, EventStore store) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("platform", engine.platform().describe());
         out.put("pid", ProcessHandle.current().pid());

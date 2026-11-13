@@ -51,6 +51,9 @@ import sculk.core.util.Bytes;
  *       a free port); off when unset. See {@link ControlServer};</li>
  *   <li>{@code sculk.controlFile}: where the control server writes its port
  *       and token (default {@code sculk-control.json});</li>
+ *   <li>{@code sculk.controlToken}: a fixed bearer token (16 characters or
+ *       more) instead of a random one per launch, for static MCP client
+ *       configurations;</li>
  *   <li>{@code sculk.controlEvents}, {@code sculk.controlFrameBytes}: how many
  *       events, and how many bytes of whole frames, the control server keeps
  *       in memory (defaults 100000 and 256 MiB).</li>
@@ -124,7 +127,9 @@ public final class Sculk {
         if (controlOn) {
             try {
                 Path file = Path.of(System.getProperty("sculk.controlFile", "sculk-control.json"));
-                sculk.control = new ControlServer(sculk, store, Integer.parseInt(controlPort.trim()), file);
+                String token = System.getProperty("sculk.controlToken");
+                sculk.control = new ControlServer(sculk, store, Integer.parseInt(controlPort.trim()), file,
+                        token == null || token.isBlank() ? null : token.trim());
             } catch (IOException | RuntimeException e) {
                 LOG.error("cannot start control server on port {}", controlPort, e);
             }

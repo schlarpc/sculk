@@ -48,6 +48,18 @@ if [ -f "$control" ]; then
     ctl status > /dev/null || { echo "FAIL: control server /status"; ok=0; }
     [ -n "$(ctl events 'kind == connection && side == server')" ] || { echo "FAIL: control server has no connection event"; ok=0; }
     [ "$(ctl eval '20 + 22')" = 42 ] || { echo "FAIL: control server /eval"; ok=0; }
+    python3 - "$control" <<'PY' || { echo "FAIL: control server /mcp"; ok=0; }
+import json, sys, urllib.request
+info = json.load(open(sys.argv[1]))
+def rpc(method, params):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    req = urllib.request.Request(info["mcp"], body, {"Authorization": "Bearer " + info["token"],
+        "Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
+    return json.load(urllib.request.urlopen(req, timeout=10))["result"]
+rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}})
+r = rpc("tools/call", {"name": "sculk_events", "arguments": {"filter": "kind == connection", "limit": 1}})
+assert not r["isError"] and '"kind":"connection"' in r["content"][0]["text"], r
+PY
 else
     echo "FAIL: no control file at $control"; ok=0
 fi

@@ -14,6 +14,7 @@ are up, pick one with --target, a substring of the file's path such as
   sculkctl.py eval CODE | -                                 - reads stdin
   sculkctl.py repl
   sculkctl.py reload
+  sculkctl.py mcp-config                                    MCP client setup for this server
 
 FILTER is the event filter language, for example
   'kind == packet && dir == inbound && owner != minecraft'
@@ -60,6 +61,7 @@ class Client:
             sys.exit(f"sculkctl: cannot read {control_file}: {e}")
         self.url = info["url"]
         self.token = info["token"]
+        self.mcp_url = info.get("mcp", self.url + "/mcp")
 
     def request(self, method, path, query=None, body=None, timeout=60):
         url = self.url + path
@@ -156,6 +158,16 @@ def cmd_reload(c, a):
     sys.exit(0 if result.get("ok") else 1)
 
 
+def cmd_mcp_config(c, a):
+    config = {"mcpServers": {a.name: {"type": "http", "url": c.mcp_url,
+                                      "headers": {"Authorization": f"Bearer {c.token}"}}}}
+    print("# .mcp.json (or another MCP client's configuration):")
+    print_json(config)
+    print("\n# or, for Claude Code:")
+    print(f"claude mcp add --transport http {a.name} {c.mcp_url} --header 'Authorization: Bearer {c.token}'")
+    print("\n# The token changes on every launch unless the game runs with -Dsculk.controlToken=...", file=sys.stderr)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--file", help="control file to use")
@@ -179,6 +191,9 @@ def main():
     s.set_defaults(fn=cmd_eval)
     sub.add_parser("repl").set_defaults(fn=cmd_repl)
     sub.add_parser("reload").set_defaults(fn=cmd_reload)
+    s = sub.add_parser("mcp-config")
+    s.add_argument("--name", default="sculk", help="server name in the client configuration")
+    s.set_defaults(fn=cmd_mcp_config)
     a = p.parse_args()
     a.fn(Client(find_control_file(a.file, a.target)), a)
 

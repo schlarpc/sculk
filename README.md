@@ -45,6 +45,7 @@ scripts/smoke-server.sh forge-1.20.1   # boot a server, connect, check the hook 
 gradle :platforms:neoforge-1.21.1:runServer -Psculk.control=0
 scripts/sculkctl.py tail 'kind == packet && owner != minecraft'
 scripts/sculkctl.py repl
+scripts/sculkctl.py mcp-config      # connect an MCP client (e.g. Claude Code) to the live game
 ```
 
 The first build of each target downloads and decompiles Minecraft and takes a
