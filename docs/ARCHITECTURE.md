@@ -60,9 +60,12 @@ target. Everything else is plain Java plus Netty.
 
 ### Why the seam can be this thin
 
-1. **Netty is never obfuscated**, and Minecraft's pipeline handler names have
-   stayed stable for years. The byte layer (frame taps and raw injection) is
-   written against Netty only and lives in core.
+1. **The game's codecs are Netty handlers.** `PacketDecoder.decode` and
+   `PacketEncoder.encode` override Netty methods, so their names never change
+   or get obfuscated. A hook in each one sees every frame (uncompressed,
+   unencrypted) together with the packet object it becomes or came from.
+   Injection is pure Netty, anchored on those handlers by name. All of it
+   lives in core; the platform mixins are a few lines each.
 2. **Mod codecs can be called without knowing their types.** The dissector
    wraps the `ByteBuf` in a recording buffer and runs the mod's decoder on a
    copy. Each primitive read is logged with its offset, length and caller.
@@ -85,23 +88,32 @@ fabric 26.3      timeout, legacy_query, splitter, FlowControlHandler#0, decoder,
 ```
 
 `compress`/`decompress` (after the login compression packet) and
-`encrypt`/`decrypt` (online mode) are added later. In era C the outbound
-codec is a placeholder (`outbound_config`) until the protocol state is
-known. It is then **replaced** at every state change (configuration ↔ play).
-Taps must anchor to handlers that stay put (`splitter`, `prepender`), or
-re-anchor on each state change.
+`encrypt`/`decrypt` (online mode) are added later, **in different places per
+version**: 1.20.1 inserts `decompress` before `decoder`, 1.21.1 inserts it
+after `splitter`. In era C the codecs are also swapped at every protocol
+state change, and `bundler` is added after `decoder` on entering play.
 
-Planned tap points:
+### Why sculk hooks the codecs, not the pipeline
 
-- **Raw inbound frame:** after `decompress` (or `splitter`), before `decoder`.
-  One decrypted, decompressed packet per message.
-- **Raw outbound injection:** after `encoder`, before `compress`/`prepender`.
-  The game then compresses, frames and encrypts what we write.
-- **Object level:** `Connection.send` and `Connection.channelRead0` (mixins).
+The first design put sculk's own handlers next to `decoder`/`encoder`. The
+sources above show why that is brittle: depending on version, a later
+`decompress`/`compress` or `bundler` lands between sculk's handler and the
+codec, so the tap silently sees compressed or bundled data. Hooking the codec
+methods themselves avoids every ordering question:
 
-In-memory connections (singleplayer, and the host in LAN play) have **no
-codec handlers**: packets pass as objects. Use a dedicated server for
-byte-level work.
+| Point | Hook | Sees |
+|---|---|---|
+| Inbound | `PacketDecoder.decode`, HEAD + RETURN | the frame's bytes and the decoded packet(s) |
+| Outbound | `PacketEncoder.encode`, HEAD + RETURN | the packet and the bytes it encoded to |
+| Connection | `Connection.channelActive`, TAIL | the channel and which side we are |
+
+Listeners can drop a packet, replace it, or replace its frame, in either
+direction (`WireHooks`). Injection (`SculkConnection`) writes from the
+encoder's context (outbound frame: compressed and encrypted by the game, never
+re-encoded), from the tail (outbound packet: encoded by the game), into the
+decoder (inbound frame) or from the decoder's context (inbound packet).
+Dropping an outbound packet leaves an empty write, which becomes a
+zero-length frame that every supported decoder ignores.
 
 ## Protocol eras
 
@@ -136,16 +148,47 @@ mapping tables.
 ## The `Platform` seam
 
 `core/src/main/java/sculk/core/platform/Platform.java` is the whole contract.
-Today it only identifies the target. The planned views are:
+"Codec" below is the game's own `PacketDecoder`/`PacketEncoder` instance,
+which carries the protocol state.
 
-- **ProtocolView:** packet types per state and direction. Map ID ↔ class.
-  Encode and decode a vanilla packet. Report the current state of a
-  connection.
-- **PayloadRegistryView:** registered mod channels: ID, direction, codec (if
-  known), owning mod. On a client, also the server's advertised channels.
-  This is the attack-surface listing.
-- **Attribution:** channel namespace → mod. For vanilla packets a mod causes,
-  walk the stack at `Connection.send` and match frames to mod jars.
+| Method | Era C (NeoForge 1.21.1, Fabric 26.3) | Era A (Forge 1.20.1) |
+|---|---|---|
+| `describe(packet, codec)` | `ProtocolInfo` from the codec; payload already decoded | protocol from the packet class; payload bytes decoded via `payloadCodec` |
+| `encode` / `decode` | `ProtocolInfo.codec()` | `ConnectionProtocol` + `Packet.write` / `createPacket` (state from the channel) |
+| `payloadCodec(channel)` | not needed | the SimpleChannel's own decoder, chosen by discriminator byte |
+| `modOf(class)` | NeoForge: JPMS module → mod file. Fabric: mod container containing the class file | JPMS module → mod file |
+
+Each platform also has one mixin on its loader's payload registration entry
+point (`NetworkRegistry.register`, `PayloadTypeRegistryImpl.register`,
+`IndexedMessageCodec.addCodecIndex`). It records the registration and the
+call stack in `PayloadRegistry`.
+
+### Attribution
+
+`Attribution` reports two things per payload channel:
+
+- **owner:** the channel namespace when it is a loaded mod; otherwise the mod
+  that defines the payload class; otherwise the outermost mod on the
+  registration stack;
+- **registeredVia:** every non-loader mod on the registration stacks.
+
+Observed with real mods: Waystones registers its 24 payload types through
+Balm, from Balm's own event handler, so no Waystones code is on the stack.
+The result is `owner: waystones, registeredVia: [balm]`.
+
+### Round trips
+
+For every custom payload sculk re-encodes the decoded packet and compares
+it with the wire bytes: `ok` (identical), `equivalent` (different bytes,
+same content once collection order is ignored) or `mismatch`. With real mods
+on NeoForge, all AppleSkin and Waystones payloads are `ok`. NeoForge's own
+channel negotiation payloads are `equivalent`: they carry hash-ordered sets
+and maps keyed by enums, whose iteration order differs between JVMs. Editing
+and re-sending such a payload changes its byte order, which matters for
+anything that hashes or signs payload bytes.
+
+### Still planned
+
 - **Actions:** about 30 verbs, each in a legit and a raw flavour, for each
   side:
   - client: move, look, `useItemOn`, `attack`, `clickContainer`, chat,
@@ -153,12 +196,57 @@ Today it only identifies the target. The planned views are:
   - server: send clientbound packets to a chosen player, spoof entity and
     block updates, open screens, push custom payloads the client never asked
     for, …
+- **Read-tracing dissector:** field-level byte spans (above).
+- **Vanilla packets caused by mods:** attribute by walking the stack at
+  `Connection.send`.
+- **Login-phase payloads** (`fml:loginwrapper`, custom queries) and NeoForge
+  split payloads.
 
-Hooks so far (one mixin per platform):
+## Scripting
 
-| Hook | Mixin target | Core entry |
+Scripts are JavaScript (Rhino, ES6 mode) loaded at startup from
+`-Dsculk.scripts` (dev runs: `-Psculk.scripts=...`). The `sculk` global is
+`ScriptApi`:
+
+```js
+sculk.on('packet', e => {
+  // e.side, e.dir, e.state, e.type, e.channel, e.owner, e.payload, e.frame, e.injected
+  if (e.dir === 'inbound' && e.owner === 'somemod') e.drop();
+});
+sculk.on('connection', c => sculk.log('connected as ' + c.side));
+// c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event)
+// sculk.emit(obj), sculk.schedule(ms, fn), sculk.payloadTypes(), sculk.tree(obj),
+// sculk.with(record, 'field', value), sculk.copy(bytes), sculk.hex(bytes), sculk.unhex(str)
+```
+
+`-Dsculk.eventLog=path` writes a JSON Lines log of everything sculk sees:
+`start`, `connection`, `disconnect`, `payload_type`, `packet` (with owner,
+decoded payload tree, frame hex and round-trip result) and `script`.
+
+## Testing
+
+| Layer | Command | What it proves |
 |---|---|---|
-| Connection opened | `Connection.channelActive` (TAIL) | `Sculk.onChannelActive(Channel, Side)` |
+| Unit | `gradle :core:test` | Netty plumbing against a fake game: pairing, drop/replace, all four injection paths, replay, attribution, scripting |
+| Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server |
+| Integration | `scripts/integ.py <target>` | a real server and a real headless client with real mods (below) |
+
+The integration test starts a dev server and a dev client (Xvfb plus Mesa
+software GL, joining via Quick Play), both with sculk, AppleSkin, Waystones
+and Balm (`-Psculk.integ`). `tests/integ/server.js` replays a captured
+AppleSkin payload as raw bytes. `tests/integ/client.js` injects a real
+movement frame with X nudged by one ulp. It then checks the two event logs:
+
+- connections seen on both sides;
+- registry lists AppleSkin and Waystones payloads, with Waystones attributed
+  through Balm;
+- AppleSkin payloads decoded with AppleSkin's codecs and re-encoded
+  byte-for-byte, and no custom payload `mismatch`;
+- every payload frame the client received was sent by the server;
+- both injections arrived and were decoded by the other side.
+
+The integration test runs the dev environment (Mojang names). It does not yet
+cover the reobfuscated Forge jar.
 
 ## Build layout
 
@@ -177,6 +265,8 @@ platforms/
   fabric-26.3/            Loom (non-remapping), Java 25
 scripts/
   smoke-server.sh         boot a dev server, connect once, check that sculk hooked it
+  integ.py                server + headless client with real mods, assert over event logs
+tests/integ/              scripts the integration test loads into each side
 ```
 
 Decisions:
