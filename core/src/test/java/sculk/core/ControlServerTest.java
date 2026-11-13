@@ -308,6 +308,45 @@ class ControlServerTest {
         }
     }
 
+    // ---- web UI ----
+
+    @Test
+    void webUiNeedsNoTokenButKeepsTheHostCheck() throws IOException {
+        Response root = request("GET", "/", null);
+        assertEquals(302, root.status());
+
+        Response index = request("GET", "/ui/", null);
+        assertEquals(200, index.status());
+        assertTrue(index.body().contains("sculk test ui"), index.body());
+        assertEquals(200, request("GET", "/ui/app.js", null).status());
+
+        assertEquals(403, request("GET", "/ui/", null, "Host: evil.example:" + server().port()).status());
+        assertEquals(403, request("GET", "/ui/", null, "Origin: http://evil.example").status());
+        assertEquals(401, request("GET", "/status", null, "Origin: http://" + host()).status(), "the API still needs the token");
+    }
+
+    @Test
+    void webUiServesOnlyItsOwnFiles() throws IOException {
+        assertEquals(404, request("GET", "/ui/nope.js", null).status());
+        assertEquals(404, request("GET", "/ui/../web/index.html", null).status());
+        assertEquals(404, request("GET", "/ui/%2e%2e%2fControlServer.class", null).status());
+        assertEquals(404, request("GET", "/ui/.hidden", null).status());
+        assertEquals(404, request("GET", "/ui/sub/index.html", null).status());
+        assertEquals(401, request("POST", "/ui/index.html", "", "Origin: http://" + host()).status());
+    }
+
+    @Test
+    void webUiHeaders() throws IOException {
+        try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), server().port())) {
+            socket.getOutputStream().write(("GET /ui/ HTTP/1.1\r\nHost: " + host() + "\r\nConnection: close\r\n\r\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            String raw = new String(socket.getInputStream().readAllBytes(), StandardCharsets.UTF_8).toLowerCase();
+            assertTrue(raw.contains("content-type: text/html"), raw);
+            assertTrue(raw.contains("content-security-policy: default-src 'none'; script-src 'self'"), raw);
+            assertTrue(raw.contains("x-frame-options: deny"), raw);
+        }
+    }
+
     // ---- MCP ----
 
     private static JsonObject mcp(String method, String params) throws IOException {

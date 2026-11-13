@@ -15,3 +15,17 @@ subprojects {
         options.encoding = 'UTF-8'
     }
 }
+
+// The control server's web UI (web/), built by Nix: `nix build .#web`. Each
+// platform packs the result into its jar under sculk/web/. Flakes see only
+// files git knows about, so `git add` new files under web/ before building.
+// -Psculk.webDir=<dir> uses an already built UI instead of running Nix.
+tasks.register('webUi', Exec) {
+    description = 'Builds the web UI with Nix into build/web-ui.'
+    workingDir = rootDir
+    inputs.dir('web')
+    inputs.files('flake.nix', 'flake.lock')
+    outputs.upToDateWhen { false } // Nix does its own caching, and the out-link is a symlink.
+    commandLine 'nix', '--extra-experimental-features', 'nix-command flakes',
+            'build', '.#web', '--out-link', 'build/web-ui'
+}

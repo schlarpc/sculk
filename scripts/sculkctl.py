@@ -15,6 +15,7 @@ are up, pick one with --target, a substring of the file's path such as
   sculkctl.py repl
   sculkctl.py reload
   sculkctl.py mcp-config                                    MCP client setup for this server
+  sculkctl.py ui [--print]                                  open the web UI, signed in
 
 FILTER is the event filter language, for example
   'kind == packet && dir == inbound && owner != minecraft'
@@ -158,6 +159,18 @@ def cmd_reload(c, a):
     sys.exit(0 if result.get("ok") else 1)
 
 
+def cmd_ui(c, a):
+    # The token travels in the fragment, which browsers never send to the
+    # server; the page moves it to session storage and strips it from the URL.
+    url = f"{c.url}/ui/#token={c.token}"
+    if a.print:
+        print(url)
+        return
+    import webbrowser
+    if not webbrowser.open(url):
+        print(url)
+
+
 def cmd_mcp_config(c, a):
     config = {"mcpServers": {a.name: {"type": "http", "url": c.mcp_url,
                                       "headers": {"Authorization": f"Bearer {c.token}"}}}}
@@ -191,6 +204,9 @@ def main():
     s.set_defaults(fn=cmd_eval)
     sub.add_parser("repl").set_defaults(fn=cmd_repl)
     sub.add_parser("reload").set_defaults(fn=cmd_reload)
+    s = sub.add_parser("ui")
+    s.add_argument("--print", action="store_true", help="print the URL instead of opening a browser")
+    s.set_defaults(fn=cmd_ui)
     s = sub.add_parser("mcp-config")
     s.add_argument("--name", default="sculk", help="server name in the client configuration")
     s.set_defaults(fn=cmd_mcp_config)

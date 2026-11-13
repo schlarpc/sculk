@@ -60,6 +60,13 @@ rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientI
 r = rpc("tools/call", {"name": "sculk_events", "arguments": {"filter": "kind == connection", "limit": 1}})
 assert not r["isError"] and '"kind":"connection"' in r["content"][0]["text"], r
 PY
+    python3 - "$control" <<'PY' || { echo "FAIL: control server web UI"; ok=0; }
+import json, sys, urllib.request
+url = json.load(open(sys.argv[1]))["url"]
+for name, needle in [("", b"<title>sculk</title>"), ("app.js", b"sculk"), ("monocraft.woff2", b"wOF2")]:
+    body = urllib.request.urlopen(f"{url}/ui/{name}", timeout=10).read()
+    assert needle in body[:65536], f"/ui/{name} does not contain {needle}"
+PY
 else
     echo "FAIL: no control file at $control"; ok=0
 fi

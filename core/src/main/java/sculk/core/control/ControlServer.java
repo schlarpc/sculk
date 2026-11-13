@@ -59,10 +59,29 @@ import sculk.core.util.Bytes;
  *   POST /eval      body: JavaScript        {"ok":true,"result":...}
  *   POST /reload                            drops all script state, loads the startup scripts again
  *   POST /mcp       body: JSON-RPC          Model Context Protocol (Streamable HTTP); see {@link McpHandler}
+ *   GET  /ui/...                            the web UI (static files from sculk/web/ on the classpath)
  * </pre>
+ *
+ * The web UI's static files are the only thing served without the token:
+ * they hold no secrets, and a page can only load them when its Host header
+ * passes. The page asks for the token (or reads it from {@code #token=}) and
+ * sends it with every API call.
  */
 public final class ControlServer {
     private static final int MAX_BODY = 4 << 20;
+    private static final String WEB_ROOT = "/sculk/web/";
+    private static final java.util.regex.Pattern ASSET = java.util.regex.Pattern.compile("[A-Za-z0-9_-][A-Za-z0-9._-]*");
+    private static final Map<String, String> TYPES = Map.of(
+            "html", "text/html; charset=utf-8",
+            "js", "text/javascript; charset=utf-8",
+            "css", "text/css; charset=utf-8",
+            "svg", "image/svg+xml",
+            "png", "image/png",
+            "woff2", "font/woff2",
+            "map", "application/json; charset=utf-8",
+            "txt", "text/plain; charset=utf-8");
+    private static final String CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+            + "font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
     private final Sculk engine;
     private final EventStore store;
@@ -150,7 +169,13 @@ public final class ControlServer {
 
     private void handle(HttpExchange ex) {
         try (ex) {
-            String refusal = refuse(ex);
+            String path = ex.getRequestURI().getPath();
+            String refusal = refuseCaller(ex);
+            if (refusal == null && ex.getRequestMethod().equals("GET") && (path.equals("/") || path.startsWith("/ui/"))) {
+                serveStatic(ex, path);
+                return;
+            }
+            if (refusal == null) refusal = refuseToken(ex);
             if (refusal != null) {
                 int status = refusal.startsWith("401") ? 401 : 403;
                 if (status == 401) ex.getResponseHeaders().set("WWW-Authenticate", "Bearer");
@@ -158,7 +183,6 @@ public final class ControlServer {
                 return;
             }
             String method = ex.getRequestMethod();
-            String path = ex.getRequestURI().getPath();
             Map<String, String> query = query(ex.getRequestURI().getRawQuery());
             try {
                 switch (method + " " + path) {
@@ -188,8 +212,8 @@ public final class ControlServer {
         }
     }
 
-    /** Returns "401 reason" or "403 reason" for a request that must not be served, or null. */
-    private String refuse(HttpExchange ex) {
+    /** Returns "403 reason" for a caller that must not be served at all, or null. */
+    private String refuseCaller(HttpExchange ex) {
         if (!ex.getRemoteAddress().getAddress().isLoopbackAddress()) return "403 not a loopback caller";
         String host = ex.getRequestHeaders().getFirst("Host");
         if (host == null || !hosts.contains(host.toLowerCase(java.util.Locale.ROOT))) return "403 bad Host header";
@@ -197,6 +221,11 @@ public final class ControlServer {
         if (origin != null && !(origin.startsWith("http://") && hosts.contains(origin.substring(7)))) {
             return "403 cross-origin request";
         }
+        return null;
+    }
+
+    /** Returns "401 reason" for a request without the right token, or null. */
+    private String refuseToken(HttpExchange ex) {
         String auth = ex.getRequestHeaders().getFirst("Authorization");
         byte[] given = (auth != null && auth.startsWith("Bearer ") ? auth.substring(7).trim() : "").getBytes(StandardCharsets.UTF_8);
         if (!MessageDigest.isEqual(given, token.getBytes(StandardCharsets.UTF_8))) return "401 missing or wrong bearer token";
@@ -279,6 +308,40 @@ public final class ControlServer {
         } finally {
             store.unsubscribe(subscriber);
         }
+    }
+
+    /** Serves the web UI from the classpath; GET / redirects to it. */
+    private void serveStatic(HttpExchange ex, String path) throws IOException {
+        if (path.equals("/") || path.equals("/ui")) {
+            ex.getResponseHeaders().set("Location", "/ui/");
+            ex.sendResponseHeaders(302, -1);
+            return;
+        }
+        String name = path.substring("/ui/".length());
+        if (name.isEmpty()) name = "index.html";
+        byte[] bytes = null;
+        if (ASSET.matcher(name).matches()) {
+            try (InputStream in = ControlServer.class.getResourceAsStream(WEB_ROOT + name)) {
+                if (in != null) bytes = in.readAllBytes();
+            }
+        }
+        if (bytes == null) {
+            boolean built = ControlServer.class.getResource(WEB_ROOT + "index.html") != null;
+            send(ex, 404, "text/plain", built ? "not found\n" : "this build of sculk has no web UI (see web/ in the sculk repository)\n");
+            return;
+        }
+        String ext = name.substring(name.lastIndexOf('.') + 1);
+        var headers = ex.getResponseHeaders();
+        headers.set("Content-Type", TYPES.getOrDefault(ext, "application/octet-stream"));
+        headers.set("Cache-Control", "no-cache");
+        headers.set("X-Content-Type-Options", "nosniff");
+        headers.set("Content-Security-Policy", CSP);
+        headers.set("X-Frame-Options", "DENY");
+        headers.set("Referrer-Policy", "no-referrer");
+        headers.set("Cross-Origin-Opener-Policy", "same-origin");
+        headers.set("Cross-Origin-Resource-Policy", "same-origin");
+        ex.sendResponseHeaders(200, bytes.length == 0 ? -1 : bytes.length);
+        if (bytes.length > 0) ex.getResponseBody().write(bytes);
     }
 
     // ---- plumbing ----

@@ -53,6 +53,9 @@
               gradle
               pkgs.jdk25
               pkgs.python3 # scripts/*.py
+              # web/: `tsc -p web --watch`, `esbuild --watch` while working on the UI
+              pkgs.typescript
+              pkgs.esbuild
             ]
             ++ lib.optionals stdenv.hostPlatform.isLinux [
               # headless clients for integration tests, and screenshots of them
@@ -74,6 +77,12 @@
           };
         }
       );
+
+      packages = forAllSystems (pkgs: {
+        # The control server's web UI; Gradle runs `nix build .#web` and packs
+        # the result into each mod jar under sculk/web/.
+        web = pkgs.callPackage ./web { };
+      });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };

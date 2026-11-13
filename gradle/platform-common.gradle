@@ -55,3 +55,17 @@ ext.sculkRunProperties = ['sculk.eventLog', 'sculk.scripts', 'sculk.control', 's
 
 // -Psculk.quickPlay=host:port makes runClient join that server on startup.
 ext.sculkQuickPlay = providers.gradleProperty('sculk.quickPlay').getOrNull()
+
+// The web UI, served by the control server from sculk/web/ (see web/ and the
+// root project's webUi task).
+def webDirOverride = providers.gradleProperty('sculk.webDir')
+processResources {
+    if (!webDirOverride.isPresent()) dependsOn rootProject.tasks.named('webUi')
+    from(webDirOverride.isPresent() ? webDirOverride.get() : rootProject.layout.buildDirectory.dir('web-ui')) {
+        into 'sculk/web'
+        // Files from the Nix store are read-only; keep the copies writable so
+        // later builds can replace them.
+        filePermissions { unix('rw-r--r--') }
+        dirPermissions { unix('rwxr-xr-x') }
+    }
+}

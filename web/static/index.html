@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>sculk</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="monocraft.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <svg id="sensor" class="sensor" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+        <rect class="tendril" x="3" y="2" width="2" height="6"/><rect class="tendril" x="11" y="2" width="2" height="6"/>
+        <rect class="tendril" x="6" y="4" width="1" height="4"/><rect class="tendril" x="9" y="4" width="1" height="4"/>
+        <rect class="tip" x="3" y="1" width="2" height="1"/><rect class="tip" x="11" y="1" width="2" height="1"/>
+        <rect class="tip" x="6" y="3" width="1" height="1"/><rect class="tip" x="9" y="3" width="1" height="1"/>
+        <rect class="base" x="1" y="8" width="14" height="8"/><rect class="rim" x="1" y="8" width="14" height="1"/>
+        <rect class="spot" x="4" y="11" width="1" height="1"/><rect class="spot" x="10" y="13" width="1" height="1"/>
+        <rect class="spot dim" x="12" y="10" width="1" height="1"/><rect class="spot dim" x="7" y="14" width="1" height="1"/>
+      </svg>
+      <h1>sculk</h1>
+    </div>
+    <div id="status" class="status">connecting…</div>
+    <button id="reload" type="button" title="Drop all script state and load the startup scripts again">Reload scripts</button>
+  </header>
+
+  <main class="layout">
+    <section class="panel events" aria-label="Events">
+      <form id="filter-form" class="filter" autocomplete="off">
+        <label class="visually-hidden" for="filter">Filter</label>
+        <input id="filter" spellcheck="false" placeholder='kind == packet &amp;&amp; owner != minecraft'>
+        <button type="submit">Apply</button>
+        <button type="button" id="pause">Pause</button>
+        <button type="button" id="clear">Clear</button>
+      </form>
+      <div id="presets" class="presets"></div>
+      <div id="filter-error" class="filter-error" role="alert" hidden></div>
+      <div id="table-wrap" class="table-wrap" tabindex="0">
+        <table class="events-table">
+          <thead>
+            <tr><th>#</th><th>time</th><th>kind</th><th>dir</th><th>side</th><th>conn</th><th>owner</th><th>len</th><th>action</th><th>what</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="table-foot"><span id="count">0 shown</span><span class="hint">double-click a cell to filter on it · ↑/↓ to step</span></div>
+    </section>
+
+    <section class="panel detail" aria-label="Event detail">
+      <div id="detail" class="detail-body"><p class="hint">Select an event to inspect it and its frame.</p></div>
+    </section>
+
+    <section class="panel repl" aria-label="Script console">
+      <div id="repl-out" class="repl-out" aria-live="polite"></div>
+      <form id="repl-form" class="repl-in">
+        <span class="prompt" aria-hidden="true">&gt;</span>
+        <label class="visually-hidden" for="repl-input">JavaScript</label>
+        <textarea id="repl-input" rows="1" spellcheck="false" placeholder="sculk.connections()"></textarea>
+        <button type="submit">Run</button>
+        <button type="button" id="repl-clear">Clear</button>
+      </form>
+    </section>
+  </main>
+
+  <dialog id="login" class="panel login">
+    <form id="login-form">
+      <h2>Token</h2>
+      <p id="login-reason"></p>
+      <input id="login-token" type="password" spellcheck="false" autocomplete="off" aria-label="Token">
+      <button type="submit">Connect</button>
+    </form>
+  </dialog>
+</body>
+</html>

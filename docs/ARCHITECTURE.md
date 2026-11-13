@@ -43,7 +43,7 @@ target. Everything else is plain Java plus Netty.
 
 ```
             ┌───────────────────────────────────────────────┐
-  UI  ◄────►│ control server (localhost websocket + token)  │   out of process
+  UI  ◄────►│ control server (localhost HTTP + token, MCP)  │   web UI in a browser
             ├───────────────────────────────────────────────┤
             │ scripting (Rhino)  │ rules │ history / replay │
             ├───────────────────────────────────────────────┤   core/
@@ -228,8 +228,8 @@ goes up by one per entry, and `kind` and `t` (epoch millis).
 ## Control server
 
 `-Dsculk.control=PORT` (dev runs: `-Psculk.control=0` for a free port)
-starts one HTTP listener for tools, agents and, later, the UI: a
-filterable live event log, a REPL into the script scope, and an MCP server. It keeps the most recent
+starts one HTTP listener for tools, agents and the web UI: a filterable
+live event log, a REPL into the script scope, and an MCP server. It keeps the most recent
 events in memory with their whole frames (the event log cuts long frames
 short), whether or not `sculk.eventLog` is set.
 
@@ -241,6 +241,7 @@ GET  /frame?id=                         a packet event's whole frame, as hex
 POST /eval      body: JavaScript        runs in the live script scope: {"ok":true,"result":...}
 POST /reload                            drops script globals, listeners and timers; loads startup scripts again
 POST /mcp       body: JSON-RPC          Model Context Protocol, Streamable HTTP transport (JSON responses)
+GET  /ui/...                            the web UI (no token needed for its static files)
 ```
 
 `scripts/sculkctl.py` wraps it (`status`, `events`, `tail`, `frame`, `eval`,
@@ -287,6 +288,37 @@ so:
 - anything that changes state is a `POST`; every eval (HTTP or MCP) is
   logged. MCP shares all of these checks.
 
+### Web UI
+
+`scripts/sculkctl.py ui` opens `http://127.0.0.1:PORT/ui/#token=...`. The
+page moves the token from the fragment, which is never sent to the server,
+into session storage and removes it from the address bar. Without a token it
+asks for one. It shows the live event table (filter, presets, pause,
+double-click a cell to narrow the filter), an event's JSON tree and its whole
+frame as a hex dump, and a REPL with history. Static files are the only thing
+served without the token. They are sent with a strict CSP (`script-src
+'self'`, no inline code, `frame-ancestors 'none'`), and the Host and Origin
+checks still apply.
+
+The UI lives in `web/`: TypeScript with no npm dependencies, so there is no
+lock file. `nix build .#web` (`web/default.nix`) type-checks it with `tsc`,
+bundles it with `esbuild`, and subsets the Monocraft font (OFL-1.1, from
+nixpkgs, licence shipped alongside) to woff2. Gradle's root `webUi` task runs
+that build. Each platform's `processResources` then copies the result into the
+jar under `sculk/web/`, where the server reads it from the classpath.
+`-Psculk.webDir=<dir>` uses a UI that is already built instead of running
+Nix. Flakes only see files that git tracks, so `git add` new files under
+`web/` before you build. To iterate, run `gradle processResources` against a
+running dev server: dev runs read resources from the build directory, so a
+browser reload is enough.
+
+The look is a block-game GUI (bevelled panels and buttons, a pixel font,
+drop-shadowed text) in the deep dark's palette: sculk teal-black, glowing
+cyan, shrieker bone. The textures are not game assets. `web/src/textures.ts`
+draws seeded 16×16 noise in those colours at startup (sculk, panel stone,
+bone, veins), and CSS scales them up with pixelated rendering. The header
+icon is a hand-drawn sculk sensor that pulses as events arrive.
+
 Memory is bounded by `-Dsculk.controlEvents` (default 100000) and
 `-Dsculk.controlFrameBytes` (default 256 MiB); the oldest events go first.
 Every `sculk.control*` property can be given to dev runs as a Gradle
@@ -297,7 +329,7 @@ property (`-Psculk.control=0`).
 | Layer | Command | What it proves |
 |---|---|---|
 | Unit | `gradle :core:test` | Netty plumbing against a fake game: pairing, drop/replace, all four injection paths, replay, attribution, scripting; control server and MCP over real HTTP, including token, Host and Origin checks; event filters |
-| Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server, the control server answers `sculkctl.py` and MCP |
+| Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server, the control server answers `sculkctl.py` and MCP and serves the web UI from the mod |
 | Integration | `scripts/integ.py <target>` | a real server and a real headless client with real mods (below) |
 
 The integration test starts a dev server and a dev client (Xvfb plus Mesa
@@ -323,14 +355,16 @@ function, not once per iteration. Use `let` in loops.
 ## Build layout
 
 ```
-flake.nix                 dev shell: Gradle 9 on JDK 25, JDK 17/21/25 for toolchains, client native libs
+flake.nix                 dev shell: Gradle 9 on JDK 25, JDK 17/21/25 for toolchains, client native libs;
+                          packages.web: the web UI
 settings.gradle           lists core + one subproject per target
-build.gradle              declares loader plugins once (apply false)
+build.gradle              declares loader plugins once (apply false); webUi task (nix build .#web)
 gradle.properties         shared versions; toolchains come only from JAVA*_HOME
 core/                     shared engine (Java 17, Netty + SLF4J compileOnly)
 libs/rhino/               Rhino relocated to sculk.shaded.org.mozilla (Shadow)
+web/                      control server web UI: TypeScript (src/), static files, default.nix
 gradle/platform-common.gradle
-                          applied by every platform: compiles core in, embeds relocated libs
+                          applied by every platform: compiles core in, embeds relocated libs and the web UI
 platforms/
   forge-1.20.1/           MDG Legacy, SRG reobf + mixin refmap, Java 17
   neoforge-1.21.1/        MDG, Java 21
@@ -362,7 +396,8 @@ Decisions:
   Stonecutter-style preprocessing once two targets of the same era share
   enough adapter code to be worth it (for example, NeoForge 1.21.1 and 26.x).
 - **UI out of process.** In-game GUI APIs change between versions, and a
-  Burp-style UI wants a real window. The control server binds to localhost
+  Burp-style UI wants a real window, so the UI is a web page served by the
+  control server. The control server binds to localhost
   and requires a token, because a reachable packet injector is a
   vulnerability in its own right.
 - **No `nix build` of the mods.** Loom and MDG download and decompile
@@ -391,7 +426,8 @@ Done:
   SimpleChannel; round-trip checks.
 - Scripting API and JSON Lines event log.
 - Control server: query, filter and tail events, whole frames, eval in the
-  live script scope, script reload; MCP server; `sculkctl.py`.
+  live script scope, script reload; MCP server; `sculkctl.py`; web UI
+  (event table, frame hex dump, REPL).
 - Unit, smoke and real-mod integration tests for all three targets.
 
 Next:
@@ -401,6 +437,7 @@ Next:
 3. **Login phase:** Forge `fml:loginwrapper`, custom queries; NeoForge split
    payloads; in-memory (singleplayer) connections.
 4. **Actions** (legit and raw, client and server).
-5. **UI** on the control server (needs injection and edit endpoints too).
+5. **UI:** injection, editing and replay from the web UI (needs endpoints for
+   them).
 6. **Production jar tests**, especially the reobfuscated Forge jar.
 7. **More targets:** Fabric 1.21.1 / 1.20.1, NeoForge 26.x.

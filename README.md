@@ -45,8 +45,12 @@ scripts/smoke-server.sh forge-1.20.1   # boot a server, connect, check the hook 
 gradle :platforms:neoforge-1.21.1:runServer -Psculk.control=0
 scripts/sculkctl.py tail 'kind == packet && owner != minecraft'
 scripts/sculkctl.py repl
+scripts/sculkctl.py ui              # the web UI, signed in
 scripts/sculkctl.py mcp-config      # connect an MCP client (e.g. Claude Code) to the live game
 ```
+
+`gradle build` also runs `nix build .#web` for the control server's web UI
+(`web/`); pass `-Psculk.webDir=<dir>` to use a prebuilt one instead.
 
 The first build of each target downloads and decompiles Minecraft and takes a
 few minutes.
@@ -62,5 +66,6 @@ core/         shared engine, no Minecraft dependencies (~90% of the code, eventu
 libs/         third-party libraries, relocated so they cannot clash with other mods
 platforms/    one thin adapter per (loader, Minecraft version)
 scripts/      dev tooling
+web/          control server web UI (TypeScript, built by Nix)
 docs/         architecture and design notes
 ```
