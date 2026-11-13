@@ -221,14 +221,68 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 
 `-Dsculk.eventLog=path` writes a JSON Lines log of everything sculk sees:
 `start`, `connection`, `disconnect`, `payload_type`, `packet` (with owner,
-decoded payload tree, frame hex and round-trip result) and `script`.
+decoded payload tree, frame hex and round-trip result), `script`,
+`script_error`, `script_reload` and `eval`. Every entry has an `id` that
+goes up by one per entry, and `kind` and `t` (epoch millis).
+
+## Control server
+
+`-Dsculk.control=PORT` (dev runs: `-Psculk.control=0` for a free port)
+starts an HTTP server for tools and, later, the UI. It keeps the most recent
+events in memory with their whole frames (the event log cuts long frames
+short), whether or not `sculk.eventLog` is set.
+
+```
+GET  /status                            platform, connections, startup scripts, last event id
+GET  /events?filter=&after=&limit=      JSON Lines; the last `limit` matches, or the first after `after`
+GET  /events/stream?filter=&after=      server-sent events, live (backlog first with `after`)
+GET  /frame?id=                         a packet event's whole frame, as hex
+POST /eval      body: JavaScript        runs in the live script scope: {"ok":true,"result":...}
+POST /reload                            drops script globals, listeners and timers; loads startup scripts again
+```
+
+`scripts/sculkctl.py` wraps it (`status`, `events`, `tail`, `frame`, `eval`,
+`repl`, `reload`) and finds the server through its control file.
+
+Filters are Wireshark-style:
+
+```
+kind == packet && dir == inbound && owner != minecraft
+type matches "recipe|chat" and len > 1000
+payload contains "../" or data.step == done
+payload.pos.x >= 100 && registeredVia == balm
+```
+
+Fields are entry keys, with dots into nested objects and lists (a list
+matches when any element does). Operators are `== != < <= > >=`,
+`contains` (substring; on objects, of their JSON) and `matches`/`~`
+(regex). A field alone means present and not false. Combine with
+`&& || !` or `and or not`, and parentheses. Unquoted values are numbers,
+`true`, `false`, `null` or strings.
+
+Anyone who can call this server can run code in the game and inject packets,
+so:
+
+- it is off by default, and listens on 127.0.0.1 only (not `::1`, even
+  when the JVM prefers IPv6, as Forge and NeoForge dev runs do);
+- every request needs `Authorization: Bearer <token>`. The token is random
+  per launch and is written, with the port, to `sculk-control.json` in the
+  game directory (or `-Dsculk.controlFile`), readable by the user only, and
+  deleted on exit;
+- the `Host` header must be `127.0.0.1` or `localhost` with this port,
+  which stops DNS rebinding; a request with any other `Origin` is refused,
+  which stops browsers' cross-site requests;
+- anything that changes state is a `POST`; every `/eval` is logged.
+
+Memory is bounded by `-Dsculk.controlEvents` (default 100000) and
+`-Dsculk.controlFrameBytes` (default 256 MiB); the oldest events go first.
 
 ## Testing
 
 | Layer | Command | What it proves |
 |---|---|---|
-| Unit | `gradle :core:test` | Netty plumbing against a fake game: pairing, drop/replace, all four injection paths, replay, attribution, scripting |
-| Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server |
+| Unit | `gradle :core:test` | Netty plumbing against a fake game: pairing, drop/replace, all four injection paths, replay, attribution, scripting; control server over real HTTP, including token, Host and Origin checks; event filters |
+| Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server, the control server answers `sculkctl.py` |
 | Integration | `scripts/integ.py <target>` | a real server and a real headless client with real mods (below) |
 
 The integration test starts a dev server and a dev client (Xvfb plus Mesa
@@ -268,6 +322,7 @@ platforms/
   fabric-26.3/            Loom (non-remapping), Java 25
 scripts/
   smoke-server.sh         boot a dev server, connect once, check that sculk hooked it
+  sculkctl.py             command-line client for the control server
   integ.py                server + headless client with real mods, assert over event logs
 tests/integ/              scripts the integration test loads into each side
 ```
@@ -320,6 +375,8 @@ Done:
 - Decoding mod payloads with the mods' own codecs, including Forge
   SimpleChannel; round-trip checks.
 - Scripting API and JSON Lines event log.
+- Control server: query, filter and tail events, whole frames, eval in the
+  live script scope, script reload; `sculkctl.py`.
 - Unit, smoke and real-mod integration tests for all three targets.
 
 Next:
@@ -329,6 +386,6 @@ Next:
 3. **Login phase:** Forge `fml:loginwrapper`, custom queries; NeoForge split
    payloads; in-memory (singleplayer) connections.
 4. **Actions** (legit and raw, client and server).
-5. **Control server and UI.**
+5. **UI** on the control server (needs injection and edit endpoints too).
 6. **Production jar tests**, especially the reobfuscated Forge jar.
 7. **More targets:** Fabric 1.21.1 / 1.20.1, NeoForge 26.x.

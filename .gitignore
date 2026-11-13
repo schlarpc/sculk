@@ -16,3 +16,5 @@ bin/
 result
 result-*
 __pycache__/
+# control server port + token (scripts/sculkctl.py)
+sculk-control.json

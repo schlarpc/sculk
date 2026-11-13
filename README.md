@@ -40,6 +40,11 @@ gradle :platforms:neoforge-1.21.1:runClient
 gradle :platforms:neoforge-1.21.1:runServer
 
 scripts/smoke-server.sh forge-1.20.1   # boot a server, connect, check the hook fired
+
+# control server: query and tail events, run code in the live game
+gradle :platforms:neoforge-1.21.1:runServer -Psculk.control=0
+scripts/sculkctl.py tail 'kind == packet && owner != minecraft'
+scripts/sculkctl.py repl
 ```
 
 The first build of each target downloads and decompiles Minecraft and takes a
