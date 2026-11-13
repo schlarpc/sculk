@@ -53,6 +53,7 @@ toolchains.
 
 ```
 core/         shared engine, no Minecraft dependencies (~90% of the code, eventually)
+libs/         third-party libraries, relocated so they cannot clash with other mods
 platforms/    one thin adapter per (loader, Minecraft version)
 scripts/      dev tooling
 docs/         architecture and design notes

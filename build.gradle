@@ -4,6 +4,7 @@ plugins {
     id 'net.fabricmc.fabric-loom' version "${loom_version}" apply false
     id 'net.neoforged.moddev' version "${moddev_version}" apply false
     id 'net.neoforged.moddev.legacyforge' version "${moddev_version}" apply false
+    id 'com.gradleup.shadow' version "${shadow_version}" apply false
 }
 
 subprojects {

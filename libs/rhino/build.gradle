@@ -1,0 +1,49 @@
+// Rhino, relocated to sculk.shaded.org.mozilla and exposed as the 'shaded'
+// configuration.
+//
+// Why relocate: Forge/NeoForge JarJar and Fabric jar-in-jar each pick ONE
+// version of a library across all mods, so a bundled org.mozilla:rhino can be
+// silently swapped for another mod's copy. The ecosystem convention (KubeJS
+// ships its fork as dev.latvian.mods.rhino) is to relocate. Platforms embed
+// these classes directly into the mod (see gradle/platform-common.gradle).
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "org.mozilla:rhino:${rootProject.rhino_version}"
+}
+
+// Only the relocated jar is meaningful; the plain jar would be empty and would
+// collide with it.
+tasks.named('jar') { enabled = false }
+
+tasks.named('shadowJar') {
+    archiveClassifier = 'shaded'
+    relocate 'org.mozilla', 'sculk.shaded.org.mozilla'
+    // Rhino finds its RegExp implementation via ServiceLoader; rewrite the
+    // service file name and contents to the relocated names.
+    mergeServiceFiles()
+    exclude 'module-info.class', 'META-INF/versions/*/module-info.class'
+    // Rhino is MPL-2.0; keep its provenance with the relocated copy.
+    manifest.attributes(
+        'Sculk-Shaded-From': "org.mozilla:rhino:${rootProject.rhino_version}",
+        'Sculk-Shaded-License': 'MPL-2.0 (https://www.mozilla.org/MPL/2.0/)',
+    )
+}
+
+configurations {
+    shaded {
+        canBeConsumed = true
+        canBeResolved = false
+    }
+}
+
+artifacts {
+    shaded tasks.named('shadowJar')
+}

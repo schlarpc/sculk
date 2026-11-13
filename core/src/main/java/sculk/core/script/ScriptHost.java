@@ -1,8 +1,9 @@
 package sculk.core.script;
 
-import org.mozilla.javascript.Context;
-import org.mozilla.javascript.Scriptable;
-import org.mozilla.javascript.ScriptableObject;
+import sculk.shaded.org.mozilla.javascript.Context;
+import sculk.shaded.org.mozilla.javascript.RhinoException;
+import sculk.shaded.org.mozilla.javascript.Scriptable;
+import sculk.shaded.org.mozilla.javascript.ScriptableObject;
 
 /**
  * Embeds Rhino. Scripts see only the core packet model and the action API,
@@ -28,6 +29,30 @@ public final class ScriptHost {
         try (Context cx = enter()) {
             ScriptableObject.putProperty(scope, name, Context.javaToJS(value, scope, cx));
         }
+    }
+
+    /**
+     * Exercises the parts of Rhino that relocation can break: the RegExp
+     * engine (found via ServiceLoader) and error messages (a resource bundle
+     * looked up by name). Returns a one-line summary, or throws.
+     */
+    public static String selfTest() {
+        ScriptHost host = new ScriptHost();
+        Object regexp = host.eval("selftest", "/s(c)ulk/.exec('sculk')[1]");
+        if (!"c".equals(regexp)) {
+            throw new IllegalStateException("Rhino RegExp self-test returned " + regexp);
+        }
+        String message;
+        try {
+            host.eval("selftest", "(");
+            throw new IllegalStateException("Rhino accepted invalid syntax");
+        } catch (RhinoException e) {
+            message = e.details();
+        }
+        if (message == null || message.isBlank() || message.contains("no message resource found")) {
+            throw new IllegalStateException("Rhino message bundle missing: " + message);
+        }
+        return "rhino " + Context.class.getPackage().getName() + " ok";
     }
 
     /** Evaluates {@code source} and returns the result converted to a Java object. */

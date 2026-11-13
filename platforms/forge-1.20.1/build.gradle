@@ -9,7 +9,7 @@ plugins {
 base.archivesName = "${mod_id}-forge-${minecraft_version}"
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
-sourceSets.main.java.srcDir rootProject.file('core/src/main/java')
+apply from: rootProject.file('gradle/platform-common.gradle')
 
 legacyForge {
     version = "${minecraft_version}-${forge_version}"
@@ -36,11 +36,6 @@ mixin {
 
 dependencies {
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
-    jarJar(implementation("org.mozilla:rhino")) {
-        version { strictly "[${rhino_version},2)"; prefer rhino_version }
-    }
-    // Dev runs only see mods on the module path; plain libraries need this.
-    additionalRuntimeClasspath "org.mozilla:rhino:${rhino_version}"
 }
 
 jar {

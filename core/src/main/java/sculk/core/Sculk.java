@@ -36,8 +36,8 @@ public final class Sculk {
         }
         instance = new Sculk(platform);
         LOG.info("sculk core initialised on {}", platform.describe());
-        // Fail fast if the bundled Rhino jar is not visible to our classloader.
-        LOG.info("scripting: {}", new ScriptHost().eval("init", "`rhino ${java.lang.Class.forName('org.mozilla.javascript.Context').getPackage().getImplementationVersion() || 'ok'}`"));
+        // Fail fast if the embedded, relocated Rhino is broken in this environment.
+        LOG.info("scripting: {}", ScriptHost.selfTest());
         return instance;
     }
 

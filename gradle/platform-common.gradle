@@ -1,0 +1,29 @@
+// Applied by every platforms/* project after its loader plugin.
+//
+// Compiles the shared core sources into this mod and embeds the relocated
+// Rhino classes as part of the mod's own output, so the same classes are used
+// in dev runs and in the shipped jar, with no jar-in-jar involved.
+
+sourceSets.main.java.srcDir rootProject.file('core/src/main/java')
+
+configurations {
+    shadedRhino {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+}
+
+dependencies {
+    shadedRhino project(path: ':libs:rhino', configuration: 'shaded')
+    compileOnly project(path: ':libs:rhino', configuration: 'shaded')
+}
+
+def unpackRhino = tasks.register('unpackShadedRhino', Sync) {
+    // Declared as an input so Gradle builds :libs:rhino:shadowJar first; the
+    // lazy zipTree below would otherwise hide that dependency.
+    inputs.files configurations.shadedRhino
+    from { configurations.shadedRhino.collect { zipTree(it) } }
+    exclude 'META-INF/MANIFEST.MF'
+    into layout.buildDirectory.dir('shaded/rhino')
+}
+sourceSets.main.output.dir(layout.buildDirectory.dir('shaded/rhino'), builtBy: unpackRhino)

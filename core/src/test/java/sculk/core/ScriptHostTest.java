@@ -13,4 +13,9 @@ class ScriptHostTest {
         Object result = host.eval("test.js", "const f = (s) => `${prefix}${s}`; f('ok')");
         assertEquals("sculk:ok", result);
     }
+
+    @Test
+    void relocatedRhinoSelfTestPasses() {
+        assertEquals("rhino sculk.shaded.org.mozilla.javascript ok", ScriptHost.selfTest());
+    }
 }

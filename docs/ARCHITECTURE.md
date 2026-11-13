@@ -167,7 +167,10 @@ flake.nix                 dev shell: Gradle 9 on JDK 25, JDK 17/21/25 for toolch
 settings.gradle           lists core + one subproject per target
 build.gradle              declares loader plugins once (apply false)
 gradle.properties         shared versions; toolchains come only from JAVA*_HOME
-core/                     shared engine (Java 17, Netty + SLF4J compileOnly, Rhino)
+core/                     shared engine (Java 17, Netty + SLF4J compileOnly)
+libs/rhino/               Rhino relocated to sculk.shaded.org.mozilla (Shadow)
+gradle/platform-common.gradle
+                          applied by every platform: compiles core in, embeds relocated libs
 platforms/
   forge-1.20.1/           MDG Legacy, SRG reobf + mixin refmap, Java 17
   neoforge-1.21.1/        MDG, Java 21
@@ -178,13 +181,20 @@ scripts/
 
 Decisions:
 
-- **Core sources are compiled into each platform jar** (`srcDir`). They are
-  not shipped as a nested jar. That avoids per-loader jar-in-jar and dev-run
-  classpath quirks for our own code. `core` is still its own project, so the
+- **Core sources are compiled into each platform jar** (`srcDir`, via
+  `gradle/platform-common.gradle`). They are not shipped as a nested jar.
+  That avoids per-loader jar-in-jar and dev-run classpath quirks. `core` is still its own project, so the
   Java 17 / no-Minecraft rules are enforced and unit tests run without a game.
-- **Rhino is jar-in-jar, not relocated.** KubeJS's Rhino fork lives in its own
-  package (`dev.latvian.mods.rhino`), so it does not clash. Forge and NeoForge
-  JarJar settle version conflicts with other mods that bundle stock Rhino.
+- **Rhino is relocated and embedded** (`libs/rhino`, to
+  `sculk.shaded.org.mozilla`). Forge/NeoForge JarJar and Fabric jar-in-jar
+  each choose one version of a library across all mods, so a bundled
+  `org.mozilla:rhino` could be swapped for another mod's copy. Relocation is
+  the ecosystem norm (KubeJS ships its fork as `dev.latvian.mods.rhino`). The
+  relocated classes go into each mod's own output, not a nested jar, so dev
+  runs and shipped jars load the same thing. `ScriptHost.selfTest()` runs at
+  startup and checks the two things relocation can break: the
+  ServiceLoader-provided RegExp engine and the message resource bundles.
+  Rhino is MPL-2.0. The shaded jar's manifest records where it came from.
 - **No Stonecutter (yet).** Adapters are separate source trees for now. Add
   Stonecutter-style preprocessing once two targets of the same era share
   enough adapter code to be worth it (for example, NeoForge 1.21.1 and 26.x).
@@ -199,7 +209,8 @@ Decisions:
 ### Adding a target
 
 1. Copy the closest `platforms/<loader>-<version>/` and adjust its
-   `gradle.properties` and plugin.
+   `gradle.properties` and plugin. Keep the
+   `apply from: rootProject.file('gradle/platform-common.gradle')` line.
 2. Add it to `settings.gradle`.
 3. Make the mixins and `Platform` implementation compile against that version.
 4. `scripts/smoke-server.sh <name>` must pass.

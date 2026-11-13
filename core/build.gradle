@@ -21,7 +21,8 @@ repositories {
 dependencies {
     compileOnlyApi 'io.netty:netty-transport:4.1.97.Final'
     compileOnlyApi 'org.slf4j:slf4j-api:2.0.9'
-    api "org.mozilla:rhino:${rootProject.rhino_version}"
+    // Relocated Rhino (sculk.shaded.org.mozilla); see libs/rhino.
+    api project(path: ':libs:rhino', configuration: 'shaded')
 
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'

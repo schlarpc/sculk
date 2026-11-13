@@ -12,6 +12,9 @@ rootProject.name = 'sculk'
 // Loader-agnostic engine. Must never depend on Minecraft or a mod loader.
 include 'core'
 
+// Third-party libraries, relocated so they cannot clash with other mods' copies.
+include 'libs:rhino'
+
 // One subproject per (loader, Minecraft version) target. See docs/ARCHITECTURE.md.
 include 'platforms:neoforge-1.21.1'
 include 'platforms:fabric-26.3'
