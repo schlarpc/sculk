@@ -16,6 +16,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import sculk.core.control.ControlServer;
+import sculk.core.control.EventStore;
+import sculk.core.control.StoredEvent;
 import sculk.core.log.EventLog;
 import sculk.core.model.ObjectModel;
 import sculk.core.net.Direction;
@@ -44,6 +47,13 @@ import sculk.core.util.Bytes;
  *   <li>{@code sculk.eventLog}: path of a JSON Lines event log to write;</li>
  *   <li>{@code sculk.scripts}: script files to load at startup, separated by
  *       the platform path separator.</li>
+ *   <li>{@code sculk.control}: port for the loopback control server (0 picks
+ *       a free port); off when unset. See {@link ControlServer};</li>
+ *   <li>{@code sculk.controlFile}: where the control server writes its port
+ *       and token (default {@code sculk-control.json});</li>
+ *   <li>{@code sculk.controlEvents}, {@code sculk.controlFrameBytes}: how many
+ *       events, and how many bytes of whole frames, the control server keeps
+ *       in memory (defaults 100000 and 256 MiB).</li>
  * </ul>
  */
 public final class Sculk {
@@ -63,12 +73,19 @@ public final class Sculk {
     private final List<SculkConnection> connections = new CopyOnWriteArrayList<>();
     private final AtomicBoolean registryLogged = new AtomicBoolean();
     private final EventLog eventLog;
+    private final EventStore eventStore;
+    /** Guards event ids so that ids, the log file and the store share one order. */
+    private final Object logLock = new Object();
+    private long lastEventId;
+    private final List<String> scriptPaths = new ArrayList<>();
     private ScriptApi scripts;
+    private ControlServer control;
 
-    private Sculk(Platform platform, EventLog eventLog) {
+    private Sculk(Platform platform, EventLog eventLog, EventStore eventStore) {
         this.platform = platform;
         this.attribution = new Attribution(platform);
         this.eventLog = eventLog;
+        this.eventStore = eventStore;
     }
 
     public static synchronized Sculk init(Platform platform) {
@@ -85,12 +102,33 @@ public final class Sculk {
                 LOG.error("cannot open event log {}", logPath, e);
             }
         }
-        Sculk sculk = new Sculk(platform, log);
+        String controlPort = System.getProperty("sculk.control");
+        boolean controlOn = controlPort != null && !controlPort.isBlank();
+        EventStore store = controlOn
+                ? new EventStore(
+                        Integer.getInteger("sculk.controlEvents", 100_000),
+                        Long.getLong("sculk.controlFrameBytes", 256L << 20))
+                : null;
+        Sculk sculk = new Sculk(platform, log, store);
         instance = sculk;
         LOG.info("sculk core initialised on {}", platform.describe());
         LOG.info("scripting: {}", ScriptHost.selfTest());
         sculk.log(entry("start", Map.of("platform", platform.describe())));
+        String paths = System.getProperty("sculk.scripts");
+        if (paths != null) {
+            for (String p : paths.split(File.pathSeparator)) {
+                if (!p.isBlank()) sculk.scriptPaths.add(p.trim());
+            }
+        }
         sculk.loadStartupScripts();
+        if (controlOn) {
+            try {
+                Path file = Path.of(System.getProperty("sculk.controlFile", "sculk-control.json"));
+                sculk.control = new ControlServer(sculk, store, Integer.parseInt(controlPort.trim()), file);
+            } catch (IOException | RuntimeException e) {
+                LOG.error("cannot start control server on port {}", controlPort, e);
+            }
+        }
         return sculk;
     }
 
@@ -102,9 +140,13 @@ public final class Sculk {
     public Platform platform() { return platform; }
     public Attribution attribution() { return attribution; }
     public List<SculkConnection> connections() { return new ArrayList<>(connections); }
+    /** The control server, or null when it is off or failed to start. */
+    public ControlServer control() { return control; }
 
     public void addPacketListener(Consumer<PacketEvent> listener) { packetListeners.add(listener); }
     public void addConnectionListener(Consumer<SculkConnection> listener) { connectionListeners.add(listener); }
+    public void removePacketListener(Consumer<PacketEvent> listener) { packetListeners.remove(listener); }
+    public void removeConnectionListener(Consumer<SculkConnection> listener) { connectionListeners.remove(listener); }
 
     // ---- hooks (called via WireHooks) ----
 
@@ -150,7 +192,7 @@ public final class Sculk {
                 LOG.error("packet listener failed for {}", event, ex);
             }
         }
-        if (eventLog != null) logPacket(event);
+        if (logging()) logPacket(event);
         return event;
     }
 
@@ -170,7 +212,7 @@ public final class Sculk {
             e.put("injected", true);
             e.put("len", frame == null ? 0 : frame.length);
             e.put("hex", Bytes.hex(frame, LOG_FRAME_BYTES));
-            log(e);
+            log(e, frame);
             return;
         }
         onPacket(conn, dir, packet, frame, codec, true);
@@ -203,8 +245,38 @@ public final class Sculk {
         return e;
     }
 
+    /** True when anything records events (the event log file or the control server's store). */
+    public boolean logging() {
+        return eventLog != null || eventStore != null;
+    }
+
     public void log(Map<String, Object> entry) {
-        if (eventLog != null) eventLog.write(entry);
+        log(entry, null);
+    }
+
+    /**
+     * Records an entry, giving it the next {@code id}. {@code frame}, for
+     * packets, is the whole frame, kept in memory for the control server
+     * (the entry itself may carry a shortened hex copy).
+     */
+    public void log(Map<String, Object> entry, byte[] frame) {
+        if (!logging()) return;
+        synchronized (logLock) {
+            long id = ++lastEventId;
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("id", id);
+            e.putAll(entry);
+            String line = EventLog.line(e);
+            if (eventLog != null) eventLog.writeLine(line);
+            if (eventStore != null) eventStore.add(new StoredEvent(id, e, line, frame == null ? null : frame.clone()));
+        }
+    }
+
+    /** The id of the most recent event, or 0 before any. */
+    public long lastEventId() {
+        synchronized (logLock) {
+            return lastEventId;
+        }
     }
 
     private void logPacket(PacketEvent ev) {
@@ -236,7 +308,7 @@ public final class Sculk {
         } else {
             e.put("hex", Bytes.hex(frame, 256));
         }
-        log(e);
+        log(e, frame);
     }
 
     /**
@@ -310,19 +382,48 @@ public final class Sculk {
         return scripts;
     }
 
-    private void loadStartupScripts() {
-        String paths = System.getProperty("sculk.scripts");
-        if (paths == null || paths.isBlank()) return;
-        for (String p : paths.split(File.pathSeparator)) {
-            if (p.isBlank()) continue;
-            Path path = Path.of(p.trim());
+    /** The startup scripts ({@code sculk.scripts}), in load order. */
+    public List<String> scriptPaths() {
+        return List.copyOf(scriptPaths);
+    }
+
+    /**
+     * Drops all script state (globals, listeners, pending timers) and loads
+     * the startup scripts again from disk. Returns
+     * {@code {"ok":bool,"loaded":[...],"errors":[{"script":...,"error":...}]}}.
+     */
+    public Map<String, Object> reloadScripts() {
+        ScriptApi old;
+        synchronized (this) {
+            old = scripts;
+            scripts = null;
+        }
+        if (old != null) old.close();
+        Map<String, Object> result = loadStartupScripts();
+        log(entry("script_reload", result));
+        return result;
+    }
+
+    private Map<String, Object> loadStartupScripts() {
+        List<String> loaded = new ArrayList<>();
+        List<Map<String, Object>> errors = new ArrayList<>();
+        ScriptApi api = scripts();
+        for (String p : scriptPaths) {
+            Path path = Path.of(p);
             try {
-                scripts().load(path.toString(), Files.readString(path));
+                api.load(path.toString(), Files.readString(path));
                 LOG.info("loaded script {}", path);
+                loaded.add(path.toString());
             } catch (IOException | RuntimeException e) {
                 LOG.error("failed to load script {}", path, e);
                 log(entry("script_error", Map.of("script", path.toString(), "error", e.toString())));
+                errors.add(Map.of("script", path.toString(), "error", e.toString()));
             }
         }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", errors.isEmpty());
+        result.put("loaded", loaded);
+        result.put("errors", errors);
+        return result;
     }
 }

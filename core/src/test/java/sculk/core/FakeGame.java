@@ -25,14 +25,25 @@ public final class FakeGame {
     public record Packet(int id, String text) {}
 
     static final Path EVENT_LOG;
+    static final Path CONTROL_FILE;
+    /** A startup script; it counts how often it has run in the current script scope. */
+    static final Path STARTUP_SCRIPT;
 
     static {
         try {
             EVENT_LOG = Files.createTempFile("sculk-test", ".jsonl");
+            Path dir = Files.createTempDirectory("sculk-test");
+            CONTROL_FILE = dir.resolve("control.json");
+            STARTUP_SCRIPT = dir.resolve("startup.js");
+            Files.writeString(STARTUP_SCRIPT,
+                    "var startupRuns = (typeof startupRuns === 'undefined' ? 0 : startupRuns) + 1;\n");
         } catch (Exception e) {
             throw new ExceptionInInitializerError(e);
         }
         System.setProperty("sculk.eventLog", EVENT_LOG.toString());
+        System.setProperty("sculk.scripts", STARTUP_SCRIPT.toString());
+        System.setProperty("sculk.control", "0");
+        System.setProperty("sculk.controlFile", CONTROL_FILE.toString());
         Sculk.init(new FakePlatform());
     }
 

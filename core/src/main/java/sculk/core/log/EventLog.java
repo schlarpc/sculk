@@ -43,15 +43,33 @@ public final class EventLog implements AutoCloseable {
         return m;
     }
 
+    /** Serialises {@code value} as compact JSON, the way the event log writes it. */
+    public static String toJson(Object value) {
+        return GSON.toJson(value);
+    }
+
+    /**
+     * Serialises an entry as one JSON line. An entry that cannot be serialised
+     * becomes a {@code log_error} entry rather than an exception.
+     */
+    public static String line(Map<String, Object> entry) {
+        try {
+            return GSON.toJson(entry);
+        } catch (RuntimeException e) {
+            Map<String, Object> error = entry("log_error");
+            if (entry.containsKey("id")) error.put("id", entry.get("id"));
+            error.put("error", e.toString());
+            return GSON.toJson(error);
+        }
+    }
+
     /** Serialises now (on the caller's thread, so values are captured) and writes later. */
     public void write(Map<String, Object> entry) {
-        String line;
-        try {
-            line = GSON.toJson(entry);
-        } catch (RuntimeException e) {
-            line = GSON.toJson(Map.of("kind", "log_error", "t", System.currentTimeMillis(), "error", e.toString()));
-        }
-        String finalLine = line;
+        writeLine(line(entry));
+    }
+
+    /** Writes an already serialised line later, in call order. */
+    public void writeLine(String finalLine) {
         executor.execute(() -> {
             try {
                 writer.write(finalLine);
