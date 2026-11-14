@@ -36,8 +36,17 @@ import sculk.core.util.Bytes;
 class ControlServerTest {
     private static final Gson GSON = new Gson();
 
-    private record Response(int status, String body) {
+    private record Response(int status, String body, String head) {
+        Response(int status, String body) { this(status, body, ""); }
         JsonObject json() { return GSON.fromJson(body, JsonObject.class); }
+        /** A response header, or null. */
+        String header(String name) {
+            for (String line : head.split("\r\n")) {
+                int colon = line.indexOf(':');
+                if (colon > 0 && line.substring(0, colon).equalsIgnoreCase(name)) return line.substring(colon + 1).trim();
+            }
+            return null;
+        }
     }
 
     private static ControlServer server() {
@@ -69,7 +78,7 @@ class ControlServerTest {
             String raw = new String(socket.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             int status = Integer.parseInt(raw.substring(9, 12));
             int split = raw.indexOf("\r\n\r\n");
-            return new Response(status, split < 0 ? "" : raw.substring(split + 4));
+            return new Response(status, split < 0 ? "" : raw.substring(split + 4), split < 0 ? raw : raw.substring(0, split));
         }
     }
 
@@ -462,6 +471,85 @@ class ControlServerTest {
         assertEquals(202, request("POST", "/mcp", "[" + note + "]", auth()).status());
         Response refused = request("POST", "/mcp", batch, auth(), "MCP-Protocol-Version: 2025-06-18");
         assertEquals(-32600, refused.json().getAsJsonObject("error").get("code").getAsInt());
+    }
+
+    private static String initSession() throws IOException {
+        Response init = request("POST", "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":"
+                + "{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"1\"}}}", auth());
+        String session = init.header("Mcp-Session-Id");
+        assertNotNull(session, init.head());
+        return session;
+    }
+
+    @Test
+    void mcpSessions() throws IOException {
+        String session = initSession();
+        String ping = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}";
+        assertEquals(200, request("POST", "/mcp", ping, auth(), "Mcp-Session-Id: " + session).status());
+        assertEquals(404, request("POST", "/mcp", ping, auth(), "Mcp-Session-Id: nope").status());
+        assertEquals(204, request("DELETE", "/mcp", null, auth(), "Mcp-Session-Id: " + session).status());
+        assertEquals(404, request("POST", "/mcp", ping, auth(), "Mcp-Session-Id: " + session).status(), "ended");
+        assertEquals(404, request("DELETE", "/mcp", null, auth(), "Mcp-Session-Id: " + session).status());
+        assertEquals(400, request("DELETE", "/mcp", null, auth()).status());
+        assertEquals(403, request("DELETE", "/mcp", null, auth(), "Origin: http://evil.example").status());
+        assertEquals(200, request("POST", "/mcp", ping, auth()).status(), "sessions stay optional");
+    }
+
+    /** A wait that matches nothing, streamed with a progress token, then cancelled. */
+    @Test
+    void mcpLongWaitsStreamProgressAndCanBeCancelled() throws Exception {
+        String session = initSession();
+        String call = "{\"jsonrpc\":\"2.0\",\"id\":\"w1\",\"method\":\"tools/call\",\"params\":{\"name\":\"sculk_wait_events\","
+                + "\"arguments\":{\"after\":0,\"filter\":\"kind == never_happens\",\"timeoutMs\":60000},\"_meta\":{\"progressToken\":\"tok\"}}}";
+        byte[] bytes = call.getBytes(StandardCharsets.UTF_8);
+        try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), server().port())) {
+            socket.setSoTimeout(10_000);
+            socket.getOutputStream().write(("POST /mcp HTTP/1.1\r\nHost: " + host() + "\r\n" + auth() + "\r\nMcp-Session-Id: " + session
+                    + "\r\nAccept: application/json, text/event-stream\r\nContent-Length: " + bytes.length
+                    + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            socket.getOutputStream().write(bytes);
+            socket.getOutputStream().flush();
+            InputStream in = socket.getInputStream();
+            String head = readUntil(in, "notifications/progress");
+            assertTrue(head.contains("text/event-stream"), head);
+            assertTrue(head.contains("\"progressToken\":\"tok\""), head);
+
+            // A cancellation from another session does nothing; from this one, it ends the stream with no response.
+            String cancel = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":\"w1\"}}";
+            assertEquals(202, request("POST", "/mcp", cancel, auth()).status());
+            long t0 = System.nanoTime();
+            assertEquals(202, request("POST", "/mcp", cancel, auth(), "Mcp-Session-Id: " + session).status());
+            String rest = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue((System.nanoTime() - t0) / 1_000_000 < 3_000, "the wait stopped promptly");
+            assertFalse(rest.contains("\"result\""), rest);
+        }
+    }
+
+    @Test
+    void mcpWaitsWithoutStreamingCanBeCancelledToo() throws Exception {
+        String call = "{\"jsonrpc\":\"2.0\",\"id\":991,\"method\":\"tools/call\",\"params\":{\"name\":\"sculk_wait_events\","
+                + "\"arguments\":{\"after\":0,\"filter\":\"kind == never_happens\",\"timeoutMs\":60000}}}";
+        var pending = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return request("POST", "/mcp", call, auth());
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
+        Thread.sleep(500);
+        assertEquals(202, request("POST", "/mcp",
+                "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":991}}", auth()).status());
+        Response r = pending.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(-32800, r.json().getAsJsonObject("error").get("code").getAsInt(), r.body());
+    }
+
+    @Test
+    void mcpShortWaitsStillAnswerAsJson() throws IOException {
+        long last = FakeGame.sculk().lastEventId();
+        Response r = request("POST", "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":"
+                + "\"sculk_wait_events\",\"arguments\":{\"after\":" + (last - 1) + "}}}", auth(), "Accept: application/json, text/event-stream");
+        assertTrue(r.header("Content-Type").startsWith("application/json"), r.head());
+        assertTrue(r.json().has("result"), r.body());
     }
 
     @Test

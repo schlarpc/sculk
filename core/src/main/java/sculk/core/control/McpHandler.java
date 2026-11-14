@@ -5,6 +5,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,7 +33,10 @@ import sculk.core.util.Bytes;
 final class McpHandler {
     static final List<String> PROTOCOL_VERSIONS = List.of("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05");
     private static final Gson GSON = new Gson();
-    private static final int MAX_WAIT_MILLIS = 60_000;
+    private static final int MAX_WAIT_MILLIS = 300_000;
+    /** How often a streamed call reports progress (or, without a progress token, sends a keep-alive). */
+    static final long TICK_MILLIS = 2_000;
+    private static final int MAX_SESSIONS = 256;
 
     static final String SCRIPT_HELP = """
             Scripts are JavaScript (Rhino, ES6: arrow functions, let/const, template strings, classes; no modules, \
@@ -105,12 +111,207 @@ final class McpHandler {
             if (parsed.getAsJsonArray().isEmpty()) return error(null, -32600, "empty batch");
             List<Object> out = new ArrayList<>();
             for (JsonElement e : parsed.getAsJsonArray()) {
-                Map<String, Object> r = message(e);
+                Map<String, Object> r = message(e, Call.NONE);
                 if (r != null) out.add(r);
             }
             return out.isEmpty() ? null : out;
         }
-        return message(parsed);
+        return message(parsed, Call.NONE);
+    }
+
+    // ---- the HTTP side: sessions, streamed calls, cancellation ----
+
+    /** One client's session: its calls in flight, by request id, so notifications/cancelled can find them. */
+    private static final class Session {
+        final Map<Object, Call> calls = new java.util.concurrent.ConcurrentHashMap<>();
+    }
+
+    /** Clients that never initialized (or skip sessions) share this one. */
+    private final Session anonymous = new Session();
+    private final Map<String, Session> sessions = java.util.Collections.synchronizedMap(
+            new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Session> eldest) {
+                    return size() > MAX_SESSIONS;
+                }
+            });
+
+    /**
+     * One tools/call in flight. It may answer as a server-sent event stream:
+     * the stream opens on the first progress tick, carries
+     * notifications/progress (when the client sent a progressToken) or
+     * keep-alives, and ends with the response. A cancelled call, by
+     * notifications/cancelled or by the client going away, stops at its next
+     * tick and sends no response.
+     */
+    static final class Call {
+        static final Call NONE = new Call(null, null);
+
+        private final HttpExchange exchange;
+        private final Object progressToken;
+        private volatile boolean cancelled;
+        private OutputStream stream;
+
+        Call(HttpExchange exchange, Object progressToken) {
+            this.exchange = exchange;
+            this.progressToken = progressToken;
+        }
+
+        boolean cancelled() {
+            return cancelled;
+        }
+
+        void cancel() {
+            cancelled = true;
+        }
+
+        boolean streaming() {
+            return stream != null;
+        }
+
+        /** Reports progress, opening the stream if needed. Without a progress token it only keeps the stream alive. */
+        synchronized void progress(double progress, double total, String message) {
+            if (exchange == null || cancelled) return;
+            try {
+                open();
+                if (progressToken == null) {
+                    write(": keep-alive\n\n");
+                } else {
+                    Map<String, Object> params = new LinkedHashMap<>();
+                    params.put("progressToken", progressToken);
+                    params.put("progress", progress);
+                    params.put("total", total);
+                    params.put("message", message);
+                    send(Map.of("jsonrpc", "2.0", "method", "notifications/progress", "params", params));
+                }
+            } catch (IOException e) {
+                cancelled = true; // The client went away; nobody will read the answer.
+            }
+        }
+
+        synchronized void send(Object message) throws IOException {
+            open();
+            write("event: message\ndata: " + EventLog.toJson(message) + "\n\n");
+        }
+
+        private void open() throws IOException {
+            if (stream != null) return;
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+            exchange.getResponseHeaders().set("Cache-Control", "no-store");
+            exchange.sendResponseHeaders(200, 0);
+            stream = exchange.getResponseBody();
+        }
+
+        private void write(String text) throws IOException {
+            stream.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            stream.flush();
+        }
+    }
+
+    /**
+     * Serves POST /mcp. Sessions are optional: initialize hands out an
+     * Mcp-Session-Id, and a request naming an unknown one gets 404 (the
+     * client must initialize again). tools/call may stream its answer when
+     * the client accepts text/event-stream.
+     */
+    void post(HttpExchange ex, String body, String version) throws IOException {
+        String sessionId = ex.getRequestHeaders().getFirst("Mcp-Session-Id");
+        Session session = anonymous;
+        if (sessionId != null) {
+            session = sessions.get(sessionId);
+            if (session == null) {
+                ControlServer.json(ex, 404, error(null, -32001, "unknown or expired session " + sessionId + "; initialize again"));
+                return;
+            }
+        }
+        JsonObject msg = null;
+        try {
+            JsonElement parsed = JsonParser.parseString(body);
+            if (parsed.isJsonObject()) msg = parsed.getAsJsonObject();
+        } catch (JsonParseException e) {
+            // handle() answers it.
+        }
+        String method = msg != null && msg.has("method") && msg.get("method").isJsonPrimitive() ? msg.get("method").getAsString() : null;
+        Object id = msg != null && msg.has("id") && !msg.get("id").isJsonNull() ? requestId(msg.get("id")) : null;
+
+        if ("notifications/cancelled".equals(method) && msg.has("params") && msg.get("params").isJsonObject()) {
+            JsonObject p = msg.getAsJsonObject("params");
+            if (p.has("requestId")) {
+                Call c = session.calls.get(requestId(p.get("requestId")));
+                if (c != null) c.cancel();
+            }
+            ex.sendResponseHeaders(202, -1);
+            return;
+        }
+        if ("initialize".equals(method) && id != null) {
+            Object response = handle(body, version);
+            String newId = newSessionId();
+            sessions.put(newId, new Session());
+            ex.getResponseHeaders().set("Mcp-Session-Id", newId);
+            ControlServer.json(ex, 200, response);
+            return;
+        }
+        if ("tools/call".equals(method) && id != null) {
+            String accept = String.valueOf(ex.getRequestHeaders().getFirst("Accept"));
+            JsonObject params = msg.has("params") && msg.get("params").isJsonObject() ? msg.getAsJsonObject("params") : new JsonObject();
+            Object token = params.has("_meta") && params.get("_meta").isJsonObject() && params.getAsJsonObject("_meta").has("progressToken")
+                    ? requestId(params.getAsJsonObject("_meta").get("progressToken")) : null;
+            Call call = new Call(accept.contains("text/event-stream") ? ex : null, token);
+            if (session.calls.putIfAbsent(id, call) != null) {
+                ControlServer.json(ex, 200, error(id, -32600, "request id " + id + " is already in flight"));
+                return;
+            }
+            try {
+                Map<String, Object> response;
+                try {
+                    response = message(msg, call);
+                } catch (java.util.concurrent.CancellationException e) {
+                    response = null;
+                }
+                synchronized (call) {
+                    if (call.streaming()) {
+                        // Cancelled: end the stream without an answer, as the spec asks.
+                        if (response != null && !call.cancelled()) call.send(response);
+                    } else {
+                        ControlServer.json(ex, 200, response != null ? response : error(id, -32800, "request cancelled"));
+                    }
+                }
+            } finally {
+                session.calls.remove(id, call);
+            }
+            return;
+        }
+        Object response = handle(body, version);
+        if (response == null) ex.sendResponseHeaders(202, -1);
+        else ControlServer.json(ex, 200, response);
+    }
+
+    /** Serves DELETE /mcp: ends a session and cancels its calls. */
+    void delete(HttpExchange ex) throws IOException {
+        String sessionId = ex.getRequestHeaders().getFirst("Mcp-Session-Id");
+        if (sessionId == null) {
+            ControlServer.json(ex, 400, Map.of("error", "Mcp-Session-Id is required"));
+            return;
+        }
+        Session session = sessions.remove(sessionId);
+        if (session == null) {
+            ControlServer.json(ex, 404, Map.of("error", "unknown or expired session"));
+            return;
+        }
+        session.calls.values().forEach(Call::cancel);
+        ex.sendResponseHeaders(204, -1);
+    }
+
+    private static String newSessionId() {
+        byte[] random = new byte[16];
+        new java.security.SecureRandom().nextBytes(random);
+        return Bytes.hex(random);
+    }
+
+    /** A JSON-RPC id or progress token as a map key: strings stay strings, whole numbers become longs. */
+    private static Object requestId(JsonElement e) {
+        Object v = GSON.fromJson(e, Object.class);
+        return v instanceof Double d && d == Math.rint(d) ? (Object) d.longValue() : v;
     }
 
     /** Null if the MCP-Protocol-Version header is absent or one we speak, else why not. */
@@ -120,7 +321,7 @@ final class McpHandler {
     }
 
     /** Handles one JSON-RPC message; returns the response object, or null for a notification or a response. */
-    private Map<String, Object> message(JsonElement parsed) {
+    private Map<String, Object> message(JsonElement parsed, Call call) {
         if (!parsed.isJsonObject()) return error(null, -32600, "expected a JSON-RPC message object");
         JsonObject msg = parsed.getAsJsonObject();
         Object id = msg.has("id") && !msg.get("id").isJsonNull() ? GSON.fromJson(msg.get("id"), Object.class) : null;
@@ -137,7 +338,7 @@ final class McpHandler {
                 case "initialize" -> initialize(params);
                 case "ping" -> Map.of();
                 case "tools/list" -> Map.of("tools", tools());
-                case "tools/call" -> call(params);
+                case "tools/call" -> call(params, call);
                 default -> null;
             };
             if (result == null) return error(id, -32601, "method not found: " + method);
@@ -237,10 +438,11 @@ final class McpHandler {
         out.add(tool("sculk_wait_events",
                 "Wait until at least one event matching the filter with an id greater than `after` exists, then return "
                         + "the matches (up to `limit`) as JSON Lines. Returns nothing if `timeoutMs` passes first. "
+                        + "Long waits report progress (send a progressToken) and can be cancelled. "
                         + "Use sculk_status or a previous result for the starting id. Same filter syntax as sculk_events.",
                 Map.of("filter", filter, "after", prop("integer", "Wait for events after this id (required)."),
                         "limit", prop("integer", "Maximum events to return (default 50)."),
-                        "timeoutMs", prop("integer", "How long to wait, at most 60000 (default 30000).")),
+                        "timeoutMs", prop("integer", "How long to wait, at most 300000 (default 30000).")),
                 List.of("after")));
         out.add(tool("sculk_frame",
                 "The whole frame (packet id and body, uncompressed and unencrypted) of a packet event, as hex.",
@@ -296,7 +498,7 @@ final class McpHandler {
         return out;
     }
 
-    private Map<String, Object> call(JsonObject params) {
+    private Map<String, Object> call(JsonObject params, Call ctx) {
         if (!params.has("name")) throw new IllegalArgumentException("missing tool name");
         String name = params.get("name").getAsString();
         JsonObject args = params.has("arguments") && params.get("arguments").isJsonObject()
@@ -308,7 +510,7 @@ final class McpHandler {
                     Predicate<Map<String, Object>> f = EventFilter.compile(string(args, "filter"));
                     yield lines(store.query(f, longArg(args, "after"), intArg(args, "limit", 50)));
                 }
-                case "sculk_wait_events" -> waitEvents(args);
+                case "sculk_wait_events" -> waitEvents(args, ctx);
                 case "sculk_frame" -> {
                     Long id = longArg(args, "id");
                     if (id == null) throw new IllegalArgumentException("id is required");
@@ -433,7 +635,7 @@ final class McpHandler {
         return v;
     }
 
-    private Map<String, Object> waitEvents(JsonObject args) {
+    private Map<String, Object> waitEvents(JsonObject args, Call ctx) {
         Long after = longArg(args, "after");
         if (after == null) throw new IllegalArgumentException("after is required");
         Predicate<Map<String, Object>> filter = EventFilter.compile(string(args, "filter"));
@@ -446,9 +648,21 @@ final class McpHandler {
         store.subscribe(subscriber);
         try {
             List<StoredEvent> found = store.query(filter, after, limit);
-            if (found.isEmpty() && arrived.poll(timeout, TimeUnit.MILLISECONDS) != null) {
-                Thread.sleep(50); // Let a burst of related events land together.
-                found = store.query(filter, after, limit);
+            long start = System.currentTimeMillis(), deadline = start + timeout, nextTick = start + TICK_MILLIS;
+            while (found.isEmpty()) {
+                if (ctx.cancelled()) throw new java.util.concurrent.CancellationException();
+                long now = System.currentTimeMillis();
+                if (now >= deadline) break;
+                if (arrived.poll(Math.min(deadline - now, 100), TimeUnit.MILLISECONDS) != null) {
+                    Thread.sleep(50); // Let a burst of related events land together.
+                    found = store.query(filter, after, limit);
+                    break;
+                }
+                if (System.currentTimeMillis() >= nextTick) {
+                    long elapsed = System.currentTimeMillis() - start;
+                    ctx.progress(elapsed, timeout, "waiting for events: " + elapsed / 1000 + " s of " + timeout / 1000 + " s");
+                    nextTick += TICK_MILLIS;
+                }
             }
             return lines(found);
         } catch (InterruptedException e) {

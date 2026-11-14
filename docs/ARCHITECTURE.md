@@ -313,7 +313,8 @@ POST /scripts/check     body: source    syntax errors and warnings from Rhino's 
 POST /scripts/run|stop|delete?name=     run: (re)start from the file, any run mode; returns its result or error
 POST /scripts/rename?name=&to=
 POST /scripts/enable?name=&enabled=     disabling renames to .disabled and stops it
-POST /mcp       body: JSON-RPC          Model Context Protocol, Streamable HTTP transport (JSON responses)
+POST /mcp       body: JSON-RPC          Model Context Protocol, Streamable HTTP transport
+DELETE /mcp                             ends an MCP session
 GET  /ui/...                            the web UI (no token needed for its static files)
 ```
 
@@ -321,7 +322,17 @@ GET  /ui/...                            the web UI (no token needed for its stat
 `repl`, `reload`, `script ls|cat|push|run|stop|enable|disable|rm|mv`) and
 finds the server through its control file.
 
-The MCP server offers the same powers as tools: `sculk_status`,
+The MCP server speaks protocol versions 2025-11-25 back to 2024-11-05
+(JSON-RPC batches only for the versions that have them; a request whose
+`MCP-Protocol-Version` header names any other version gets 400).
+`initialize` hands out an `Mcp-Session-Id`; sessions are optional, and an
+unknown one gets 404. Most calls answer with plain JSON. A long
+`sculk_wait_events` switches to a server-sent event stream when the client
+accepts one: it sends `notifications/progress` every 2 s when the call
+carries a `progressToken` (keep-alives otherwise), and stops when the client
+sends `notifications/cancelled` or goes away. Each tool carries a title and
+read-only, destructive, idempotent and open-world hints. It offers the same
+powers as tools: `sculk_status`,
 `sculk_events`, `sculk_wait_events` (long-polls up to 60 s for new matches,
 since tool calls cannot stream), `sculk_frame`, `sculk_eval`,
 `sculk_reload`, and for installed scripts `sculk_scripts`,

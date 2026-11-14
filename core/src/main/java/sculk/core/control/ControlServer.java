@@ -69,6 +69,7 @@ import sculk.core.util.Bytes;
  *   POST /scripts/rename?name=&amp;to=
  *   POST /scripts/enable?name=&amp;enabled=true|false
  *   POST /mcp       body: JSON-RPC          Model Context Protocol (Streamable HTTP); see {@link McpHandler}
+ *   DELETE /mcp                             ends an MCP session (Mcp-Session-Id)
  *   GET  /ui/...                            the web UI (static files from sculk/web/ on the classpath)
  * </pre>
  *
@@ -266,10 +267,9 @@ public final class ControlServer {
                             json(ex, 400, Map.of("jsonrpc", "2.0", "error", Map.of("code", -32600, "message", bad)));
                             return;
                         }
-                        Object response = mcp.handle(body(ex), version);
-                        if (response == null) ex.sendResponseHeaders(202, -1);
-                        else json(ex, 200, response);
+                        mcp.post(ex, body(ex), version);
                     }
+                    case "DELETE /mcp" -> mcp.delete(ex);
                     default -> {
                         boolean known = Set.of("/status", "/events", "/events/stream", "/frame", "/eval", "/reload", "/mcp",
                                 "/scripts", "/scripts/source", "/scripts/save", "/scripts/check", "/scripts/run", "/scripts/stop",
@@ -479,7 +479,7 @@ public final class ControlServer {
         return out;
     }
 
-    private static void json(HttpExchange ex, int status, Object value) throws IOException {
+    static void json(HttpExchange ex, int status, Object value) throws IOException {
         send(ex, status, "application/json", EventLog.toJson(value) + "\n");
     }
 
