@@ -327,7 +327,9 @@ input.invalid { border-color: var(--red); }
   text-overflow: ellipsis;
 }
 .c-owner { color: var(--bone-dim); }
-.c-conn, .c-side { color: var(--text-dim); }
+.c-conn { color: var(--text-dim); }
+/* owners are mostly short; the odd long one is clipped rather than widening the column */
+.c-owner > span { display: block; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
 
 .k-packet .c-kind { color: var(--text-dim); }
 .d-inbound .c-dir { color: var(--glow); }
@@ -342,8 +344,9 @@ input.invalid { border-color: var(--red); }
 .k-payload_type .c-kind, .k-payload_type .c-summary { color: var(--bone-dim); }
 .k-start { color: var(--bone); }
 .k-script_error, .k-log_error, .rt-bad .c-summary { color: var(--red); }
-.c-action { color: var(--gold); }
-.a-drop .c-action, .a-drop .c-summary { color: var(--red); text-decoration: line-through; text-decoration-thickness: 2px; }
+.a-replace .c-dir { color: var(--gold); }
+.a-drop .c-dir { color: var(--red); }
+.a-drop .c-summary { color: var(--red); text-decoration: line-through; text-decoration-thickness: 2px; }
 
 .table-foot {
   display: flex;

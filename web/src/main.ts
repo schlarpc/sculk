@@ -79,7 +79,8 @@ function str(v: unknown): string {
 function summary(e: SculkEvent): string {
   switch (e.kind) {
     case "packet":
-      return str(e.channel ?? e.type);
+      // Vanilla names without their namespace: the owner column says minecraft.
+      return str(e.channel ?? e.type).replace(/^minecraft:/, "");
     case "connection":
       return `${str(e.side)} ← ${str(e.remote)}`;
     case "disconnect":
@@ -359,27 +360,36 @@ class App {
     if (typeof e.roundTrip === "string" && /^(mismatch|error)/.test(e.roundTrip)) tr.classList.add("rt-bad");
     if (e.id === this.selected) tr.classList.add("selected");
 
+    // Markers in front of the direction: what sculk did to the packet. Always
+    // two cells wide, so the arrows line up.
+    const dropped = e.action === "drop", replaced = e.action === "replace";
+    const marks = (e.injected ? "✦" : "") + (dropped ? "✕" : replaced ? "↻" : "");
     const dir = e.dir === "inbound" ? "◀ in" : e.dir === "outbound" ? "▶ out" : "";
-    const cells: [string, string, string?][] = [
+    const dirText = dir || marks ? marks.padEnd(2, "\u00a0") + "\u00a0" + dir : "";
+    const dirTitle = [e.injected ? "✦ injected by a script" : "", dropped ? "✕ dropped by a script" : "", replaced ? "↻ replaced by a script" : ""]
+      .filter(Boolean)
+      .join("\n");
+    // [text, class, field to filter on, clipped to the cell with a tooltip]
+    const cells: [string, string, string?, boolean?][] = [
       [String(e.id), "c-id"],
       [time(e.t), "c-time"],
       [e.kind, "c-kind", "kind"],
-      [(e.injected ? "✦ " : "") + dir, "c-dir", "dir"],
-      [str(e.side), "c-side", "side"],
+      [dirText, "c-dir", "dir"],
       [e.conn === undefined ? "" : `#${str(e.conn)}`, "c-conn", "conn"],
-      [str(e.owner), "c-owner", "owner"],
+      [str(e.owner), "c-owner", "owner", true],
       [e.len === undefined || e.len === null ? "" : String(e.len), "c-len", "len"],
-      [e.action && e.action !== "pass" ? str(e.action) : "", "c-action", "action"],
-      [summary(e), "c-summary", e.kind === "packet" ? (e.channel ? "channel" : "type") : undefined],
+      [summary(e), "c-summary", e.kind === "packet" ? (e.channel ? "channel" : "type") : undefined, true],
     ];
-    for (const [text, cls, field] of cells) {
-      // The summary sits out of flow, so its length never widens the table:
-      // the other columns size to their content and it takes what is left.
-      const td = cls === "c-summary" ? el("td", cls) : el("td", cls, text);
-      if (cls === "c-summary") {
-        td.title = text;
+    for (const [text, cls, field, clip] of cells) {
+      // Clipped text sits in a span the CSS limits, so a long value never
+      // widens its column; the summary's span is out of flow altogether and
+      // takes whatever the other columns leave.
+      const td = clip ? el("td", cls) : el("td", cls, text);
+      if (clip) {
         td.append(el("span", undefined, text));
+        if (text) td.title = text;
       }
+      if (cls === "c-dir" && dirTitle) td.title = dirTitle;
       if (field) td.dataset.field = field;
       tr.append(td);
     }
