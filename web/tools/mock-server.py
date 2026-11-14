@@ -273,6 +273,7 @@ class Store:
         self.events = []  # (id, fields, json, frame)
         self.last_id = 0
         self.cond = threading.Condition()
+        self.match_cache = {}
 
     def add(self, kind, fields, frame=None):
         with self.cond:
@@ -298,6 +299,36 @@ class Store:
             if after is not None and len(out) >= limit:
                 break
         return out[-limit:] if after is None and len(out) > limit else out
+
+    def matches(self, source, pred):
+        """The ids matching a filter, kept up to date like EventStore.matches: (list, removed)."""
+        import bisect
+        with self.cond:
+            snapshot = list(self.events)
+            m = self.match_cache.setdefault(source, {"ids": [], "removed": 0, "scanned": 0})
+            first = snapshot[0][0] if snapshot else self.last_id + 1
+            k = bisect.bisect_left(m["ids"], first)
+            if k:
+                del m["ids"][:k]
+                m["removed"] += k
+            for ev in snapshot:
+                if ev[0] > m["scanned"] and pred(ev[1]):
+                    m["ids"].append(ev[0])
+            if snapshot:
+                m["scanned"] = max(m["scanned"], snapshot[-1][0])
+            return list(m["ids"]), m["removed"], {ev[0]: ev for ev in snapshot}
+
+    def page(self, source, pred, frm, count):
+        ids, removed, by_id = self.matches(source, pred)
+        lo = max(frm, removed)
+        hi = min(frm + count, removed + len(ids))
+        events = [by_id[ids[i - removed]][2] for i in range(lo, hi) if ids[i - removed] in by_id]
+        return '{"start":%d,"total":%d,"from":%d,"events":[%s]}' % (removed, removed + len(ids), lo, ",".join(events))
+
+    def position(self, source, pred, id_):
+        import bisect
+        ids, removed, _ = self.matches(source, pred)
+        return {"index": removed + bisect.bisect_left(ids, id_), "start": removed, "total": removed + len(ids)}
 
     def get(self, id_):
         with self.cond:
@@ -1059,6 +1090,15 @@ def make_handler(store, game, bundle):
                     after = int(q["after"]) if q.get("after") else None
                     out = "".join(e[2] + "\n" for e in store.query(pred, after, int(q.get("limit", 200))))
                     return self.send(200, "application/x-ndjson", out.encode())
+                if key == "GET /events/page":
+                    src = (q.get("filter") or "").strip()
+                    out = store.page(src, compile_filter(src), int(q.get("from") or 0), min(int(q.get("count") or 200), 2000))
+                    return self.send(200, "application/json", out.encode())
+                if key == "GET /events/position":
+                    src = (q.get("filter") or "").strip()
+                    if not q.get("id"):
+                        raise ValueError("id is required")
+                    return self.json(200, store.position(src, compile_filter(src), int(q["id"])))
                 if key == "GET /events/stream":
                     return self.stream(compile_filter(q.get("filter")), int(q["after"]) if q.get("after") else None)
                 if key == "GET /frame":
@@ -1091,7 +1131,7 @@ def make_handler(store, game, bundle):
                         return self.json(200, routes[key]())
                     except ValueError as e:
                         return self.json(getattr(e, "status", 400), {"error": str(e)})
-                known = path in ("/status", "/events", "/events/stream", "/frame", "/eval", "/reload") or \
+                known = path in ("/status", "/events", "/events/stream", "/events/page", "/events/position", "/frame", "/eval", "/reload") or \
                     any(r.split(" ", 1)[1] == path for r in routes)
                 return self.json(405 if known else 404, {"error": f"wrong method for {path}" if known else f"no such endpoint {path}"})
             except ValueError as e:  # FilterError included

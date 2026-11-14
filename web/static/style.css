@@ -282,6 +282,8 @@ input.invalid { border-color: var(--red); }
 
 .events-table {
   width: 100%;
+  /* Fixed widths: rows come and go as the table scrolls, and must not move the columns. */
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
   line-height: 1.6;
@@ -303,13 +305,38 @@ input.invalid { border-color: var(--red); }
   white-space: nowrap;
 }
 .events-table td {
-  padding: 1px 8px;
+  height: 21px;
+  padding: 0 8px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border-bottom: 1px solid rgba(24, 65, 79, 0.35);
 }
+.w-id { width: 10ch; }
+.w-time { width: calc(12ch + 16px); }
+.w-kind { width: calc(13ch + 16px); }
+.w-dir { width: calc(8ch + 16px); }
+.w-conn { width: calc(4ch + 16px); }
+.w-owner { width: calc(14ch + 16px); }
+.w-len { width: calc(6ch + 16px); }
 .events-table tbody tr { cursor: pointer; }
-.events-table tbody tr:nth-child(even) { background: rgba(13, 35, 44, 0.45); }
+/* Stripes by position in the capture, not in the page, so they do not flicker as rows scroll in. */
+.events-table tbody tr.odd { background: rgba(13, 35, 44, 0.45); }
 .events-table tbody tr:hover { background: rgba(20, 166, 178, 0.14); }
+.events-table tbody tr.spacer, .events-table tbody tr.spacer:hover { background: none; cursor: default; }
+.events-table tbody tr.spacer td { padding: 0; border: 0; }
+.events-table tbody tr.loading { cursor: default; }
+.c-loading { color: var(--text-faint); }
+button.link {
+  padding: 0;
+  font-size: inherit;
+  color: var(--glow-mid);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  text-decoration: underline;
+}
+button.link:hover { color: var(--glow-hot); background: none; }
 .events-table tbody tr.selected {
   background: rgba(43, 228, 239, 0.2);
   box-shadow: inset 4px 0 0 var(--glow);
@@ -317,19 +344,11 @@ input.invalid { border-color: var(--red); }
 
 .c-id, .c-len { text-align: right; color: var(--text-faint); }
 .c-time { color: var(--text-dim); }
-/* every column but the last fits its content; the last takes the rest of the row and ellipsizes */
-.events-table th:last-child, .c-summary { width: 100%; }
-.c-summary { position: relative; }
-.c-summary > span {
-  position: absolute;
-  inset: 1px 8px auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* the last column takes the rest of the row; every cell ellipsizes */
+.c-summary > span, .c-owner > span { display: block; overflow: hidden; text-overflow: ellipsis; }
 .c-owner { color: var(--bone-dim); }
 .c-conn { color: var(--text-dim); }
-/* owners are mostly short; the odd long one is clipped rather than widening the column */
-.c-owner > span { display: block; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
+
 
 .k-packet .c-kind { color: var(--text-dim); }
 .d-inbound .c-dir { color: var(--glow); }
@@ -348,6 +367,7 @@ input.invalid { border-color: var(--red); }
 .a-drop .c-dir { color: var(--red); }
 .a-drop .c-summary { color: var(--red); text-decoration: line-through; text-decoration-thickness: 2px; }
 
+.table-foot > span:first-child { white-space: nowrap; }
 .table-foot {
   display: flex;
   justify-content: space-between;

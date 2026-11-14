@@ -6,11 +6,8 @@ import { inspect } from "./inspector";
 import { menuOpen, onMenuClose, showMenu, type MenuItem } from "./menu";
 import { frameOf } from "./views";
 import { ScriptsPage } from "./scripts";
+import { EventTable } from "./table";
 
-const MAX_ROWS = 5000;
-/** How many events either side of one "Show in context" loads. */
-const CONTEXT = 150;
-const BACKLOG = 500;
 const TOKEN_KEY = "sculk.token";
 
 const PRESETS: [string, string][] = [
@@ -173,19 +170,22 @@ class App {
   private readonly statusLine = byId("status");
   private readonly count = byId("count");
 
-  private readonly events = new Map<number, SculkEvent>();
-  private readonly rowById = new Map<number, HTMLTableRowElement>();
-  private pending: SculkEvent[] = [];
-  private flushQueued = false;
-  private paused = false;
-  private selected: number | null = null;
-  private lastId = 0;
-  private stream: AbortController | null = null;
+  private readonly table: EventTable;
+  /** "Clear" hides events up to this id. */
+  private floor = 0;
   private sensorTimer = 0;
   private readonly scripts: ScriptsPage;
   private asking: Promise<void> | null = null;
 
   constructor(private api: Api) {
+    this.table = new EventTable(this.wrap, this.rows, {
+      guard: (call) => this.guard(() => call(this.api)),
+      row: (e) => this.row(e),
+      selected: (e) => this.showDetail(e),
+      changed: () => this.updateFoot(),
+      pulse: () => this.pulse(),
+      live: (on) => this.setLive(on),
+    });
     this.scripts = new ScriptsPage({
       guard: (call) => this.guard(() => call(this.api)),
       toast,
@@ -199,8 +199,8 @@ class App {
     this.wireTable();
     this.wireRepl();
     this.wireMenu();
-    // Rows that arrived while a menu was open are drawn when it closes.
-    onMenuClose(() => this.flush());
+    // The rows hold still while a menu is open over them.
+    onMenuClose(() => this.table.hold(false));
     byId<HTMLButtonElement>("reload").onclick = () => void this.reload();
     this.filter.value = store.get("sculk.filter") ?? "";
     void this.applyFilter();
@@ -238,7 +238,6 @@ class App {
       return await call();
     } catch (e) {
       if (e instanceof AuthError) {
-        this.stream?.abort();
         if (!this.asking) {
           this.asking = askForToken("The token was refused. The game makes a new one at every launch.").then((token) => {
             this.api = new Api(token);
@@ -272,6 +271,14 @@ class App {
         `pid ${s.pid}`,
         ...open.map((c) => `#${c.id} ${c.side} ${c.remote}`),
         ...s.scripts.map((p) => `running ${p}`),
+        ...(s.capture
+          ? [
+              `capture: events #${s.capture.firstId}–#${s.capture.lastId}` +
+                (s.capture.diskBytes !== undefined
+                  ? `, ${(s.capture.diskBytes / 2 ** 20).toFixed(0)} of ${((s.capture.diskCap ?? 0) / 2 ** 20).toFixed(0)} MiB on disk`
+                  : ", in memory only"),
+            ]
+          : []),
       ].join("\n");
       this.statusLine.classList.remove("st-down");
     } catch {
@@ -309,64 +316,47 @@ class App {
       };
       presets.append(b);
     }
-    this.pauseButton.onclick = () => this.setPaused(!this.paused);
-    byId<HTMLButtonElement>("clear").onclick = () => this.clearRows();
+    this.pauseButton.onclick = () => this.setPaused(this.table.following);
+    byId<HTMLButtonElement>("clear").onclick = () => void this.clearRows();
   }
 
-  private async applyFilter(): Promise<void> {
-    const filter = this.filter.value.trim();
-    store.set("sculk.filter", filter);
-    this.stream?.abort();
-    const controller = new AbortController();
-    this.stream = controller;
-    this.setLive(false);
-    let backlog: SculkEvent[];
+  /** The filter the table shows: the user's, above the "Clear" floor. */
+  private viewFilter(): string {
+    const f = this.filter.value.trim();
+    if (!this.floor) return f;
+    return f ? `(${f}) && id > ${this.floor}` : `id > ${this.floor}`;
+  }
+
+  private async applyFilter(revealId?: number): Promise<void> {
+    store.set("sculk.filter", this.filter.value.trim());
     try {
-      const result = await this.guard(() => this.api.events(filter, BACKLOG));
-      if (!result || controller.signal.aborted) return;
-      backlog = result;
+      await this.table.setFilter(this.viewFilter(), revealId === undefined ? {} : { revealId });
     } catch (e) {
       if (e instanceof ApiError && e.status === 400) {
         this.filterError.textContent = e.message;
-        this.filterError.hidden = false;
         this.filter.classList.add("invalid");
       } else {
         this.filterError.textContent = `cannot reach the game: ${(e as Error).message}`;
-        this.filterError.hidden = false;
       }
+      this.filterError.hidden = false;
       return;
     }
     this.filterError.hidden = true;
     this.filter.classList.remove("invalid");
-    this.clearRows();
-    for (const e of backlog) this.add(e);
-    if (backlog.length) this.lastId = (backlog[backlog.length - 1] as SculkEvent).id;
-    else {
-      const s = await this.guard(() => this.api.status()).catch(() => undefined);
-      this.lastId = s?.lastEventId ?? this.lastId;
-    }
-    void this.follow(filter, controller.signal);
+    this.updateFoot();
   }
 
-  private async follow(filter: string, signal: AbortSignal): Promise<void> {
-    while (!signal.aborted) {
-      try {
-        this.setLive(true);
-        for await (const e of this.api.stream(filter, this.lastId, signal)) {
-          this.lastId = e.id;
-          this.add(e);
-          this.pulse();
-        }
-      } catch (e) {
-        if (signal.aborted) return;
-        if (e instanceof AuthError) {
-          void this.guard(() => Promise.reject(e));
-          return;
-        }
-      }
-      this.setLive(false);
-      await new Promise((r) => setTimeout(r, 2000));
-    }
+  private updateFoot(): void {
+    const n = this.table.count;
+    const filtered = this.filter.value.trim() !== "";
+    this.count.textContent = `${n.toLocaleString()} ${filtered ? "matching" : "events"}`;
+    const showAll = byId<HTMLButtonElement>("show-all");
+    showAll.hidden = this.floor === 0;
+    showAll.textContent = `cleared at #${this.floor} · show all`;
+    const following = this.table.following;
+    this.pauseButton.textContent = following ? "Pause" : `Resume${this.table.unseen ? ` (+${this.table.unseen.toLocaleString()})` : ""}`;
+    this.pauseButton.classList.toggle("on", !following);
+    this.pauseButton.title = following ? "Stop following new events" : "Jump to the newest events and follow them";
   }
 
   // ---- table ----
@@ -374,7 +364,7 @@ class App {
   private wireTable(): void {
     this.rows.addEventListener("click", (e) => {
       const row = (e.target as HTMLElement).closest("tr");
-      if (row?.dataset.id) void this.select(Number(row.dataset.id));
+      if (row?.dataset.id) this.table.select(Number(row.dataset.id));
     });
     // Double-click selects a word, triple-click a line; neither is wanted here.
     this.rows.addEventListener("mousedown", (e) => {
@@ -384,7 +374,7 @@ class App {
     this.rows.addEventListener("dblclick", (e) => {
       const cell = (e.target as HTMLElement).closest<HTMLElement>("td[data-field]");
       const row = cell?.closest("tr");
-      const event = row?.dataset.id ? this.events.get(Number(row.dataset.id)) : undefined;
+      const event = row?.dataset.id ? this.table.event(Number(row.dataset.id)) : undefined;
       const name = cell?.dataset.field;
       const value = event && name ? field(event, name) : undefined;
       if (!name || value === undefined || value === null) return;
@@ -394,56 +384,24 @@ class App {
       void this.applyFilter();
     });
     this.wrap.addEventListener("keydown", (e) => {
-      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      const page = Math.max(1, Math.floor(this.wrap.clientHeight / 21) - 2);
+      const moves: Record<string, () => void> = {
+        ArrowDown: () => this.table.step(1),
+        ArrowUp: () => this.table.step(-1),
+        PageDown: () => this.table.step(page),
+        PageUp: () => this.table.step(-page),
+        Home: () => void this.table.selectPos(this.table.start),
+        End: () => void this.table.selectPos(this.table.total - 1),
+      };
+      const move = moves[e.key];
+      if (!move) return;
       e.preventDefault();
-      const current = this.selected === null ? null : this.rowById.get(this.selected);
-      const next = (e.key === "ArrowDown" ? current?.nextElementSibling : current?.previousElementSibling) as
-        | HTMLTableRowElement
-        | null
-        | undefined;
-      const target = next ?? (e.key === "ArrowDown" ? this.rows.firstElementChild : this.rows.lastElementChild);
-      if (target instanceof HTMLTableRowElement && target.dataset.id) {
-        void this.select(Number(target.dataset.id));
-        target.scrollIntoView({ block: "nearest" });
-      }
+      move();
     });
-  }
-
-  private add(e: SculkEvent): void {
-    this.pending.push(e);
-    // While a context menu is open, hold new rows so the table does not move under it.
-    if (!this.flushQueued && !this.paused && !menuOpen()) {
-      this.flushQueued = true;
-      requestAnimationFrame(() => this.flush());
-    }
-    if (this.paused) this.pauseButton.textContent = `Resume (+${this.pending.length})`;
-  }
-
-  private flush(): void {
-    this.flushQueued = false;
-    if (this.paused || menuOpen() || !this.pending.length) return;
-    const atBottom = this.wrap.scrollTop + this.wrap.clientHeight >= this.wrap.scrollHeight - 40;
-    const batch = this.pending.slice(-MAX_ROWS);
-    this.pending = [];
-    const fragment = document.createDocumentFragment();
-    for (const e of batch) {
-      if (this.events.has(e.id)) continue;
-      this.events.set(e.id, e);
-      const row = this.row(e);
-      this.rowById.set(e.id, row);
-      fragment.append(row);
-    }
-    this.rows.append(fragment);
-    while (this.events.size > MAX_ROWS) {
-      const oldest = this.rows.firstElementChild as HTMLTableRowElement | null;
-      if (!oldest) break;
-      const id = Number(oldest.dataset.id);
-      oldest.remove();
-      this.events.delete(id);
-      this.rowById.delete(id);
-    }
-    this.count.textContent = `${this.events.size.toLocaleString()} shown`;
-    if (atBottom) this.wrap.scrollTop = this.wrap.scrollHeight;
+    byId<HTMLButtonElement>("show-all").onclick = () => {
+      this.floor = 0;
+      void this.applyFilter();
+    };
   }
 
   private row(e: SculkEvent): HTMLTableRowElement {
@@ -454,7 +412,6 @@ class App {
     if (e.injected) tr.classList.add("injected");
     if (e.action && e.action !== "pass") tr.classList.add(`a-${str(e.action)}`);
     if (roundTripBad(mod(e)?.roundTrip)) tr.classList.add("rt-bad");
-    if (e.id === this.selected) tr.classList.add("selected");
 
     // Markers in front of the direction: what sculk did to the packet. Always
     // two cells wide, so the arrows line up.
@@ -477,9 +434,7 @@ class App {
       [summary(e), "c-summary", e.kind === "packet" ? (mod(e) ? "channel" : "type") : undefined, true],
     ];
     for (const [text, cls, field, clip] of cells) {
-      // Clipped text sits in a span the CSS limits, so a long value never
-      // widens its column; the summary's span is out of flow altogether and
-      // takes whatever the other columns leave.
+      // Every cell clips: columns are fixed widths, so a long value never moves them.
       const td = clip ? el("td", cls) : el("td", cls, text);
       if (clip) {
         td.append(el("span", undefined, text));
@@ -492,31 +447,27 @@ class App {
     return tr;
   }
 
-  private clearRows(): void {
-    this.rows.replaceChildren();
-    this.events.clear();
-    this.rowById.clear();
-    this.pending = [];
-    this.count.textContent = "0 shown";
+  /** "Clear": hide everything so far; "show all" brings it back. */
+  private async clearRows(): Promise<void> {
+    const s = await this.guard(() => this.api.status()).catch(() => undefined);
+    if (!s) return;
+    this.floor = s.lastEventId;
+    await this.applyFilter();
   }
 
   private setPaused(paused: boolean): void {
-    this.paused = paused;
-    this.pauseButton.textContent = paused ? `Resume (+${this.pending.length})` : "Pause";
-    this.pauseButton.classList.toggle("on", paused);
-    if (!paused) this.flush();
+    this.table.setFollowing(!paused);
   }
 
   // ---- detail ----
 
-  private select(id: number): void {
-    if (this.selected !== null) this.rowById.get(this.selected)?.classList.remove("selected");
-    this.selected = id;
-    this.rowById.get(id)?.classList.add("selected");
-    const e = this.events.get(id);
-    if (!e) return;
-
-    inspect(this.detail, e, time(e.t), (frameId) => this.guard(() => this.api.frame(frameId)), () => this.selected === id);
+  private showDetail(e: SculkEvent | null): void {
+    if (!e) {
+      this.detail.replaceChildren(el("p", "hint", "Select an event to inspect it and its frame."));
+      return;
+    }
+    const id = e.id;
+    inspect(this.detail, e, time(e.t), (frameId) => this.guard(() => this.api.frame(frameId)), () => this.table.selectedId === id);
   }
 
   // ---- context menu ----
@@ -524,16 +475,18 @@ class App {
   private wireMenu(): void {
     document.addEventListener("contextmenu", (ev) => {
       const target = ev.target as HTMLElement;
-      let row = target.closest<HTMLTableRowElement>("#rows tr");
+      let row = target.closest<HTMLTableRowElement>("#rows tr[data-id]");
       // The Menu key or Shift+F10 on the table opens the menu for the selected row.
-      const keyboard = !row && target === this.wrap && this.selected !== null;
-      if (keyboard) row = this.rowById.get(this.selected as number) ?? null;
+      const selected = this.table.selectedId;
+      const keyboard = !row && target === this.wrap && selected !== null;
+      if (keyboard) row = this.table.rowOf(selected as number);
       if (!row && !this.detail.contains(target)) return; // the browser's own menu elsewhere
-      const id = row ? Number(row.dataset.id) : this.selected;
-      const event = id === null ? undefined : this.events.get(id);
+      const id = row ? Number(row.dataset.id) : selected;
+      const event = id === null ? undefined : this.table.event(id);
       if (!event) return;
       ev.preventDefault();
-      if (row && event.id !== this.selected) this.select(event.id);
+      if (row && event.id !== selected) this.table.select(event.id);
+      this.table.hold(true);
       let x = ev.clientX, y = ev.clientY;
       let at: HTMLElement = target;
       if (keyboard && row) {
@@ -658,35 +611,16 @@ class App {
     toast("in the console: check it, then press Enter to run it");
   }
 
-  /** Clears the filter and shows the events around {@code id}, holding live ones back until Resume. */
+  /** Clears the filter and scrolls to {@code id} among all events, without following new ones. */
   private async showInContext(id: number): Promise<void> {
     this.filter.value = "";
-    store.set("sculk.filter", "");
-    this.stream?.abort();
-    const controller = new AbortController();
-    this.stream = controller;
-    this.setLive(false);
-    let around: SculkEvent[] | undefined;
-    try {
-      around = await this.guard(() => this.api.events("", CONTEXT * 2 + 1, Math.max(0, id - CONTEXT - 1)));
-    } catch (err) {
-      toast((err as Error).message);
-      return;
+    this.floor = 0;
+    await this.applyFilter(id);
+    if (this.table.selectedId !== id) toast("the game no longer holds that event");
+    else {
+      const e = this.table.event(id);
+      if (e) this.showDetail(e);
     }
-    if (!around || controller.signal.aborted) return;
-    this.filterError.hidden = true;
-    this.filter.classList.remove("invalid");
-    this.setPaused(false);
-    this.clearRows();
-    for (const ev of around) this.add(ev);
-    this.flush();
-    const last = around[around.length - 1];
-    if (last) this.lastId = last.id;
-    this.setPaused(true);
-    this.select(id);
-    this.rowById.get(id)?.scrollIntoView({ block: "center" });
-    if (!this.rowById.has(id)) toast("the game no longer holds that event");
-    void this.follow("", controller.signal);
   }
 
   // ---- repl and reload ----

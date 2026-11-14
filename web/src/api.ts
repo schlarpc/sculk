@@ -20,8 +20,31 @@ export interface Status {
   pid: number;
   events: number;
   lastEventId: number;
+  capture?: Capture;
   scripts: string[];
   connections: Connection[];
+}
+
+/** Matches of a filter by position over the whole capture (GET /events/page). */
+export interface Page {
+  /** First position still held, and one past the last. */
+  start: number;
+  total: number;
+  /** Position of events[0]. */
+  from: number;
+  events: SculkEvent[];
+}
+
+export interface Capture {
+  firstId: number;
+  lastId: number;
+  events: number;
+  memoryEvents: number;
+  indexBytes: number;
+  dir?: string;
+  diskBytes?: number;
+  diskCap?: number;
+  pendingWrites?: number;
 }
 
 export interface EvalResult {
@@ -154,6 +177,14 @@ export class Api {
         if (data) yield JSON.parse(data) as SculkEvent;
       }
     }
+  }
+
+  page(filter: string, from: number, count: number): Promise<Page> {
+    return this.json("GET", `/events/page?${new URLSearchParams({ filter, from: String(from), count: String(count) })}`);
+  }
+
+  position(filter: string, id: number): Promise<{ index: number; start: number; total: number }> {
+    return this.json("GET", `/events/position?${new URLSearchParams({ filter, id: String(id) })}`);
   }
 
   async frame(id: number): Promise<Uint8Array | null> {

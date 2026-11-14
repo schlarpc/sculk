@@ -47,13 +47,16 @@
       <div id="filter-error" class="filter-error" role="alert" hidden></div>
       <div id="table-wrap" class="table-wrap" tabindex="0">
         <table class="events-table">
+          <colgroup>
+            <col class="w-id"><col class="w-time"><col class="w-kind"><col class="w-dir"><col class="w-conn"><col class="w-owner"><col class="w-len"><col>
+          </colgroup>
           <thead>
             <tr><th>#</th><th>time</th><th>kind</th><th>dir</th><th>conn</th><th>owner</th><th>len</th><th>what</th></tr>
           </thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
-      <div class="table-foot"><span id="count">0 shown</span><span class="hint">double-click a cell to filter on it · right-click for more · ↑/↓ to step</span></div>
+      <div class="table-foot"><span><span id="count">0 events</span> <button id="show-all" class="link" type="button" hidden></button></span><span class="hint">double-click a cell to filter on it · right-click for more · ↑/↓ PgUp/PgDn Home/End to step</span></div>
     </section>
 
     <section class="panel detail" aria-label="Event detail">
