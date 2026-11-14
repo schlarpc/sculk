@@ -282,6 +282,10 @@ class App {
       const row = (e.target as HTMLElement).closest("tr");
       if (row?.dataset.id) void this.select(Number(row.dataset.id));
     });
+    // Double-click selects a word, triple-click a line; neither is wanted here.
+    this.rows.addEventListener("mousedown", (e) => {
+      if (e.detail > 1) e.preventDefault();
+    });
     // Double-click a cell to narrow the filter to its value.
     this.rows.addEventListener("dblclick", (e) => {
       const cell = (e.target as HTMLElement).closest<HTMLElement>("td[data-field]");
@@ -369,8 +373,13 @@ class App {
       [summary(e), "c-summary", e.kind === "packet" ? (e.channel ? "channel" : "type") : undefined],
     ];
     for (const [text, cls, field] of cells) {
-      const td = el("td", cls, text);
-      if (cls === "c-summary") td.title = text;
+      // The summary sits out of flow, so its length never widens the table:
+      // the other columns size to their content and it takes what is left.
+      const td = cls === "c-summary" ? el("td", cls) : el("td", cls, text);
+      if (cls === "c-summary") {
+        td.title = text;
+        td.append(el("span", undefined, text));
+      }
       if (field) td.dataset.field = field;
       tr.append(td);
     }

@@ -53,6 +53,9 @@
   --font: "Monocraft", ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
 
   --tex-sculk: none;
+  --tex-sculk-size: var(--tex-size);
+  --tex-sculk-plain: none;
+  --tex-sculk-plain-size: var(--tex-size);
   --tex-panel: none;
   --tex-bone: none;
   --tex-vein: none;
@@ -70,7 +73,7 @@ body {
   color: var(--text);
   background-color: var(--void);
   background-image: linear-gradient(rgba(3, 8, 11, 0.45), rgba(3, 8, 11, 0.45)), var(--tex-sculk);
-  background-size: auto, var(--tex-size);
+  background-size: auto, var(--tex-sculk-size);
   image-rendering: pixelated;
   text-shadow: var(--shadow);
 }
@@ -105,8 +108,8 @@ button {
   color: var(--bone);
   text-shadow: var(--shadow);
   background-color: var(--sculk-700);
-  background-image: linear-gradient(rgba(17, 47, 59, 0.35), rgba(17, 47, 59, 0.35)), var(--tex-sculk);
-  background-size: auto, var(--tex-size);
+  background-image: linear-gradient(rgba(17, 47, 59, 0.35), rgba(17, 47, 59, 0.35)), var(--tex-sculk-plain);
+  background-size: auto, var(--tex-sculk-plain-size);
   border: 2px solid #000;
   box-shadow:
     inset 2px 2px 0 rgba(159, 250, 255, 0.22),
@@ -314,8 +317,15 @@ input.invalid { border-color: var(--red); }
 
 .c-id, .c-len { text-align: right; color: var(--text-faint); }
 .c-time { color: var(--text-dim); }
-/* the last column takes the rest of the row and ellipsizes */
-.c-summary { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* every column but the last fits its content; the last takes the rest of the row and ellipsizes */
+.events-table th:last-child, .c-summary { width: 100%; }
+.c-summary { position: relative; }
+.c-summary > span {
+  position: absolute;
+  inset: 1px 8px auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .c-owner { color: var(--bone-dim); }
 .c-conn, .c-side { color: var(--text-dim); }
 

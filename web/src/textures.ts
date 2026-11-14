@@ -71,26 +71,34 @@ const GLOW = { hot: rgb("#9ffaff"), bright: rgb("#2be4ef"), mid: rgb("#14a6b2"),
 const PANEL = ["#060e12", "#071116", "#08141a", "#0a171e"].map(rgb);
 const BONE = ["#b9b18c", "#c9c29e", "#d6d0b0", "#e2ddc2", "#ece8d2"].map(rgb);
 
-/** Sculk: dark cells of teal-black with a few glowing cyan spots. */
-function sculk(seed: number): Texture {
-  const t = new Texture();
+/**
+ * Sculk: dark cells of teal-black, with {@code spots} glowing cyan spots.
+ * Spotted tiles are large ({@code size} texels) and the spots sparse and
+ * uneven, so the repeat is hard to see; a spotless tile can stay small.
+ */
+function sculk(seed: number, size: number, spots: number): Texture {
+  const t = new Texture(size);
   const r = random(seed);
-  const coarse = Texture.noise(r, 16, 4);
-  const fine = Texture.noise(r, 16, 8);
-  for (let y = 0; y < 16; y++) {
-    for (let x = 0; x < 16; x++) {
+  const coarse = Texture.noise(r, size, size / 4);
+  const fine = Texture.noise(r, size, size / 2);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
       const v = coarse(x, y) * 0.55 + fine(x, y) * 0.3 + r() * 0.15;
       t.set(x, y, SCULK[Math.min(SCULK.length - 1, Math.floor(v * SCULK.length))] as RGB);
     }
   }
-  for (let spots = 0; spots < 4; spots++) {
-    const x = Math.floor(r() * 16), y = Math.floor(r() * 16);
-    t.set(x, y, r() < 0.5 ? GLOW.hot : GLOW.bright);
+  for (let i = 0; i < spots; i++) {
+    const x = Math.floor(r() * size), y = Math.floor(r() * size);
+    // Mostly dim; only now and then a bright one.
+    const roll = r();
+    const [core, ring, halo] =
+      roll < 0.15 ? [GLOW.bright, GLOW.mid, GLOW.low] : roll < 0.55 ? [GLOW.mid, GLOW.low, null] : [GLOW.low, null, null];
+    t.set(x, y, core);
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      if (r() < 0.6) t.set(x + dx, y + dy, GLOW.mid);
+      if (ring && r() < 0.5) t.set(x + dx, y + dy, ring);
     }
     for (const [dx, dy] of [[1, 1], [-1, -1], [1, -1], [-1, 1]] as const) {
-      if (r() < 0.35) t.set(x + dx, y + dy, GLOW.low);
+      if (halo && r() < 0.3) t.set(x + dx, y + dy, halo);
     }
   }
   return t;
@@ -142,16 +150,23 @@ function vein(seed: number): Texture {
   return t;
 }
 
-/** Draws the textures and exposes them as --tex-sculk, --tex-panel, --tex-bone and --tex-vein. */
+/**
+ * Draws the textures and exposes each as --tex-NAME, with its tile size as
+ * --tex-NAME-size: sculk (spotted, for the page), sculk-plain (for buttons),
+ * panel, bone and vein.
+ */
 export function installTextures(root: HTMLElement = document.documentElement): void {
   const textures: Record<string, Texture> = {
-    sculk: sculk(0x5c01c),
+    sculk: sculk(0x5c01c, 128, 7),
+    "sculk-plain": sculk(0x5c01c, 16, 0),
     panel: panel(0xdeed),
     bone: bone(0xb07e),
     vein: vein(0x7e17),
   };
   for (const [name, texture] of Object.entries(textures)) {
     const url = texture.url();
-    if (url) root.style.setProperty(`--tex-${name}`, `url("${url}")`);
+    if (!url) continue;
+    root.style.setProperty(`--tex-${name}`, `url("${url}")`);
+    root.style.setProperty(`--tex-${name}-size`, `calc(${texture.size} * var(--px) * 2)`);
   }
 }
