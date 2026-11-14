@@ -52,6 +52,15 @@ dependencies {
         modRuntimeOnly 'maven.modrinth:balm:dDN38ae7'       // 7.3.44+forge-1.20.1
         modRuntimeOnly 'maven.modrinth:waystones:Y0IgdaoP'  // 14.1.21+forge-1.20.1
     }
+    if (sculkIntegStress) {
+        modRuntimeOnly 'maven.modrinth:create:8amzvn9x'                  // mc1.20.1-6.0.8
+        modRuntimeOnly 'maven.modrinth:ae2:QRpVsqDI'                     // 15.4.12
+        modRuntimeOnly 'maven.modrinth:guideme:i7Tp1AHw'                 // 20.1.15 (AE2 dependency)
+        modRuntimeOnly 'maven.modrinth:sophisticated-backpacks:xviLgqVd' // 1.20.1-3.26.20.2248
+        modRuntimeOnly 'maven.modrinth:sophisticated-core:rFTJElZC'      // 1.20.1-1.5.33.2475
+        modRuntimeOnly 'maven.modrinth:jei:9jqubC9n'                     // 15.56.0.205
+        modRuntimeOnly 'maven.modrinth:jade:xJQHCmWJ'                    // 11.13.3+forge
+    }
 }
 
 jar {

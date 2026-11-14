@@ -38,6 +38,9 @@ repositories {
 
 // -Psculk.integ adds each platform's integration test mods to dev runs.
 ext.sculkInteg = providers.gradleProperty('sculk.integ').isPresent()
+// -Psculk.integStress adds a larger set of popular mods with heavy networking
+// on top (scripts/integ.py --stress).
+ext.sculkIntegStress = providers.gradleProperty('sculk.integStress').isPresent()
 
 // -Psculk.mods=slug:versionId,... adds more Modrinth mods to dev runs, for
 // testing against a specific mod.

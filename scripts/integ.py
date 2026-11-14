@@ -7,8 +7,13 @@ process runs a test script from tests/integ/ and writes a JSON Lines event
 log. The client joins the server via Quick Play; when its script reports
 "done", both are stopped and the logs are checked.
 
-Usage: scripts/integ.py <platform> [--timeout SECONDS]
+Usage: scripts/integ.py <platform> [--timeout SECONDS] [--stress]
 Run inside `nix develop`.
+
+--stress adds popular mods with heavy networking (Create, AE2, Sophisticated
+Backpacks, JEI, Jade, ... where the platform has them; see each
+platforms/*/build.gradle), replays one payload per mod channel from each side
+(tests/integ/stress.js), and prints a per-mod summary.
 """
 import argparse
 import collections
@@ -143,7 +148,16 @@ class Report:
         return all(ok for _, ok, _ in self.results)
 
 
-def check(server, client):
+HOOK_FAILURES = ("sculk decode hook failed", "sculk encode hook failed", "packet listener failed",
+                 "connection listener failed", "injection on connection")
+
+
+def full_hex(h):
+    """A frame's hex as the event log holds it: cut short after 4096 bytes (Sculk.LOG_FRAME_BYTES)."""
+    return h if len(h) <= 8192 else h[:8192] + "..."
+
+
+def check(server, client, outs=None, stress=False):
     r = Report()
     pk = lambda log: [e for e in log if e["kind"] == "packet"]
     script = lambda log, step: [e for e in log if e["kind"] == "script" and e["data"].get("step") == step]
@@ -158,6 +172,10 @@ def check(server, client):
 
     errors = [e for e in server + client if e["kind"] in ("script_error", "log_error")]
     r.check("no script errors", not errors, json.dumps(errors[:3]))
+    if outs is not None:
+        failures = [line.strip()[:200] for text in outs for line in text.splitlines()
+                    if any(f in line for f in HOOK_FAILURES)]
+        r.check("no sculk hook failures in the game logs", not failures, failures[:3])
 
     # Registry and attribution.
     types = [e["mod"] for e in server if e["kind"] == "payload_type"]
@@ -223,7 +241,50 @@ def check(server, client):
         r.check("server decoded the injected frame",
                 arrived and arrived[0]["packet"]["type"] == inj[0]["data"]["type"],
                 f"{len(arrived)} matching frames")
+
+    if stress:
+        stress_check(r, server, client, pk, mod, dir_, hex_)
     return r
+
+
+def stress_check(r, server, client, pk, mod, dir_, hex_):
+    """Replays from tests/integ/stress.js arrived, and a per-mod summary of what sculk made of the traffic."""
+    total = 0
+    for sender, receiver, name in ((server, client, "server"), (client, server, "client")):
+        replays = [e["data"] for e in sender if e["kind"] == "script" and e["data"].get("step") == "stress_replayed"]
+        total += len(replays)
+        lost = []
+        for d in replays:
+            h = full_hex(d["hex"])
+            sent = sum(1 for e in pk(sender) if dir_(e) == "outbound" and hex_(e) == h)
+            got = sum(1 for e in pk(receiver) if dir_(e) == "inbound" and hex_(e) == h)
+            if sent < 2 or got != sent:
+                lost.append(f"{d['channel']}: sent {sent}, received {got}")
+        # A side may send no mod payloads in play during the run; then it has nothing to replay.
+        r.check(f"{name}: {len(replays)} replayed mod payloads ({len(set(d['owner'] for d in replays))} mods) arrived twice",
+                not lost, lost[:5])
+    r.check("stress replayed at least one mod payload", total > 0)
+
+    # Per mod: payloads seen, decoded, round-trip outcomes, frames split. Informational.
+    rows = collections.defaultdict(lambda: collections.Counter())
+    for e in pk(server) + pk(client):
+        m = mod(e)
+        if not m:
+            continue
+        c = rows[m.get("owner")]
+        c["payloads"] += 1
+        c["channels:" + m["channel"]] += 1
+        if m.get("data") is not None:
+            c["decoded"] += 1
+        c["rt:" + str(m.get("roundTrip")).split(":")[0].split(" ")[0]] += 1
+    print("  per mod (both sides):")
+    print(f"    {'owner':24} {'channels':>8} {'payloads':>8} {'decoded':>8}  round trip")
+    for owner, c in sorted(rows.items(), key=lambda kv: -kv[1]["payloads"]):
+        channels = sum(1 for k in c if k.startswith("channels:"))
+        rts = ", ".join(f"{k[3:]} {v}" for k, v in sorted(c.items()) if k.startswith("rt:"))
+        print(f"    {str(owner):24} {channels:>8} {c['payloads']:>8} {c['decoded']:>8}  {rts}")
+    registered = collections.Counter(e["mod"]["owner"] for e in server if e["kind"] == "payload_type")
+    print("  payload types registered (server): " + ", ".join(f"{k} {v}" for k, v in registered.most_common()))
 
 
 # ---------------------------------------------------------------- main
@@ -232,7 +293,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("platform")
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--stress", action="store_true", help="add heavy-networking mods and replay a payload per channel")
     args = ap.parse_args()
+    extra = {"sculk.integStress": "true"} if args.stress else {}
+    scripts = lambda name: os.pathsep.join(
+        str(ROOT / "tests/integ" / f) for f in ([name, "stress.js"] if args.stress else [name]))
 
     run = ROOT / "platforms" / args.platform / "run"
     out = run / "integ"
@@ -251,15 +316,15 @@ def main():
         with open(out / "server.out", "w") as so, open(out / "client.out", "w") as co:
             print(f"[integ] {args.platform}: starting server on port {port}")
             procs["server"] = gradle(args.platform, "runServer", {
-                "sculk.eventLog": server_log, "sculk.scripts": ROOT / "tests/integ/server.js"}, so)
+                "sculk.eventLog": server_log, "sculk.scripts": scripts("server.js"), **extra}, so)
             wait_for(lambda: "Done (" in (out / "server.out").read_text(errors="replace"),
                      args.timeout, procs, "server startup")
             print("[integ] server up; starting headless client")
             env = software_gl_env()
             env["DISPLAY"] = display
             procs["client"] = gradle(args.platform, "runClient", {
-                "sculk.eventLog": client_log, "sculk.scripts": ROOT / "tests/integ/client.js",
-                "sculk.quickPlay": f"localhost:{port}"}, co, env=env)
+                "sculk.eventLog": client_log, "sculk.scripts": scripts("client.js"),
+                "sculk.quickPlay": f"localhost:{port}", **extra}, co, env=env)
             def client_finished():
                 events = read_jsonl(client_log)
                 if any(e["kind"] == "disconnect" for e in events):
@@ -278,7 +343,8 @@ def main():
 
     server, client = read_jsonl(server_log), read_jsonl(client_log)
     print(f"[integ] {args.platform}: {len(server)} server events, {len(client)} client events")
-    ok = check(server, client).print()
+    outs = [(out / f).read_text(errors="replace") for f in ("server.out", "client.out")]
+    ok = check(server, client, outs, args.stress).print()
     print(f"[integ] {'PASS' if ok else 'FAIL'}: {args.platform} (logs in {out})")
     sys.exit(0 if ok else 1)
 

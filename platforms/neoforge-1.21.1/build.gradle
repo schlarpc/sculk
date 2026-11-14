@@ -42,6 +42,16 @@ dependencies {
         runtimeOnly 'maven.modrinth:balm:gMedgtzL'       // 21.0.67+neoforge-1.21.1
         runtimeOnly 'maven.modrinth:waystones:6Z6MQ6os'  // 21.1.46+neoforge-1.21.1
     }
+    if (sculkIntegStress) {
+        runtimeOnly 'maven.modrinth:create:UjX6dr61'                  // 6.0.10+mc1.21.1
+        runtimeOnly 'maven.modrinth:ae2:DxZ2waV0'                     // 19.2.19
+        runtimeOnly 'maven.modrinth:guideme:QeYKsstN'                 // 21.1.22 (AE2 dependency)
+        runtimeOnly 'maven.modrinth:sophisticated-backpacks:tJnK2DE1' // 1.21.1-3.26.21.2249
+        runtimeOnly 'maven.modrinth:sophisticated-core:FilyXPLY'      // 1.21.1-1.5.35.2473
+        runtimeOnly 'maven.modrinth:jei:iv3KiVkE'                     // 19.64.0.455
+        runtimeOnly 'maven.modrinth:mezzconfig:V6oWFnxW'              // 0.7.1 (JEI dependency)
+        runtimeOnly 'maven.modrinth:jade:eYz2YBGT'                    // 15.10.6+neoforge
+    }
 }
 
 var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
