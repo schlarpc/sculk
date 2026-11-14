@@ -80,20 +80,56 @@ final class McpHandler {
         this.store = store;
     }
 
-    /** Handles one JSON-RPC message; returns the response object, or null for a notification. */
-    Map<String, Object> handle(String body) {
+    /** The first version whose Streamable HTTP transport drops JSON-RPC batches. */
+    private static final String NO_BATCHES = "2025-06-18";
+    /** What a client that sends no MCP-Protocol-Version header speaks, per the spec. */
+    private static final String DEFAULT_VERSION = "2025-03-26";
+
+    /**
+     * Handles one POST body: a JSON-RPC message, or (for protocol versions
+     * before 2025-06-18) a batch of them. {@code version} is the
+     * MCP-Protocol-Version header, already checked by {@link #checkVersion}.
+     * Returns the response (an object, a list for a batch), or null when
+     * there is nothing to answer.
+     */
+    Object handle(String body, String version) {
         JsonElement parsed;
         try {
             parsed = JsonParser.parseString(body);
         } catch (JsonParseException e) {
             return error(null, -32700, "parse error: " + e.getMessage());
         }
-        if (!parsed.isJsonObject()) return error(null, -32600, "expected one JSON-RPC request object (batches are not supported)");
+        if (parsed.isJsonArray()) {
+            String v = version == null ? DEFAULT_VERSION : version;
+            if (v.compareTo(NO_BATCHES) >= 0) return error(null, -32600, "JSON-RPC batches are not part of MCP " + v);
+            if (parsed.getAsJsonArray().isEmpty()) return error(null, -32600, "empty batch");
+            List<Object> out = new ArrayList<>();
+            for (JsonElement e : parsed.getAsJsonArray()) {
+                Map<String, Object> r = message(e);
+                if (r != null) out.add(r);
+            }
+            return out.isEmpty() ? null : out;
+        }
+        return message(parsed);
+    }
+
+    /** Null if the MCP-Protocol-Version header is absent or one we speak, else why not. */
+    static String checkVersion(String header) {
+        if (header == null || PROTOCOL_VERSIONS.contains(header.trim())) return null;
+        return "unsupported MCP-Protocol-Version " + header + " (supported: " + String.join(", ", PROTOCOL_VERSIONS) + ")";
+    }
+
+    /** Handles one JSON-RPC message; returns the response object, or null for a notification or a response. */
+    private Map<String, Object> message(JsonElement parsed) {
+        if (!parsed.isJsonObject()) return error(null, -32600, "expected a JSON-RPC message object");
         JsonObject msg = parsed.getAsJsonObject();
         Object id = msg.has("id") && !msg.get("id").isJsonNull() ? GSON.fromJson(msg.get("id"), Object.class) : null;
         if (id instanceof Double d && d == Math.rint(d)) id = d.longValue();
-        String method = msg.has("method") ? msg.get("method").getAsString() : null;
-        if (method == null) return id == null ? null : error(id, -32600, "missing method");
+        String method = msg.has("method") && msg.get("method").isJsonPrimitive() ? msg.get("method").getAsString() : null;
+        if (method == null) {
+            // A response to a request of ours (we send none), or junk.
+            return id == null || msg.has("result") || msg.has("error") ? null : error(id, -32600, "missing method");
+        }
         if (!msg.has("id")) return null; // A notification (initialized, cancelled, ...): nothing to answer.
         JsonObject params = msg.has("params") && msg.get("params").isJsonObject() ? msg.getAsJsonObject("params") : new JsonObject();
         try {
@@ -133,6 +169,37 @@ final class McpHandler {
 
     // ---- tools ----
 
+    /**
+     * Hints for clients that ask before running tools: readOnlyHint (changes
+     * nothing), destructiveHint (may undo or overwrite something),
+     * idempotentHint (repeating it changes nothing more), openWorldHint (reaches
+     * beyond this process: eval and reload can send packets to the other side).
+     */
+    private static Map<String, Object> hints(String title, boolean readOnly, boolean destructive, boolean idempotent, boolean openWorld) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("title", title);
+        m.put("readOnlyHint", readOnly);
+        if (!readOnly) {
+            m.put("destructiveHint", destructive);
+            m.put("idempotentHint", idempotent);
+        }
+        m.put("openWorldHint", openWorld);
+        return m;
+    }
+
+    private static final Map<String, Map<String, Object>> HINTS = Map.ofEntries(
+            Map.entry("sculk_status", hints("Status", true, false, true, false)),
+            Map.entry("sculk_events", hints("Query events", true, false, true, false)),
+            Map.entry("sculk_wait_events", hints("Wait for events", true, false, true, false)),
+            Map.entry("sculk_frame", hints("Read a frame", true, false, true, false)),
+            Map.entry("sculk_eval", hints("Run JavaScript in the game", false, true, false, true)),
+            Map.entry("sculk_reload", hints("Reload all scripts", false, true, false, true)),
+            Map.entry("sculk_scripts", hints("List scripts", true, false, true, false)),
+            Map.entry("sculk_script_read", hints("Read a script", true, false, true, false)),
+            Map.entry("sculk_script_write", hints("Write a script", false, true, false, true)),
+            Map.entry("sculk_script_edit", hints("Edit a script", false, true, false, true)),
+            Map.entry("sculk_script_control", hints("Run, stop, enable, rename or delete a script", false, true, false, true)));
+
     private static Map<String, Object> tool(String name, String description, Map<String, Object> properties, List<String> required) {
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -142,6 +209,11 @@ final class McpHandler {
         t.put("name", name);
         t.put("description", description);
         t.put("inputSchema", schema);
+        Map<String, Object> hints = HINTS.get(name);
+        if (hints != null) {
+            t.put("title", hints.get("title"));
+            t.put("annotations", hints);
+        }
         return t;
     }
 

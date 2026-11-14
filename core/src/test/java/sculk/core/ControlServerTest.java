@@ -442,6 +442,45 @@ class ControlServerTest {
     }
 
     @Test
+    void mcpProtocolVersionsAndBatches() throws IOException {
+        String ping = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}";
+        String note = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}";
+        // The header, when sent, must name a version we speak.
+        Response bad = request("POST", "/mcp", ping, auth(), "MCP-Protocol-Version: 1999-01-01");
+        assertEquals(400, bad.status());
+        assertTrue(bad.body().contains("unsupported MCP-Protocol-Version"), bad.body());
+        assertEquals(200, request("POST", "/mcp", ping, auth(), "MCP-Protocol-Version: 2025-06-18").status());
+
+        // Batches: part of 2025-03-26 (what a client without the header speaks), gone from 2025-06-18.
+        String batch = "[" + ping + "," + note + ",{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"nope\"}]";
+        Response r = request("POST", "/mcp", batch, auth());
+        assertEquals(200, r.status(), r.body());
+        var responses = com.google.gson.JsonParser.parseString(r.body()).getAsJsonArray();
+        assertEquals(2, responses.size(), "the notification gets no response");
+        assertEquals(7, responses.get(0).getAsJsonObject().get("id").getAsInt());
+        assertEquals(-32601, responses.get(1).getAsJsonObject().getAsJsonObject("error").get("code").getAsInt());
+        assertEquals(202, request("POST", "/mcp", "[" + note + "]", auth()).status());
+        Response refused = request("POST", "/mcp", batch, auth(), "MCP-Protocol-Version: 2025-06-18");
+        assertEquals(-32600, refused.json().getAsJsonObject("error").get("code").getAsInt());
+    }
+
+    @Test
+    void mcpToolsCarryAnnotations() throws IOException {
+        var tools = mcp("tools/list", "{}").getAsJsonObject("result").getAsJsonArray("tools");
+        for (var t : tools) {
+            JsonObject tool = t.getAsJsonObject();
+            String name = tool.get("name").getAsString();
+            assertTrue(tool.has("title"), name);
+            JsonObject a = tool.getAsJsonObject("annotations");
+            boolean readOnly = a.get("readOnlyHint").getAsBoolean();
+            boolean shouldBe = Set.of("sculk_status", "sculk_events", "sculk_wait_events", "sculk_frame", "sculk_scripts",
+                    "sculk_script_read").contains(name);
+            assertEquals(shouldBe, readOnly, name);
+            if (!readOnly) assertTrue(a.get("destructiveHint").getAsBoolean(), name);
+        }
+    }
+
+    @Test
     void mcpSharesTheAccessChecks() throws IOException {
         String init = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
         assertEquals(401, request("POST", "/mcp", init).status());
