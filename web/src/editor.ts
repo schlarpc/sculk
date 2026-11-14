@@ -233,7 +233,9 @@ function lintSource(check: EditorHooks["check"]) {
       if (view.state.doc !== doc) return [];
       return problems.map((p) => {
         const line = doc.line(Math.min(Math.max(1, p.line), doc.lines));
-        const from = Math.min(line.from + Math.max(0, p.column - 1), line.to);
+        // Rhino often points just past the end of the line ("let x = ;" ends there): mark its last character.
+        let from = Math.min(line.from + Math.max(0, p.column - 1), line.to);
+        if (from === line.to && line.length > 0) from = line.to - 1;
         // Rhino gives a point; mark to the end of the word there, or one character.
         const rest = doc.sliceString(from, line.to);
         const word = /^\w+/.exec(rest)?.[0].length ?? 1;

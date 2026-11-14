@@ -48,6 +48,14 @@ if [ -f "$control" ]; then
     ctl status > /dev/null || { echo "FAIL: control server /status"; ok=0; }
     [ -n "$(ctl events 'kind == connection && side == server')" ] || { echo "FAIL: control server has no connection event"; ok=0; }
     [ "$(ctl eval '20 + 22')" = 42 ] || { echo "FAIL: control server /eval"; ok=0; }
+    # Installed scripts: in the server's config dir, started and stopped one at a time.
+    printf '// ==Sculk==\n// @run manual\n// ==/Sculk==\nsculk.log("smoke " + sculk.dist); 6 * 7\n' \
+        | ctl script push - --name smoke.js > /dev/null || { echo "FAIL: script push"; ok=0; }
+    [ -f "$run/config/sculk/scripts/smoke.js" ] || { echo "FAIL: scripts are not in config/sculk/scripts"; ok=0; }
+    [ "$(ctl script run smoke.js)" = 42 ] || { echo "FAIL: script run"; ok=0; }
+    [ -n "$(ctl events 'kind == script_log && script == smoke.js && message == "smoke server"')" ] \
+        || { echo "FAIL: script_log (or dist) from smoke.js"; ok=0; }
+    ctl script rm smoke.js > /dev/null || { echo "FAIL: script rm"; ok=0; }
     python3 - "$control" <<'PY' || { echo "FAIL: control server /mcp"; ok=0; }
 import json, sys, urllib.request
 info = json.load(open(sys.argv[1]))
@@ -66,6 +74,11 @@ url = json.load(open(sys.argv[1]))["url"]
 for name, needle in [("", b"<title>sculk</title>"), ("app.js", b"sculk"), ("monocraft.woff2", b"wOF2")]:
     body = urllib.request.urlopen(f"{url}/ui/{name}", timeout=10).read()
     assert needle in body[:65536], f"/ui/{name} does not contain {needle}"
+# The editor's style elements need the page's CSP nonce.
+r = urllib.request.urlopen(f"{url}/ui/", timeout=10)
+page, csp = r.read().decode(), r.headers["Content-Security-Policy"]
+nonce = page.split('name="csp-nonce" content="')[1].split('"')[0]
+assert nonce and "{{" not in nonce and f"'nonce-{nonce}'" in csp, (nonce, csp)
 PY
     if grep -q 'and http://\[::1\]' "$log"; then
         python3 - "$control" <<'PY' || { echo "FAIL: control server on ::1"; ok=0; }

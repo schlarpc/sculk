@@ -172,7 +172,8 @@ export class ScriptsPage {
     if (!list) return;
     this.list = list;
     this.dirEl.classList.remove("error");
-    this.dirEl.textContent = list.dir;
+    // Left-to-right marks keep the slashes in place inside the right-to-left box that shows the path's end.
+    this.dirEl.textContent = `\u200e${list.dir}\u200e`;
     this.dirEl.title = `${list.dir}\nThis game is a ${list.dist === "server" ? "dedicated server" : "client"}.`;
     // Files changed on disk under an open buffer.
     for (const s of list.scripts) {
