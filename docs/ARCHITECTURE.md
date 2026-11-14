@@ -334,8 +334,11 @@ so:
 page moves the token from the fragment, which is never sent to the server,
 into session storage and removes it from the address bar. Without a token it
 asks for one. It shows the live event table (filter, presets, pause,
-double-click a cell to narrow the filter), an event's JSON tree and its whole
-frame as a hex dump, and a REPL with history. Static files are the only thing
+double-click a cell to narrow the filter), an inspector, and a REPL with
+history. The inspector leads with what matters for the event's kind: for a
+packet, a summary line, the decoded payload with its round trip, the whole
+frame as a hex dump tinted by `frame.spans`, then the layers as a table
+(each label's tooltip is its filter path) and the raw event. Static files are the only thing
 served without the token. They are sent with a strict CSP (`script-src
 'self'`, no inline code, `frame-ancestors 'none'`), and the Host and Origin
 checks still apply.

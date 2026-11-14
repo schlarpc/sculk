@@ -1,7 +1,8 @@
 import { Api, ApiError, AuthError, type SculkEvent } from "./api";
 import { byId, el, store } from "./dom";
 import { installTextures } from "./textures";
-import { hexDump, jsonTree } from "./views";
+import { conn, field, frame, mod, roundTripBad } from "./event";
+import { inspect } from "./inspector";
 
 const MAX_ROWS = 5000;
 const BACKLOG = 500;
@@ -10,12 +11,12 @@ const TOKEN_KEY = "sculk.token";
 const PRESETS: [string, string][] = [
   ["everything", ""],
   ["packets", "kind == packet"],
-  ["mod payloads", "kind == packet && channel"],
+  ["mod payloads", "mod"],
   ["not vanilla", "kind == packet && owner != minecraft"],
   ["injected", "injected"],
   ["dropped / replaced", "kind == packet && action != pass"],
   ["scripts", 'kind matches "^(script|eval)"'],
-  ["errors", 'kind matches "error" || roundTrip matches "^(mismatch|error)"'],
+  ["errors", 'kind matches "error" || mod.roundTrip matches "^(mismatch|error)"'],
 ];
 
 // ---- token ----
@@ -80,13 +81,15 @@ function summary(e: SculkEvent): string {
   switch (e.kind) {
     case "packet":
       // Vanilla names without their namespace: the owner column says minecraft.
-      return str(e.channel ?? e.type).replace(/^minecraft:/, "");
+      return str(field(e, "channel") ?? field(e, "type")).replace(/^minecraft:/, "");
     case "connection":
-      return `${str(e.side)} ← ${str(e.remote)}`;
+      return `${str(conn(e)?.side)} ← ${str(conn(e)?.remote)}`;
     case "disconnect":
-      return `connection #${str(e.conn)} closed`;
-    case "payload_type":
-      return `${str(e.channel)}  ${str(e.flow)}${Array.isArray(e.registeredVia) && e.registeredVia.length ? "  via " + e.registeredVia.join(", ") : ""}`;
+      return `connection #${str(conn(e)?.id)} closed`;
+    case "payload_type": {
+      const m = mod(e);
+      return `${str(m?.channel)}  ${str(m?.flow)}${m?.registeredVia?.length ? "  via " + m.registeredVia.join(", ") : ""}`;
+    }
     case "script":
       return str(e.data);
     case "script_error":
@@ -292,9 +295,10 @@ class App {
       const cell = (e.target as HTMLElement).closest<HTMLElement>("td[data-field]");
       const row = cell?.closest("tr");
       const event = row?.dataset.id ? this.events.get(Number(row.dataset.id)) : undefined;
-      const field = cell?.dataset.field;
-      if (!event || !field || event[field] === undefined || event[field] === null) return;
-      const clause = `${field} == ${filterValue(event[field])}`;
+      const name = cell?.dataset.field;
+      const value = event && name ? field(event, name) : undefined;
+      if (!name || value === undefined || value === null) return;
+      const clause = `${name} == ${filterValue(value)}`;
       const current = this.filter.value.trim();
       this.filter.value = current ? `${current} && ${clause}` : clause;
       void this.applyFilter();
@@ -354,17 +358,18 @@ class App {
   private row(e: SculkEvent): HTMLTableRowElement {
     const tr = el("tr", `k-${e.kind}`);
     tr.dataset.id = String(e.id);
-    if (e.dir) tr.classList.add(`d-${str(e.dir)}`);
+    const dirValue = field(e, "dir");
+    if (dirValue) tr.classList.add(`d-${str(dirValue)}`);
     if (e.injected) tr.classList.add("injected");
     if (e.action && e.action !== "pass") tr.classList.add(`a-${str(e.action)}`);
-    if (typeof e.roundTrip === "string" && /^(mismatch|error)/.test(e.roundTrip)) tr.classList.add("rt-bad");
+    if (roundTripBad(mod(e)?.roundTrip)) tr.classList.add("rt-bad");
     if (e.id === this.selected) tr.classList.add("selected");
 
     // Markers in front of the direction: what sculk did to the packet. Always
     // two cells wide, so the arrows line up.
     const dropped = e.action === "drop", replaced = e.action === "replace";
     const marks = (e.injected ? "✦" : "") + (dropped ? "✕" : replaced ? "↻" : "");
-    const dir = e.dir === "inbound" ? "◀ in" : e.dir === "outbound" ? "▶ out" : "";
+    const dir = dirValue === "inbound" ? "◀ in" : dirValue === "outbound" ? "▶ out" : "";
     const dirText = dir || marks ? marks.padEnd(2, "\u00a0") + "\u00a0" + dir : "";
     const dirTitle = [e.injected ? "✦ injected by a script" : "", dropped ? "✕ dropped by a script" : "", replaced ? "↻ replaced by a script" : ""]
       .filter(Boolean)
@@ -375,10 +380,10 @@ class App {
       [time(e.t), "c-time"],
       [e.kind, "c-kind", "kind"],
       [dirText, "c-dir", "dir"],
-      [e.conn === undefined ? "" : `#${str(e.conn)}`, "c-conn", "conn"],
-      [str(e.owner), "c-owner", "owner", true],
-      [e.len === undefined || e.len === null ? "" : String(e.len), "c-len", "len"],
-      [summary(e), "c-summary", e.kind === "packet" ? (e.channel ? "channel" : "type") : undefined, true],
+      [conn(e)?.id === undefined ? "" : `#${str(conn(e)?.id)}`, "c-conn", "conn.id"],
+      [str(field(e, "owner")), "c-owner", "owner", true],
+      [typeof frame(e)?.len === "number" ? String(frame(e)?.len) : "", "c-len", "len"],
+      [summary(e), "c-summary", e.kind === "packet" ? (mod(e) ? "channel" : "type") : undefined, true],
     ];
     for (const [text, cls, field, clip] of cells) {
       // Clipped text sits in a span the CSS limits, so a long value never
@@ -413,32 +418,14 @@ class App {
 
   // ---- detail ----
 
-  private async select(id: number): Promise<void> {
+  private select(id: number): void {
     if (this.selected !== null) this.rowById.get(this.selected)?.classList.remove("selected");
     this.selected = id;
     this.rowById.get(id)?.classList.add("selected");
     const e = this.events.get(id);
     if (!e) return;
 
-    const header = el("div", "detail-head");
-    header.append(el("span", "detail-kind", e.kind), el("span", "detail-id", `#${e.id} · ${time(e.t)}`));
-    const treeSection = el("section", "detail-section");
-    treeSection.append(el("h2", undefined, "Event"), jsonTree(e));
-    this.detail.replaceChildren(header, treeSection);
-
-    if (e.kind === "packet" && typeof e.len === "number" && e.len > 0) {
-      const frameSection = el("section", "detail-section");
-      frameSection.append(el("h2", undefined, `Frame · ${e.len} bytes`), el("p", "hint", "loading…"));
-      this.detail.append(frameSection);
-      try {
-        const bytes = await this.guard(() => this.api.frame(id));
-        if (this.selected !== id) return;
-        frameSection.lastElementChild?.remove();
-        frameSection.append(bytes ? hexDump(bytes) : el("p", "hint", "the game no longer holds this frame"));
-      } catch (err) {
-        frameSection.lastElementChild?.replaceWith(el("p", "error", (err as Error).message));
-      }
-    }
+    inspect(this.detail, e, time(e.t), (frameId) => this.guard(() => this.api.frame(frameId)), () => this.selected === id);
   }
 
   // ---- repl and reload ----

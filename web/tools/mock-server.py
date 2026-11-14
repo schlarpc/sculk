@@ -167,8 +167,8 @@ class _Parser:
                         raise FilterError(str(ex))
                 whole = op in ("contains", "matches", "~")
                 test = tests[op]
-                return lambda e: _any(_lookup(e, path, 0), value, test, whole)
-        return lambda e: _any(_lookup(e, path, 0), None, lambda a, b: a is not None and a is not False, True)
+                return lambda e: _any(_resolve(e, path), value, test, whole)
+        return lambda e: _any(_resolve(e, path), None, lambda a, b: a is not None and a is not False, True)
 
 
 def _value(tok, quoted):
@@ -182,6 +182,20 @@ def _value(tok, quoted):
         return None
     n = _number(tok)
     return n if n is not None else tok
+
+
+SHORTHANDS = {"dir": ["frame.dir"], "len": ["frame.len"], "side": ["conn.side"], "type": ["packet.type"],
+              "channel": ["mod.channel"], "owner": ["mod.owner", "packet.owner"]}
+
+
+def _resolve(e, path):
+    if len(path) == 1 and path[0] not in e and path[0] in SHORTHANDS:
+        for full in SHORTHANDS[path[0]]:
+            found = _lookup(e, full.split("."), 0)
+            if found is not None:
+                return found
+        return None
+    return _lookup(e, path, 0)
 
 
 def _lookup(value, path, i):
@@ -359,13 +373,13 @@ def mod_payloads():
         ("waystones:waystone_teleport", "waystones", ["waystones"], "outbound",
          "net.blay09.mods.waystones.network.message.TeleportToWaystoneMessage", 1,
          lambda: {"$class": "net.blay09.mods.waystones.network.message.TeleportToWaystoneMessage",
-                  "waystoneUid": {"$class": "java.util.UUID", "$string": "6f1c1f0e-3b7e-4a43-9c22-%012x" % random.getrandbits(48)},
+                  "waystoneUid": "6f1c1f0e-3b7e-4a43-9c22-%012x" % random.getrandbits(48),
                   "warpMode": random.choice(["INVENTORY_BUTTON", "WAYSTONE_TO_WAYSTONE", "WARP_STONE"]),
                   "hand": "MAIN_HAND", "fromWaystone": None}),
         ("waystones:player_waystones", "waystones", ["waystones"], "inbound",
          "net.blay09.mods.waystones.network.message.KnownWaystonesMessage", 1,
          lambda: {"$class": "net.blay09.mods.waystones.network.message.KnownWaystonesMessage",
-                  "waystoneType": {"$class": "net.minecraft.resources.ResourceLocation", "$string": "waystones:waystone"},
+                  "waystoneType": {"$class": "net.minecraft.resources.ResourceLocation", "namespace": "waystones", "path": "waystone"},
                   "waystones": [{"$class": "net.blay09.mods.waystones.core.Waystone",
                                  "name": n, "dimension": "minecraft:overworld",
                                  "pos": {"x": random.randint(-3000, 3000), "y": random.randint(40, 120), "z": random.randint(-3000, 3000)},
@@ -383,7 +397,7 @@ def mod_payloads():
         ("ae2:gui_data_sync", "ae2", ["ae2"], "inbound",
          "appeng.core.network.clientbound.GuiDataSyncPacket", 3,
          lambda: {"$class": "appeng.core.network.clientbound.GuiDataSyncPacket",
-                  "containerId": random.randint(1, 9), "data": {"$class": "[B", "$string": "[B@%x" % random.getrandbits(28)}}),
+                  "containerId": random.randint(1, 9), "data": {"$bytes": random.randbytes(random.randint(4, 40)).hex()}}),
         ("ae2:inventory_action", "ae2", ["ae2"], "outbound",
          "appeng.core.network.serverbound.InventoryActionPacket", 1,
          lambda: {"$class": "appeng.core.network.serverbound.InventoryActionPacket",
@@ -392,7 +406,7 @@ def mod_payloads():
         ("sophisticatedbackpacks:backpack_contents", "sophisticatedbackpacks", ["sophisticatedcore", "sophisticatedbackpacks"], "inbound",
          "net.p3pp3rf1y.sophisticatedbackpacks.network.BackpackContentsPayload", 1,
          lambda: {"$class": "net.p3pp3rf1y.sophisticatedbackpacks.network.BackpackContentsPayload",
-                  "backpackUuid": {"$class": "java.util.UUID", "$string": "a2b4%028x" % random.getrandbits(112)},
+                  "backpackUuid": "a2b4%04x-%04x-4%03x-%04x-%012x" % (random.getrandbits(16), random.getrandbits(16), random.getrandbits(12), random.getrandbits(16), random.getrandbits(48)),
                   "backpackContents": {"inventory": {"Items": [{"Slot": i, "id": random.choice(["minecraft:diamond", "minecraft:cobblestone", "create:andesite_alloy"]), "count": random.randint(1, 64)} for i in range(random.randint(1, 5))]}}}),
         ("jei:recipe_transfer", "jei", ["jei"], "outbound",
          "mezz.jei.common.network.packets.PacketRecipeTransfer", 1,
@@ -401,6 +415,68 @@ def mod_payloads():
         ("neoforge:register", "neoforge", ["neoforge"], "outbound",
          "net.neoforged.neoforge.network.payload.MinecraftRegisterPayload", 0, None),
     ]
+
+
+def payload_types():
+    """The mod layers of payload_type events (Sculk.payloadTypes)."""
+    return [{"channel": ch, "owner": o, "registeredVia": v, "javaClass": cls, "codecClass": cls + "$1",
+             "protocol": "play", "flow": "clientbound" if d == "inbound" else "serverbound", "discriminator": None}
+            for ch, o, v, d, cls, _w, _p in mod_payloads()]
+
+
+def varint_at(b, off):
+    """(value, length) of the VarInt at off, or (None, -1)."""
+    value = 0
+    for i in range(5):
+        if off + i >= len(b):
+            return None, -1
+        value |= (b[off + i] & 0x7F) << (7 * i)
+        if not b[off + i] & 0x80:
+            return value, i + 1
+    return None, -1
+
+
+def spans(frame, channel):
+    """FrameLayer.spans in Python: packet.id, then mod.channel + mod.data, or packet.body."""
+    out = []
+    _, n = varint_at(frame, 0)
+    if n < 0:
+        return out
+    out.append({"field": "packet.id", "off": 0, "len": n})
+    pos = n
+    if channel:
+        strlen, prefix = varint_at(frame, pos)
+        name = channel.encode()
+        if prefix > 0 and strlen == len(name) and frame[pos + prefix:pos + prefix + strlen] == name:
+            out.append({"field": "mod.channel", "off": pos, "len": prefix + strlen})
+            pos += prefix + strlen
+            if pos < len(frame):
+                out.append({"field": "mod.data", "off": pos, "len": len(frame) - pos})
+            return out
+    if pos < len(frame):
+        out.append({"field": "packet.body", "off": pos, "len": len(frame) - pos})
+    return out
+
+
+def encode_tree(v):
+    """Something that looks like a mod's own binary encoding of a payload tree."""
+    import struct
+    if isinstance(v, dict):
+        if "$bytes" in v:
+            b = bytes.fromhex(v["$bytes"])
+            return varint(len(b)) + b
+        return b"".join(encode_tree(x) for k, x in v.items() if k != "$class")
+    if isinstance(v, list):
+        return varint(len(v)) + b"".join(encode_tree(x) for x in v)
+    if isinstance(v, bool):
+        return bytes([v])
+    if isinstance(v, int):
+        return varint(v)
+    if isinstance(v, float):
+        return struct.pack(">d", v)
+    if v is None:
+        return b"\x00"
+    return mc_string(str(v))
 
 
 class Game:
@@ -419,11 +495,8 @@ class Game:
 
     def start(self):
         self.store.add("start", {"platform": PLATFORM})
-        for ch, owner, via, d, cls, _w, _p in mod_payloads():
-            self.store.add("payload_type", {
-                "channel": ch, "protocol": "play", "flow": "clientbound" if d == "inbound" else "serverbound",
-                "discriminator": None, "messageClass": cls, "codecClass": cls + "$1",
-                "owner": owner, "registeredVia": via})
+        for m in payload_types():
+            self.store.add("payload_type", {"mod": m})
         self.store.add("script", {"data": "log-waystones.js loaded; watching waystones:*"})
         self.connect()
         for _ in range(1500):
@@ -435,8 +508,8 @@ class Game:
             remote = f"mc.example.net/203.0.113.{random.randint(2, 250)}:25565"
             self.open.append((self.conn, remote))
             cid = self.conn
-        self.store.add("connection", {"conn": cid, "side": "client", "remote": remote,
-                                      "pipeline": ["timeout", "splitter", "decompress", "decoder", "prepender", "compress", "encoder", "packet_handler"]})
+        self.store.add("connection", {"conn": {"id": cid, "side": "client", "remote": remote,
+                                               "pipeline": ["timeout", "splitter", "decompress", "decoder", "prepender", "compress", "encoder", "packet_handler"]}})
         for state, t, pid, d in [("handshake", "minecraft:intention", 0, "outbound"),
                                  ("login", "minecraft:hello", 0, "outbound"),
                                  ("login", "minecraft:login_compression", 3, "inbound"),
@@ -453,38 +526,50 @@ class Game:
                 return None
             cid, remote = self.open.pop()
             self.closed.append((cid, remote))
-        self.store.add("disconnect", {"conn": cid, "side": "client"})
+        self.store.add("disconnect", {"conn": {"id": cid, "side": "client", "remote": remote}})
         return cid
 
-    def packet_fields(self, cid, d, state, t, pid, frame, injected=False, action="pass"):
+    def conn_layer(self, cid):
+        remote = next((r for c, r in self.open + self.closed if c == cid), "?")
+        return {"id": cid, "side": "client", "remote": remote}
+
+    def packet_event(self, cid, d, state, t, frame, cls, owner="minecraft", channel=None, injected=False, action="pass", mod=None):
+        """A packet event shaped as Sculk.java logs it (see PacketEvent.toJson)."""
         self.seq += 1
-        return {"seq": self.seq, "conn": cid, "side": "client", "dir": d, "state": state,
-                "flow": "clientbound" if d == "inbound" else "serverbound", "type": t,
-                "class": "net.minecraft.network.protocol.game." + "".join(p.title() for p in t.split(":")[1].split("_")) + "Packet",
-                "owner": "minecraft", "injected": injected, "action": action, "len": len(frame), "packetId": pid}
+        e = {
+            "conn": self.conn_layer(cid),
+            "frame": {"seq": self.seq, "dir": d, "len": len(frame),
+                      "hex": hexs(frame, LOG_FRAME_BYTES if channel else 256), "spans": spans(frame, channel)},
+            "packet": {"id": varint_at(frame, 0)[0], "state": state,
+                       "flow": "clientbound" if d == "inbound" else "serverbound", "type": t,
+                       "javaClass": cls, "owner": owner},
+        }
+        if mod is not None:
+            e["mod"] = mod
+        e["injected"] = injected
+        e["action"] = action
+        self.store.add("packet", e, frame)
 
     def vanilla(self, cid, d, t, pid, size, state="play", **kw):
         frame = varint(pid) + random.randbytes(max(0, size - len(varint(pid))))
-        f = self.packet_fields(cid, d, state, t, pid, frame, **kw)
-        f["hex"] = hexs(frame, 256)
-        self.store.add("packet", f, frame)
+        name = "".join(p.title() for p in t.split(":")[1].split("_"))
+        side = "Clientbound" if d == "inbound" else "Serverbound"
+        self.packet_event(cid, d, state, t, frame, f"net.minecraft.network.protocol.game.{side}{name}Packet", **kw)
 
     def payload(self, cid, mod, injected=False, action="pass", roundtrip=None):
         ch, owner, via, d, cls, _w, make = mod
         tree = make()
         pid = 0x19 if d == "inbound" else 0x14
-        body = json.dumps(tree).encode()[: random.randint(16, 600)]
-        frame = varint(pid) + mc_string(ch) + body
-        f = self.packet_fields(cid, d, "play", "minecraft:custom_payload", pid, frame, injected=injected, action=action)
-        f["class"] = "net.minecraft.network.protocol.common." + ("Clientbound" if d == "inbound" else "Serverbound") + "CustomPayloadPacket"
-        f["owner"] = owner
+        frame = varint(pid) + mc_string(ch) + encode_tree(tree)
         if roundtrip is None:
             x = random.random()
             roundtrip = "ok" if x < 0.9 else "equivalent" if x < 0.985 else \
-                "mismatch: re-encoded 37 bytes, wire had 41; first difference at byte 22"
-        f.update({"channel": ch, "registeredVia": via, "payloadClass": cls, "payload": tree,
-                  "payloadHex": hexs(body, LOG_FRAME_BYTES), "hex": hexs(frame, LOG_FRAME_BYTES), "roundTrip": roundtrip})
-        self.store.add("packet", f, frame)
+                "mismatch: payload " + random.randbytes(24).hex()
+        layer = {"channel": ch, "owner": owner, "registeredVia": via, "javaClass": cls, "roundTrip": roundtrip, "data": tree}
+        side = "Clientbound" if d == "inbound" else "Serverbound"
+        self.packet_event(cid, d, "play", "minecraft:custom_payload", frame,
+                          f"net.minecraft.network.protocol.common.{side}CustomPayloadPacket",
+                          channel=ch, injected=injected, action=action, mod=layer)
 
     def tick_one(self):
         with self.lock:
@@ -558,9 +643,7 @@ class Game:
         if src == "sculk.connections()":
             return {"ok": True, "result": [f"SculkConnection[#{c} client {r} open]" for c, r in self.open]}
         if src == "sculk.payloadTypes()":
-            return {"ok": True, "result": [{"channel": ch, "owner": o, "registeredVia": v,
-                                            "flow": "clientbound" if d == "inbound" else "serverbound",
-                                            "messageClass": cls} for ch, o, v, d, cls, _w, _p in mod_payloads()]}
+            return {"ok": True, "result": payload_types()}
         m = re.fullmatch(r"sculk\.(log|emit)\((.*)\)", src, re.S)
         if m:
             arg = m.group(2).strip()

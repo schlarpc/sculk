@@ -1,35 +1,93 @@
 // Read-only renderings for the detail panel: a JSON tree and a hex dump.
 
 import { el } from "./dom";
+import { shortClass, type Span } from "./event";
 
-const OPEN_DEPTH = 2;
-
-/** A collapsible tree of a JSON value. */
-export function jsonTree(value: unknown, depth = 0): HTMLElement {
+/**
+ * A collapsible tree of a JSON value, opened {@code open} levels deep.
+ *
+ * Understands the object trees the engine makes of Java objects
+ * (ObjectModel.java): {@code $class} becomes a label on the brace (full name
+ * on hover) rather than a key, {@code $bytes} shows as hex, and an object
+ * that could not be read ({@code $string}, {@code $reflectionError}) shows
+ * as its string.
+ */
+export function jsonTree(value: unknown, open = 2, depth = 0): HTMLElement {
   if (value === null || typeof value !== "object") return primitive(value);
+  if (!Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.$bytes === "string" && Object.keys(obj).length === 1) {
+      const span = el("span", "j-bytes", obj.$bytes);
+      span.prepend(el("span", "j-class", "bytes "));
+      return span;
+    }
+    if (typeof obj.$string === "string") {
+      const span = el("span", "j-str", JSON.stringify(obj.$string));
+      if (typeof obj.$class === "string") span.prepend(classLabel(obj.$class));
+      if (typeof obj.$reflectionError === "string") span.title = obj.$reflectionError;
+      return span;
+    }
+  }
+  const cls = !Array.isArray(value) && typeof (value as Record<string, unknown>).$class === "string"
+    ? ((value as Record<string, unknown>).$class as string)
+    : null;
   const entries: [string, unknown][] = Array.isArray(value)
     ? value.map((v, i) => [String(i), v])
-    : Object.entries(value as Record<string, unknown>);
+    : Object.entries(value as Record<string, unknown>).filter(([k]) => k !== "$class");
   const bracket = Array.isArray(value) ? ["[", "]"] : ["{", "}"];
-  if (entries.length === 0) return el("span", "j-punct", bracket.join(""));
+  if (entries.length === 0) {
+    const empty = el("span", "j-punct", bracket.join(""));
+    if (cls) empty.prepend(classLabel(cls));
+    return empty;
+  }
 
   const details = el("details", "j-node");
-  details.open = depth < OPEN_DEPTH;
+  details.open = depth < open;
   const summary = el("summary", "j-summary");
+  if (cls) summary.append(classLabel(cls));
+  // Collapsed, a node shows a one-line preview of its contents (or a count, if that is too long).
+  const peek = preview(entries, Array.isArray(value), 72);
   summary.append(
     el("span", "j-punct", bracket[0]),
-    el("span", "j-count", Array.isArray(value) ? ` ${entries.length} items ` : ` ${entries.length} keys `),
-    el("span", "j-punct", bracket[1]),
+    el("span", "j-count", peek ?? (Array.isArray(value) ? ` ${entries.length} items ` : ` ${entries.length} fields `)),
+    el("span", "j-punct j-close", bracket[1]),
   );
   details.append(summary);
   const list = el("ul", "j-list");
   for (const [k, v] of entries) {
     const li = el("li");
-    li.append(el("span", "j-key", k), el("span", "j-punct", ": "), jsonTree(v, depth + 1));
+    li.append(el("span", "j-key", k), el("span", "j-punct", ": "), jsonTree(v, open, depth + 1));
     list.append(li);
   }
   details.append(list);
   return details;
+}
+
+/** `a: 1, b: "x"` for a node, or null when it would not fit in {@code budget} characters. */
+function preview(entries: [string, unknown][], isArray: boolean, budget: number): string | null {
+  const parts: string[] = [];
+  let used = 0;
+  for (const [k, v] of entries) {
+    let text: string;
+    if (v === null || typeof v !== "object") text = v === undefined ? "null" : JSON.stringify(v);
+    else if (Array.isArray(v)) text = v.length ? `[…${v.length}]` : "[]";
+    else {
+      const o = v as Record<string, unknown>;
+      text = typeof o.$string === "string" ? JSON.stringify(o.$string)
+        : typeof o.$class === "string" ? `${shortClass(o.$class)} {…}` : "{…}";
+    }
+    const part = isArray ? text : `${k}: ${text}`;
+    used += part.length + 2;
+    if (used > budget) return null;
+    parts.push(part);
+  }
+  return ` ${parts.join(", ")} `;
+}
+
+function classLabel(cls: string): HTMLElement {
+  const label = el("span", "j-class", shortClass(cls) + " ");
+  label.title = cls;
+  return label;
 }
 
 function primitive(value: unknown): HTMLElement {
@@ -42,10 +100,30 @@ function primitive(value: unknown): HTMLElement {
 
 const HEX_LIMIT = 16 * 1024;
 
-/** Offset, hex and ASCII columns; hovering a byte highlights it in both. */
-export function hexDump(bytes: Uint8Array): HTMLElement {
+/** A short CSS-safe name for a span's field, for its colour: mod.channel → mod-channel. */
+export const spanClass = (span: Span) => `sp-${span.field.replace(/[^a-z0-9]+/gi, "-")}`;
+
+/**
+ * Offset, hex and ASCII columns, with the frame's {@code spans} tinted and
+ * listed in a legend above. Hovering a byte names its field and highlights
+ * it in both columns; hovering a legend entry highlights the whole field.
+ */
+export function hexDump(bytes: Uint8Array, spans: Span[] = []): HTMLElement {
   const root = el("div", "hexdump");
   const shown = Math.min(bytes.length, HEX_LIMIT);
+  const spanAt: (Span | undefined)[] = new Array(shown);
+  for (const s of spans) for (let i = s.off; i < Math.min(s.off + s.len, shown); i++) spanAt[i] = s;
+
+  const legend = el("div", "hx-legend");
+  for (const s of spans) {
+    const chip = el("span", `hx-chip ${spanClass(s)}`);
+    chip.append(el("span", "hx-swatch"), el("span", undefined, s.field), el("span", "hx-chip-len", ` ${s.len} B`));
+    chip.dataset.field = s.field;
+    chip.title = `bytes ${s.off}–${s.off + s.len - 1}`;
+    legend.append(chip);
+  }
+  const where = el("div", "hx-where hint", spans.length ? "hover a byte or a field" : "");
+
   const hexCol = el("div", "hx-hex");
   const asciiCol = el("div", "hx-ascii");
   const offsets = el("div", "hx-off");
@@ -56,11 +134,17 @@ export function hexDump(bytes: Uint8Array): HTMLElement {
     for (let i = line; i < Math.min(line + 16, shown); i++) {
       const b = bytes[i] as number;
       const h = el("span", b === 0 ? "hx-b hx-zero" : "hx-b", b.toString(16).padStart(2, "0"));
-      h.dataset.i = String(i);
       if (i % 16 === 7) h.classList.add("hx-gap");
       const printable = b >= 0x20 && b < 0x7f;
       const a = el("span", printable ? "hx-b" : "hx-b hx-dot", printable ? String.fromCharCode(b) : "·");
-      a.dataset.i = String(i);
+      const s = spanAt[i];
+      for (const x of [h, a]) {
+        x.dataset.i = String(i);
+        if (s) {
+          x.classList.add(spanClass(s));
+          x.dataset.field = s.field;
+        }
+      }
       hexLine.append(h);
       asciiLine.append(a);
     }
@@ -69,20 +153,30 @@ export function hexDump(bytes: Uint8Array): HTMLElement {
   }
   const grid = el("div", "hx-grid");
   grid.append(offsets, hexCol, asciiCol);
+  if (spans.length) root.append(legend, where);
   root.append(grid);
   if (bytes.length > shown) root.append(el("p", "hint", `showing ${shown} of ${bytes.length} bytes`));
 
   let lit: HTMLElement[] = [];
-  grid.addEventListener("mouseover", (e) => {
-    const target = e.target as HTMLElement;
-    const i = target.dataset.i;
+  const light = (selector: string | null) => {
     for (const x of lit) x.classList.remove("hx-lit");
-    lit = i === undefined ? [] : Array.from(grid.querySelectorAll<HTMLElement>(`[data-i="${i}"]`));
+    lit = selector ? Array.from(root.querySelectorAll<HTMLElement>(selector)) : [];
     for (const x of lit) x.classList.add("hx-lit");
+  };
+  grid.addEventListener("mouseover", (e) => {
+    const i = (e.target as HTMLElement).dataset.i;
+    if (i === undefined) return light(null);
+    light(`.hx-grid [data-i="${i}"]`);
+    const n = Number(i);
+    const s = spanAt[n];
+    const b = bytes[n] as number;
+    where.textContent = `byte ${n} (0x${n.toString(16)}) = 0x${b.toString(16).padStart(2, "0")} = ${b}` +
+      (s ? ` · ${s.field}, byte ${n - s.off + 1} of ${s.len}` : "");
   });
-  grid.addEventListener("mouseleave", () => {
-    for (const x of lit) x.classList.remove("hx-lit");
-    lit = [];
+  legend.addEventListener("mouseover", (e) => {
+    const chip = (e.target as HTMLElement).closest<HTMLElement>(".hx-chip");
+    if (chip?.dataset.field) light(`.hx-grid [data-field="${chip.dataset.field}"]`);
   });
+  for (const area of [grid, legend]) area.addEventListener("mouseleave", () => light(null));
   return root;
 }

@@ -359,15 +359,54 @@ input.invalid { border-color: var(--red); }
 /* ---- detail ---- */
 
 .detail-body { flex: 1; min-height: 0; overflow: auto; font-size: 12px; }
-.detail-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.detail-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.detail-top { display: flex; align-items: baseline; gap: 10px; }
 .detail-kind { font-size: 18px; font-weight: 700; color: var(--glow); }
 .detail-id { color: var(--text-dim); }
-.detail-section h2 {
-  margin: 12px 0 6px;
+.detail-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.detail-dir { flex: none; font-weight: 700; }
+.detail-dir.d-inbound { color: var(--glow); }
+.detail-dir.d-outbound { color: var(--bone); }
+.detail-name { font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.detail-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge {
+  padding: 0 6px;
+  border: 1px solid var(--sculk-500);
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.b-owner { color: var(--bone); border-color: var(--bone-dark); }
+.b-ok { color: var(--green); border-color: #2f7a2f; }
+.b-meh { color: var(--gold); border-color: #7a5a10; }
+.b-bad { color: var(--red); border-color: #8a2c2c; }
+.b-inj { color: var(--glow-hot); border-color: var(--glow-mid); }
+
+.detail-section h2, .detail-fold > summary {
+  margin: 14px 0 6px;
   font-size: 13px;
+  font-weight: 700;
   color: var(--bone);
   border-bottom: 2px solid var(--sculk-600);
 }
+.detail-fold > summary { cursor: pointer; list-style: none; }
+.detail-fold > summary::before { content: "▸ "; color: var(--glow-mid); }
+.detail-fold[open] > summary::before { content: "▾ "; }
+.detail-class { color: var(--text-dim); font-weight: 400; }
+.detail-pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.detail-rt { margin: 0 0 6px; overflow-wrap: anywhere; }
+
+/* label/value rows, in groups named for their layer */
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 1px 14px; }
+.kv-group {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  color: var(--glow-mid);
+  font-weight: 700;
+}
+.kv-group:first-child { margin-top: 0; }
+.kv-key { color: var(--bone-dim); padding-left: 1ch; cursor: help; }
+.kv-val { color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .j-node > summary { cursor: pointer; list-style: none; display: inline; }
 .j-node > summary::before { content: "▸ "; color: var(--glow-mid); }
@@ -375,12 +414,18 @@ input.invalid { border-color: var(--red); }
 .j-node[open] > summary .j-count { display: none; }
 .j-list { list-style: none; margin: 0; padding-left: 18px; border-left: 1px dashed var(--sculk-600); }
 .j-list li { overflow-wrap: anywhere; }
+/* a nested node opens on its key's line */
+.j-list li > .j-node { display: inline; }
+.j-list li > .j-node > .j-list { display: block; }
 .j-key { color: var(--bone-dim); }
 .j-punct, .j-count { color: var(--text-faint); }
 .j-str { color: #b4f3f6; }
 .j-num { color: var(--gold); }
 .j-bool { color: var(--green); }
 .j-null { color: var(--text-faint); font-style: italic; }
+.j-class { color: var(--glow-mid); }
+.j-bytes { color: var(--text-dim); overflow-wrap: anywhere; }
+.j-node[open] > summary .j-close { display: none; }
 
 .hexdump { font-size: 12px; text-shadow: none; }
 .hx-grid {
@@ -399,6 +444,18 @@ input.invalid { border-color: var(--red); }
 .hx-zero { color: var(--text-faint) !important; }
 .hx-ascii { color: var(--bone-dim); }
 .hx-dot { color: var(--text-faint); }
+/* fields of the frame: a tint per field, the same in the legend */
+.hexdump { --sp: transparent; }
+.sp-packet-id { --sp: var(--gold); }
+.sp-mod-channel { --sp: var(--bone); }
+.sp-mod-data { --sp: var(--glow); }
+.sp-packet-body { --sp: var(--glow-mid); }
+.hx-grid .hx-b[data-field] { background: color-mix(in srgb, var(--sp) 16%, transparent); }
+.hx-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 4px; }
+.hx-chip { cursor: default; color: var(--text); }
+.hx-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; background: var(--sp); vertical-align: -1px; }
+.hx-chip-len { color: var(--text-faint); }
+.hx-where { min-height: 1.45em; margin-bottom: 4px; }
 .hx-lit { background: var(--glow-low); color: var(--glow-hot) !important; }
 
 /* ---- repl ---- */
