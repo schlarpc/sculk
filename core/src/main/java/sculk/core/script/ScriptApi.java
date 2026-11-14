@@ -23,15 +23,15 @@ import sculk.shaded.org.mozilla.javascript.Scriptable;
  *
  * <pre>{@code
  * sculk.on('packet', e => {
- *   if (e.channel === 'appleskin:exhaustion_sync' && e.dir === 'inbound') e.drop();
+ *   if (e.mod && e.mod.channel === 'appleskin:exhaustion_sync' && e.frame.dir === 'inbound') e.drop();
  * });
  * sculk.on('connection', c => sculk.log('hello ' + c.side));
  * }</pre>
  *
- * Packet events expose {@code seq, side, dir, state, type, channel, owner,
- * payload, packet, frame, injected, connection} and the methods
+ * Packet events have the same layered fields as logged events, and the
+ * same shorthands as filters: see {@link PacketEvent}. They offer
  * {@code drop()}, {@code replaceFrame(bytes)}, {@code replacePacket(obj)}.
- * Connections expose {@code id, side, remoteAddress} and
+ * Connections ({@code e.conn}) expose {@code id, side, remote} and
  * {@code inject(dir, bytes)}, {@code injectPacket(dir, obj)}, {@code replay(event)}.
  */
 public final class ScriptApi implements AutoCloseable {

@@ -7,6 +7,8 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.util.AttributeKey;
 import java.net.SocketAddress;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -68,10 +70,13 @@ public final class SculkConnection {
     }
 
     public int getId() { return id; }
-    public Side side() { return side; }
+    /** Which side we are; scripts see it as the string {@code side}. */
+    public Side sideEnum() { return side; }
     public String getSide() { return side.id(); }
     public Channel channel() { return channel; }
     public SocketAddress getRemoteAddress() { return channel.remoteAddress(); }
+    /** The peer's address as text, as events show it. */
+    public String getRemote() { return String.valueOf(channel.remoteAddress()); }
     public boolean isOpen() { return channel.isOpen(); }
     /** The game's current decoder for this connection (from the pipeline), or the last one seen. */
     public Object decoderCodec() {
@@ -133,8 +138,8 @@ public final class SculkConnection {
 
     /** Sends a previously seen packet again, as bytes when sculk saw its frame. */
     public void replay(PacketEvent event) {
-        if (event.getFrame() != null) sendFrame(event.getDirection(), event.getFrame());
-        else sendPacket(event.getDirection(), event.getPacket());
+        if (event.frameBytes() != null) sendFrame(event.direction(), event.frameBytes());
+        else sendPacket(event.direction(), event.packetObject());
     }
 
     // ---- injection: script-friendly names ----
@@ -177,6 +182,15 @@ public final class SculkConnection {
         int index = names.indexOf(target.name());
         if (index <= 0) throw new IllegalStateException("nothing precedes " + target.name() + " in " + names);
         return pipeline.context(names.get(index - 1));
+    }
+
+    /** The {@code conn} layer of events: {@code {id, side, remote}}. */
+    public Map<String, Object> toJson() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", id);
+        m.put("side", side.id());
+        m.put("remote", getRemote());
+        return m;
     }
 
     @Override

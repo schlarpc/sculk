@@ -147,16 +147,20 @@ def check(server, client):
     r = Report()
     pk = lambda log: [e for e in log if e["kind"] == "packet"]
     script = lambda log, step: [e for e in log if e["kind"] == "script" and e["data"].get("step") == step]
+    # Layers of a packet event (see docs/ARCHITECTURE.md, "Events").
+    mod = lambda e: e.get("mod") or {}
+    dir_ = lambda e: e["frame"]["dir"]
+    hex_ = lambda e: e["frame"].get("hex")
 
     r.check("both sides started", any(e["kind"] == "start" for e in server) and any(e["kind"] == "start" for e in client))
-    r.check("server saw a server-side connection", any(e["kind"] == "connection" and e["side"] == "server" for e in server))
-    r.check("client saw a client-side connection", any(e["kind"] == "connection" and e["side"] == "client" for e in client))
+    r.check("server saw a server-side connection", any(e["kind"] == "connection" and e["conn"]["side"] == "server" for e in server))
+    r.check("client saw a client-side connection", any(e["kind"] == "connection" and e["conn"]["side"] == "client" for e in client))
 
     errors = [e for e in server + client if e["kind"] in ("script_error", "log_error")]
     r.check("no script errors", not errors, json.dumps(errors[:3]))
 
     # Registry and attribution.
-    types = [e for e in server if e["kind"] == "payload_type"]
+    types = [e["mod"] for e in server if e["kind"] == "payload_type"]
     owners = collections.Counter(t["owner"] for t in types)
     r.check("server registry lists appleskin payloads", owners["appleskin"] > 0, dict(owners))
     r.check("server registry lists waystones payloads", owners["waystones"] > 0, dict(owners))
@@ -166,22 +170,26 @@ def check(server, client):
     r.check("waystones payloads attributed through balm", via and all("balm" in v for v in via), via)
 
     # Decoding with the mods' own codecs, and faithful re-encoding.
-    apple_in = [e for e in pk(client) if e["dir"] == "inbound" and e.get("owner") == "appleskin"]
+    apple_in = [e for e in pk(client) if dir_(e) == "inbound" and mod(e).get("owner") == "appleskin"]
     r.check("client captured inbound appleskin payloads", apple_in)
     r.check("appleskin payloads decoded to mod objects",
-            apple_in and all(e.get("payloadClass") for e in apple_in),
-            [e.get("payloadClass") for e in apple_in[:3]])
-    custom = [e for e in pk(server) + pk(client) if e.get("channel")]
-    outcomes = collections.Counter(str(e.get("roundTrip")).split(":")[0].split(" ")[0] for e in custom)
-    bad = [(e["side"], e["dir"], e["channel"], e["roundTrip"]) for e in custom
-           if outcomes and str(e.get("roundTrip")).split(":")[0] in ("mismatch", "error")]
+            apple_in and all(mod(e).get("javaClass") for e in apple_in),
+            [mod(e).get("javaClass") for e in apple_in[:3]])
+    custom = [e for e in pk(server) + pk(client) if mod(e).get("channel")]
+    outcomes = collections.Counter(str(mod(e).get("roundTrip")).split(":")[0].split(" ")[0] for e in custom)
+    bad = [(e["conn"]["side"], dir_(e), mod(e)["channel"], mod(e)["roundTrip"]) for e in custom
+           if outcomes and str(mod(e).get("roundTrip")).split(":")[0] in ("mismatch", "error")]
     r.check(f"all {len(custom)} custom payloads re-encode faithfully {dict(outcomes)}", custom and not bad, bad[:5])
-    apple_bad = [e["roundTrip"] for e in custom if e.get("owner") == "appleskin" and not str(e["roundTrip"]).startswith("ok")]
+    apple_bad = [mod(e)["roundTrip"] for e in custom
+                 if mod(e).get("owner") == "appleskin" and not str(mod(e)["roundTrip"]).startswith("ok")]
     r.check("appleskin payloads re-encode byte-for-byte", not apple_bad, apple_bad[:3])
+    unsplit = [mod(e)["channel"] for e in custom
+               if [s["field"] for s in e["frame"]["spans"]] != ["packet.id", "mod.channel", "mod.data"]]
+    r.check("custom payload frames split into id, channel and data", not unsplit, unsplit[:3])
 
     # Wire integrity: every custom payload frame the client received was sent by the server.
-    sent = collections.Counter(e["hex"] for e in pk(server) if e["dir"] == "outbound" and e.get("channel"))
-    got = collections.Counter(e["hex"] for e in pk(client) if e["dir"] == "inbound" and e.get("channel"))
+    sent = collections.Counter(hex_(e) for e in pk(server) if dir_(e) == "outbound" and "mod" in e)
+    got = collections.Counter(hex_(e) for e in pk(client) if dir_(e) == "inbound" and "mod" in e)
     missing = got - sent
     r.check("client inbound payload frames == server outbound frames", got and not missing,
             f"{sum(missing.values())} unmatched frames")
@@ -191,9 +199,9 @@ def check(server, client):
     r.check("server replayed an appleskin payload", replays)
     if replays:
         h = replays[0]["data"]["hex"]
-        server_count = sum(1 for e in pk(server) if e["dir"] == "outbound" and e.get("hex") == h)
-        client_count = sum(1 for e in pk(client) if e["dir"] == "inbound" and e.get("hex") == h)
-        injected = [e for e in pk(server) if e["dir"] == "outbound" and e.get("hex") == h and e.get("injected")]
+        server_count = sum(1 for e in pk(server) if dir_(e) == "outbound" and hex_(e) == h)
+        client_count = sum(1 for e in pk(client) if dir_(e) == "inbound" and hex_(e) == h)
+        injected = [e for e in pk(server) if dir_(e) == "outbound" and hex_(e) == h and e.get("injected")]
         r.check("server recorded the replay as injected", injected)
         r.check("client received the replay", client_count >= 2 and client_count == server_count,
                 f"server sent {server_count}, client got {client_count}")
@@ -203,10 +211,11 @@ def check(server, client):
     r.check("client injected an edited movement frame", inj, json.dumps(script(client, "client_inject_skipped")))
     if inj:
         h = inj[0]["data"]["hex"]
-        natural = [e for e in pk(client) if e["dir"] == "outbound" and e.get("hex") == h and not e.get("injected")]
-        arrived = [e for e in pk(server) if e["dir"] == "inbound" and e.get("hex") == h]
+        natural = [e for e in pk(client) if dir_(e) == "outbound" and hex_(e) == h and not e.get("injected")]
+        arrived = [e for e in pk(server) if dir_(e) == "inbound" and hex_(e) == h]
         r.check("edited frame was not one the client sent itself", not natural)
-        r.check("server decoded the injected frame", arrived and arrived[0]["type"] == inj[0]["data"]["type"],
+        r.check("server decoded the injected frame",
+                arrived and arrived[0]["packet"]["type"] == inj[0]["data"]["type"],
                 f"{len(arrived)} matching frames")
     return r
 

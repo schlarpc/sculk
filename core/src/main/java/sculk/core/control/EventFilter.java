@@ -27,7 +27,15 @@ import sculk.core.log.EventLog;
  *   <li>Operators: {@code == != < <= > >=}, {@code contains} (substring; on
  *       objects and lists, of their JSON), {@code matches} or {@code ~}
  *       (regular expression, found anywhere).</li>
- *   <li>A field alone is true when it is present and not false.</li>
+ *   <li>A field alone is true when it is present and not false, so a layer
+ *       name alone ({@code mod}) asks whether the event has that layer.</li>
+ *   <li>Shorthands, when the event has no top-level key of that name:
+ *       {@code dir} is {@code frame.dir}, {@code len} {@code frame.len},
+ *       {@code side} {@code conn.side}, {@code type} {@code packet.type},
+ *       {@code channel} {@code mod.channel}, and {@code owner} is
+ *       {@code mod.owner} when there is a mod layer, else
+ *       {@code packet.owner}. Packet events in scripts have the same
+ *       shorthands.</li>
  *   <li>{@code && || !} or {@code and or not}; parentheses.</li>
  *   <li>Values are quoted strings, numbers, {@code true false null}, or a
  *       bare word, which is a string.</li>
@@ -35,6 +43,15 @@ import sculk.core.log.EventLog;
  */
 public final class EventFilter {
     private static final Predicate<Map<String, Object>> ALL = e -> true;
+
+    /** Shorthand fields: each stands for the first of its paths that is present. */
+    static final Map<String, List<String[]>> SHORTHANDS = Map.of(
+            "dir", List.<String[]>of(new String[] {"frame", "dir"}),
+            "len", List.<String[]>of(new String[] {"frame", "len"}),
+            "side", List.<String[]>of(new String[] {"conn", "side"}),
+            "type", List.<String[]>of(new String[] {"packet", "type"}),
+            "channel", List.<String[]>of(new String[] {"mod", "channel"}),
+            "owner", List.of(new String[] {"mod", "owner"}, new String[] {"packet", "owner"}));
 
     private final List<String> tokens = new ArrayList<>();
     private final List<Boolean> quoted = new ArrayList<>();
@@ -162,10 +179,10 @@ public final class EventFilter {
                 pos++;
                 Object operand = op.equals("matches") || op.equals("~") ? Pattern.compile(String.valueOf(value)) : value;
                 boolean wholeValue = op.equals("contains") || op.equals("matches") || op.equals("~");
-                return e -> any(lookup(e, path, 0), operand, test, wholeValue);
+                return e -> any(resolve(e, path), operand, test, wholeValue);
             }
         }
-        return e -> any(lookup(e, path, 0), null, (a, b) -> a != null && !Boolean.FALSE.equals(a), true);
+        return e -> any(resolve(e, path), null, (a, b) -> a != null && !Boolean.FALSE.equals(a), true);
     }
 
     private static Object value(String token, boolean wasQuoted) {
@@ -181,6 +198,17 @@ public final class EventFilter {
     }
 
     // ---- evaluation ----
+
+    /** Looks {@code path} up in an event, expanding a shorthand the event has no key for. */
+    private static Object resolve(Map<String, Object> event, String[] path) {
+        List<String[]> expansions = path.length == 1 && !event.containsKey(path[0]) ? SHORTHANDS.get(path[0]) : null;
+        if (expansions == null) return lookup(event, path, 0);
+        for (String[] full : expansions) {
+            Object found = lookup(event, full, 0);
+            if (found != null) return found;
+        }
+        return null;
+    }
 
     /** Walks {@code path} into {@code value}. A name applied to a list is applied to every element. */
     private static Object lookup(Object value, String[] path, int index) {

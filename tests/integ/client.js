@@ -12,7 +12,7 @@ let joined = false;
 let scheduled = false;
 let finished = false;
 
-const isMove = e => e.dir === 'outbound' && e.state === 'play' && /move_player_pos$|MovePlayerPacket\$Pos$/.test(e.type);
+const isMove = e => e.dir === 'outbound' && e.packet.state === 'play' && /move_player_pos$|MovePlayerPacket\$Pos$/.test(e.type);
 
 function finish(delayMillis) {
   if (finished) return;
@@ -21,7 +21,7 @@ function finish(delayMillis) {
 }
 
 sculk.on('packet', e => {
-  if (!joined && e.dir === 'inbound' && e.state === 'play') {
+  if (!joined && e.dir === 'inbound' && e.packet.state === 'play') {
     joined = true;
     sculk.emit({ step: 'client_joined' });
     sculk.schedule(90000, () => {
@@ -30,7 +30,7 @@ sculk.on('packet', e => {
       finish(0);
     });
   }
-  if (joined && !scheduled && isMove(e) && !e.injected && e.frame) {
+  if (joined && !scheduled && isMove(e) && !e.injected && e.frame.bytes) {
     scheduled = true;
     const move = e;
     sculk.schedule(1000, () => {
@@ -41,12 +41,12 @@ sculk.on('packet', e => {
 });
 
 function injectMove(move) {
-  const frame = sculk.copy(move.frame); // Java byte[]: signed elements, index-assignable
+  const frame = sculk.copy(move.frame.bytes); // Java byte[]: signed elements, index-assignable
   if (frame.length !== 26) {
     sculk.emit({ step: 'client_inject_skipped', reason: 'unexpected move frame length ' + frame.length });
     return;
   }
   frame[8] = frame[8] ^ 1; // least significant byte of x
-  move.connection.inject('outbound', frame);
-  sculk.emit({ step: 'client_injected', type: move.type, hex: sculk.hex(frame), original: sculk.hex(move.frame) });
+  move.conn.inject('outbound', frame);
+  sculk.emit({ step: 'client_injected', type: move.type, hex: sculk.hex(frame), original: sculk.hex(move.frame.bytes) });
 }

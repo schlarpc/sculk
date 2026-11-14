@@ -23,7 +23,10 @@ import sculk.core.log.EventLog;
 import sculk.core.model.ObjectModel;
 import sculk.core.net.Direction;
 import sculk.core.net.SculkConnection;
+import sculk.core.packet.FrameLayer;
+import sculk.core.packet.ModLayer;
 import sculk.core.packet.PacketEvent;
+import sculk.core.packet.PacketLayer;
 import sculk.core.payload.Attribution;
 import sculk.core.payload.PayloadRegistration;
 import sculk.core.payload.PayloadRegistry;
@@ -160,15 +163,12 @@ public final class Sculk {
         connections.add(conn);
         conn.channel().closeFuture().addListener(f -> {
             connections.remove(conn);
-            log(entry("disconnect", Map.of("conn", conn.getId(), "side", conn.side().id())));
+            log(entry("disconnect", Map.of("conn", conn.toJson())));
         });
-        LOG.info("[{}] connection #{} {} active", conn.side(), conn.getId(), conn.getRemoteAddress());
-        Map<String, Object> e = entry("connection", Map.of());
-        e.put("conn", conn.getId());
-        e.put("side", conn.side().id());
-        e.put("remote", String.valueOf(conn.getRemoteAddress()));
-        e.put("pipeline", conn.channel().pipeline().names());
-        log(e);
+        LOG.info("[{}] connection #{} {} active", conn.sideEnum(), conn.getId(), conn.getRemoteAddress());
+        Map<String, Object> c = conn.toJson();
+        c.put("pipeline", conn.channel().pipeline().names());
+        log(entry("connection", Map.of("conn", c)));
         if (registryLogged.compareAndSet(false, true)) logPayloadTypes();
         for (Consumer<SculkConnection> l : connectionListeners) {
             try {
@@ -187,9 +187,7 @@ public final class Sculk {
         } catch (RuntimeException e) {
             info = new PacketInfo("?", "?", packet.getClass().getName(), null, null, null);
         }
-        String owner = ownerOf(packet, info);
-        PacketEvent event =
-                new PacketEvent(sequence.incrementAndGet(), conn, dir, packet, frame, info, owner, injected, codec);
+        PacketEvent event = event(conn, dir, packet, frame, info, codec, injected);
         for (Consumer<PacketEvent> l : packetListeners) {
             try {
                 l.accept(event);
@@ -197,8 +195,24 @@ public final class Sculk {
                 LOG.error("packet listener failed for {}", event, ex);
             }
         }
-        if (logging()) logPacket(event);
+        if (logging()) log(event.toJson(info.isCustomPayload() ? LOG_FRAME_BYTES : 256, TREE_DEPTH), frame);
         return event;
+    }
+
+    private PacketEvent event(SculkConnection conn, Direction dir, Object packet, byte[] frame, PacketInfo info,
+            Object codec, boolean injected) {
+        String modOfClass = packet == null ? null : platform.modOf(packet.getClass());
+        PacketLayer packetLayer = new PacketLayer(packet, info, frame, modOfClass == null ? "minecraft" : modOfClass);
+        FrameLayer frameLayer = new FrameLayer(sequence.incrementAndGet(), dir, frame, info.payloadChannel());
+        ModLayer mod = null;
+        PacketEvent[] self = new PacketEvent[1];
+        if (info.isCustomPayload()) {
+            String channel = info.payloadChannel();
+            mod = new ModLayer(channel, attribution.owner(channel, info.payload()), info.payload(), info.payloadBytes(),
+                    () -> attribution.registeredVia(channel), () -> roundTrip(self[0], info));
+        }
+        self[0] = new PacketEvent(conn, codec, injected, frameLayer, packetLayer, mod);
+        return self[0];
     }
 
     /** Records a packet that sculk injected past the codec, so no codec hook will see it. */
@@ -210,13 +224,12 @@ public final class Sculk {
             LOG.debug("could not complete injected packet record", e);
         }
         if (packet == null) {
+            // Not decodable: only the conn and frame layers are known.
             Map<String, Object> e = entry("packet", Map.of());
-            e.put("conn", conn.getId());
-            e.put("side", conn.side().id());
-            e.put("dir", dir.id());
+            e.put("conn", conn.toJson());
+            e.put("frame", new FrameLayer(sequence.incrementAndGet(), dir, frame, null).toJson(LOG_FRAME_BYTES));
             e.put("injected", true);
-            e.put("len", frame == null ? 0 : frame.length);
-            e.put("hex", Bytes.hex(frame, LOG_FRAME_BYTES));
+            e.put("action", "pass");
             log(e, frame);
             return;
         }
@@ -232,14 +245,6 @@ public final class Sculk {
         } catch (RuntimeException e) {
             return Side.CLIENT;
         }
-    }
-
-    // ---- attribution ----
-
-    private String ownerOf(Object packet, PacketInfo info) {
-        if (info.isCustomPayload()) return attribution.owner(info.payloadChannel(), info.payload());
-        String mod = platform.modOf(packet.getClass());
-        return mod == null ? "minecraft" : mod;
     }
 
     // ---- event log ----
@@ -284,38 +289,6 @@ public final class Sculk {
         }
     }
 
-    private void logPacket(PacketEvent ev) {
-        PacketInfo info = ev.getInfo();
-        Map<String, Object> e = entry("packet", Map.of());
-        e.put("seq", ev.getSequence());
-        e.put("conn", ev.getConnection().getId());
-        e.put("side", ev.getSide());
-        e.put("dir", ev.getDir());
-        e.put("state", info.state());
-        e.put("flow", info.flow());
-        e.put("type", info.type());
-        e.put("class", ev.getPacket().getClass().getName());
-        e.put("owner", ev.getOwner());
-        e.put("injected", ev.isInjected());
-        e.put("action", ev.action().name().toLowerCase());
-        byte[] frame = ev.getFrame();
-        e.put("len", frame == null ? null : frame.length);
-        e.put("packetId", frame == null ? null : Bytes.leadingVarInt(frame));
-        if (info.isCustomPayload()) {
-            e.put("channel", info.payloadChannel());
-            e.put("registeredVia", attribution.registeredVia(info.payloadChannel()));
-            Object payload = info.payload();
-            e.put("payloadClass", payload == null ? null : payload.getClass().getName());
-            e.put("payload", payload == null ? null : ObjectModel.toTree(payload, TREE_DEPTH));
-            e.put("payloadHex", Bytes.hex(info.payloadBytes(), LOG_FRAME_BYTES));
-            e.put("hex", Bytes.hex(frame, LOG_FRAME_BYTES));
-            e.put("roundTrip", roundTrip(ev));
-        } else {
-            e.put("hex", Bytes.hex(frame, 256));
-        }
-        log(e, frame);
-    }
-
     /**
      * Re-serialises a decoded custom payload packet with the game's (and the
      * mod's) codecs and compares it with the bytes on the wire:
@@ -328,14 +301,13 @@ public final class Sculk {
      *       objects would not be sent faithfully.</li>
      * </ul>
      */
-    private String roundTrip(PacketEvent ev) {
-        if (ev.getFrame() == null || ev.getCodec() == null) return "n/a";
+    private String roundTrip(PacketEvent ev, PacketInfo info) {
+        if (ev.frameBytes() == null || ev.codec() == null) return "n/a";
         try {
-            PacketInfo info = ev.getInfo();
-            byte[] again = platform.encode(ev.getPacket(), ev.getCodec());
-            if (!Arrays.equals(again, ev.getFrame())) {
-                Object redecoded = platform.decode(again, ev.getCodec(), ev.getConnection().channel());
-                Object payloadAgain = platform.describe(redecoded, ev.getCodec()).payload();
+            byte[] again = platform.encode(ev.packetObject(), ev.codec());
+            if (!Arrays.equals(again, ev.frameBytes())) {
+                Object redecoded = platform.decode(again, ev.codec(), ev.getConn().channel());
+                Object payloadAgain = platform.describe(redecoded, ev.codec()).payload();
                 if (info.payload() != null
                         && (info.payload().equals(payloadAgain)
                                 || ObjectModel.canonical(info.payload()).equals(ObjectModel.canonical(payloadAgain)))) {
@@ -364,20 +336,20 @@ public final class Sculk {
         for (PayloadRegistration r : PayloadRegistry.all()) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("channel", r.channel());
+            m.put("owner", attribution.owner(r.channel(), null));
+            m.put("registeredVia", attribution.registeredVia(r.channel()));
+            m.put("javaClass", r.messageClass());
+            m.put("codecClass", r.codec() == null ? null : r.codec().getClass().getName());
             m.put("protocol", r.protocol());
             m.put("flow", r.flow());
             m.put("discriminator", r.discriminator());
-            m.put("messageClass", r.messageClass());
-            m.put("codecClass", r.codec() == null ? null : r.codec().getClass().getName());
-            m.put("owner", attribution.owner(r.channel(), null));
-            m.put("registeredVia", attribution.registeredVia(r.channel()));
             out.add(m);
         }
         return out;
     }
 
     private void logPayloadTypes() {
-        for (Map<String, Object> m : payloadTypes()) log(entry("payload_type", m));
+        for (Map<String, Object> m : payloadTypes()) log(entry("payload_type", Map.of("mod", m)));
     }
 
     // ---- scripting ----

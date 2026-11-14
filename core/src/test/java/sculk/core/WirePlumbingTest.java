@@ -29,7 +29,7 @@ class WirePlumbingTest {
     @BeforeEach
     void listen() {
         FakeGame.sculk().addPacketListener(e -> {
-            if (e.getConnection().channel() == channel) {
+            if (e.getConn().channel() == channel) {
                 seen.add(e);
                 behaviour.accept(e);
             }
@@ -47,12 +47,12 @@ class WirePlumbingTest {
         channel.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:sync|hello")));
         assertEquals(new Packet(1, "othermod:sync|hello"), channel.readInbound());
         PacketEvent e = seen.get(0);
-        assertEquals(Direction.INBOUND, e.getDirection());
+        assertEquals(Direction.INBOUND, e.direction());
         assertEquals("othermod:sync", e.getChannel());
         assertEquals("othermod", e.getOwner());
-        assertArrayEquals(FakeGame.frame(1, "othermod:sync|hello"), e.getFrame());
+        assertArrayEquals(FakeGame.frame(1, "othermod:sync|hello"), e.frameBytes());
         assertFalse(e.isInjected());
-        assertEquals(Side.CLIENT, e.getConnection().side());
+        assertEquals(Side.CLIENT, e.getConn().sideEnum());
     }
 
     @Test
@@ -60,7 +60,7 @@ class WirePlumbingTest {
         channel.writeOutbound(new Packet(7, "pos"));
         ByteBuf wire = channel.readOutbound();
         assertArrayEquals(FakeGame.frame(7, "pos"), ByteBufUtil.getBytes(wire));
-        assertArrayEquals(FakeGame.frame(7, "pos"), seen.get(0).getFrame());
+        assertArrayEquals(FakeGame.frame(7, "pos"), seen.get(0).frameBytes());
         assertEquals("minecraft", seen.get(0).getOwner());
     }
 
@@ -111,7 +111,7 @@ class WirePlumbingTest {
         channel.runPendingTasks();
         assertEquals(new Packet(4, "object"), channel.readInbound());
         assertTrue(seen.get(0).isInjected());
-        assertArrayEquals(FakeGame.frame(4, "object"), seen.get(0).getFrame());
+        assertArrayEquals(FakeGame.frame(4, "object"), seen.get(0).frameBytes());
     }
 
     @Test
@@ -119,7 +119,7 @@ class WirePlumbingTest {
         conn().sendFrame(Direction.OUTBOUND, FakeGame.frame(6, "raw"));
         channel.runPendingTasks();
         assertArrayEquals(FakeGame.frame(6, "raw"), ByteBufUtil.getBytes((ByteBuf) channel.readOutbound()));
-        assertEquals(new Packet(6, "raw"), seen.get(0).getPacket());
+        assertEquals(new Packet(6, "raw"), seen.get(0).packetObject());
         assertTrue(seen.get(0).isInjected());
     }
 
@@ -139,6 +139,6 @@ class WirePlumbingTest {
         channel.runPendingTasks();
         assertEquals(new Packet(2, "once"), channel.readInbound());
         assertEquals(2, seen.size());
-        assertNotNull(seen.get(1).getFrame());
+        assertNotNull(seen.get(1).frameBytes());
     }
 }

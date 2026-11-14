@@ -5,12 +5,12 @@
 let replayed = false;
 
 sculk.on('packet', e => {
-  if (replayed || e.dir !== 'outbound' || e.owner !== 'appleskin' || e.injected || !e.frame) return;
+  if (replayed || e.dir !== 'outbound' || e.owner !== 'appleskin' || e.injected || !e.frame.bytes) return;
   replayed = true;
-  const conn = e.connection;
+  const conn = e.conn;
   const event = e;
   sculk.schedule(500, () => {
     conn.replay(event);
-    sculk.emit({ step: 'server_replayed', channel: event.channel, hex: sculk.hex(event.frame) });
+    sculk.emit({ step: 'server_replayed', channel: event.mod.channel, hex: sculk.hex(event.frame.bytes) });
   });
 });

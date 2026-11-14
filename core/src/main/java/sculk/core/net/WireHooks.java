@@ -41,7 +41,7 @@ public final class WireHooks {
             }
             for (int i = outStart; i < out.size(); i++) {
                 PacketEvent event = sculk.onPacket(conn, Direction.INBOUND, out.get(i), frame, decoder, injected);
-                switch (event.action()) {
+                switch (event.outcome()) {
                     case PASS -> {}
                     case DROP -> {
                         out.remove(i);
@@ -71,7 +71,7 @@ public final class WireHooks {
             byte[] frame = new byte[out.writerIndex() - start];
             out.getBytes(start, frame);
             PacketEvent event = sculk.onPacket(conn, Direction.OUTBOUND, packet, frame, encoder, injected);
-            switch (event.action()) {
+            switch (event.outcome()) {
                 case PASS -> {}
                 // An empty write becomes a zero-length frame, which every
                 // supported version's decoder ignores.

@@ -16,8 +16,10 @@ class ScriptApiTest {
     void scriptsCanObserveDropAndEmit() throws Exception {
         FakeGame.sculk().scripts().load("test.js", """
                 sculk.on('packet', e => {
-                  if (e.channel === 'othermod:secret') {
-                    sculk.emit({ saw: e.channel, owner: e.owner, dir: e.dir, len: e.frame.length });
+                  if (e.mod && e.mod.channel === 'othermod:secret') {
+                    sculk.emit({ saw: e.channel, owner: e.owner, dir: e.frame.dir, len: e.frame.bytes.length,
+                                 same: e.len === e.frame.len && e.type === e.packet.type && e.side === e.conn.side && e.side === 'server',
+                                 data: e.mod.data, action: e.action });
                     e.drop();
                   }
                 });
@@ -32,7 +34,8 @@ class ScriptApiTest {
             Thread.sleep(20);
             log = Files.readString(FakeGame.EVENT_LOG);
         }
-        assertTrue(log.contains("{\"saw\":\"othermod:secret\",\"owner\":\"othermod\",\"dir\":\"inbound\",\"len\":19}"), log);
+        assertTrue(log.contains("{\"saw\":\"othermod:secret\",\"owner\":\"othermod\",\"dir\":\"inbound\",\"len\":19,"
+                + "\"same\":true,\"data\":\"pw\",\"action\":\"pass\"}"), log);
         assertTrue(log.contains("\"action\":\"drop\""), log);
     }
 

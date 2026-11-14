@@ -11,19 +11,31 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class EventFilterTest {
+    /** A mod payload packet, shaped as the engine logs it. */
     private static Map<String, Object> packet() {
         Map<String, Object> e = new LinkedHashMap<>();
         e.put("id", 7L);
         e.put("kind", "packet");
-        e.put("dir", "inbound");
-        e.put("owner", "waystones");
-        e.put("type", "minecraft:update_recipes");
-        e.put("len", 1500);
+        e.put("conn", Map.of("id", 1, "side", "client", "remote", "local:1"));
+        e.put("frame", Map.of("seq", 3, "dir", "inbound", "len", 1500, "hex", "0aff"));
+        e.put("packet", Map.of("id", 25, "type", "minecraft:update_recipes", "owner", "minecraft"));
+        e.put("mod", Map.of(
+                "channel", "waystones:sync",
+                "owner", "waystones",
+                "registeredVia", List.of("balm", "waystones"),
+                "data", Map.of("pos", Map.of("x", 12, "y", 64), "name", "../../evil")));
         e.put("injected", false);
-        e.put("channel", null);
-        e.put("registeredVia", List.of("balm", "waystones"));
-        e.put("payload", Map.of("pos", Map.of("x", 12, "y", 64), "name", "../../evil"));
-        e.put("hex", "0aff");
+        e.put("action", "pass");
+        e.put("note", null);
+        return e;
+    }
+
+    /** A vanilla packet: no mod layer. */
+    private static Map<String, Object> vanilla() {
+        Map<String, Object> e = new LinkedHashMap<>();
+        e.put("kind", "packet");
+        e.put("frame", Map.of("dir", "outbound", "len", 9));
+        e.put("packet", Map.of("type", "minecraft:keep_alive", "owner", "minecraft"));
         return e;
     }
 
@@ -59,17 +71,30 @@ class EventFilterTest {
 
     @Test
     void presence() {
-        assertTrue(test("payload"));
-        assertFalse(test("channel"), "null is absent");
+        assertTrue(test("mod"), "a layer name alone asks whether the layer is there");
+        assertFalse(EventFilter.compile("mod").test(vanilla()));
+        assertFalse(test("note"), "null is absent");
         assertFalse(test("injected"), "false is absent");
         assertFalse(test("nosuchfield"));
-        assertTrue(test("channel == null"));
+        assertTrue(test("note == null"));
+    }
+
+    @Test
+    void shorthands() {
+        assertTrue(test("dir == inbound && len == 1500 && side == client"));
+        assertTrue(test("type == minecraft:update_recipes && channel == waystones:sync"));
+        assertTrue(test("owner == waystones"), "owner is the mod layer's when there is one");
+        assertTrue(EventFilter.compile("owner == minecraft && !channel").test(vanilla()), "else the packet's");
+        assertFalse(EventFilter.compile("owner == waystones").test(vanilla()));
+        Map<String, Object> own = new LinkedHashMap<>(vanilla());
+        own.put("dir", "sideways");
+        assertTrue(EventFilter.compile("dir == sideways").test(own), "a real top-level key wins over a shorthand");
     }
 
     @Test
     void containsAndMatches() {
         assertTrue(test("type contains recipes"));
-        assertTrue(test("payload contains \"../\""), "contains on an object searches its JSON");
+        assertTrue(test("mod.data contains \"../\""), "contains on an object searches its JSON");
         assertTrue(test("type matches \"recipe|chat\""));
         assertTrue(test("type ~ '^minecraft:'"));
         assertFalse(test("type matches '^chat'"));
@@ -77,12 +102,12 @@ class EventFilterTest {
 
     @Test
     void dottedPathsAndLists() {
-        assertTrue(test("payload.pos.x == 12"));
-        assertTrue(test("payload.pos.y > 60"));
-        assertTrue(test("registeredVia == waystones"), "a list matches when any element does");
-        assertTrue(test("registeredVia.0 == balm"));
-        assertFalse(test("registeredVia.1 == balm"));
-        assertTrue(test("registeredVia contains waystones"));
+        assertTrue(test("mod.data.pos.x == 12"));
+        assertTrue(test("mod.data.pos.y > 60"));
+        assertTrue(test("mod.registeredVia == waystones"), "a list matches when any element does");
+        assertTrue(test("mod.registeredVia.0 == balm"));
+        assertFalse(test("mod.registeredVia.1 == balm"));
+        assertTrue(test("mod.registeredVia contains waystones"));
     }
 
     @Test

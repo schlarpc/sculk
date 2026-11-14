@@ -210,8 +210,9 @@ Scripts are JavaScript (Rhino, ES6 mode) loaded at startup from
 
 ```js
 sculk.on('packet', e => {
-  // e.side, e.dir, e.state, e.type, e.channel, e.owner, e.payload, e.frame, e.injected
-  if (e.dir === 'inbound' && e.owner === 'somemod') e.drop();
+  // the same fields as logged packet events (below): e.conn, e.frame, e.packet, e.mod, e.injected, e.action
+  if (e.frame.dir === 'inbound' && e.mod && e.mod.owner === 'somemod') e.drop();
+  if (e.channel === 'somemod:sync') sculk.emit(sculk.tree(e.mod.data)); // shorthands work here too
 });
 sculk.on('connection', c => sculk.log('connected as ' + c.side));
 // c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event)
@@ -219,11 +220,46 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 // sculk.with(record, 'field', value), sculk.copy(bytes), sculk.hex(bytes), sculk.unhex(str)
 ```
 
+### Events
+
 `-Dsculk.eventLog=path` writes a JSON Lines log of everything sculk sees:
-`start`, `connection`, `disconnect`, `payload_type`, `packet` (with owner,
-decoded payload tree, frame hex and round-trip result), `script`,
+`start`, `connection`, `disconnect`, `payload_type`, `packet`, `script`,
 `script_error`, `script_reload` and `eval`. Every entry has an `id` that
 goes up by one per entry, and `kind` and `t` (epoch millis).
+
+Packet events are layered, like a Wireshark dissection: each layer is an
+object, and a layer is absent when it does not apply.
+
+```
+injected, action          what sculk did: action is pass, drop or replace
+conn    {id, side, remote}                          the connection
+frame   {seq, dir, len, hex, spans}                 the bytes on the wire
+packet  {id, state, flow, type, javaClass, owner}   the game's packet
+mod     {channel, owner, registeredVia, javaClass,  custom payloads only:
+         roundTrip, data}                           the decoded payload
+```
+
+- `frame.spans` lists where fields sit in the frame, as
+  `{field, off, len}`: `packet.id`, then `mod.channel` and `mod.data` for
+  a custom payload, or `packet.body` for anything else.
+- `packet.owner` is the mod whose class the packet is (usually
+  `minecraft`); `mod.owner` is the mod that owns a payload's channel.
+- `mod.data` is the payload as an object tree; `mod.roundTrip` is `ok`,
+  `equivalent`, `mismatch: ...` or `error: ...` (see Attribution above).
+- `connection` and `disconnect` events carry `conn`; `payload_type` events
+  carry `mod` (with `codecClass`, `protocol`, `flow` and `discriminator`
+  instead of `data` and `roundTrip`).
+
+Scripts get the same tree: a path names the same thing in a filter, in the
+log and in code. Where the log has a serialised copy, scripts get the live
+thing: `e.conn` is the connection (with `inject` and `replay`),
+`e.frame.bytes` the frame, `e.packet.object` the packet and `e.mod.data`
+the payload object.
+
+Shorthands, in filters and in scripts: `dir` (`frame.dir`), `len`
+(`frame.len`), `side` (`conn.side`), `type` (`packet.type`), `channel`
+(`mod.channel`) and `owner` (`mod.owner` if there is a mod layer, else
+`packet.owner`).
 
 ## Control server
 
@@ -262,12 +298,14 @@ Filters are Wireshark-style:
 ```
 kind == packet && dir == inbound && owner != minecraft
 type matches "recipe|chat" and len > 1000
-payload contains "../" or data.step == done
-payload.pos.x >= 100 && registeredVia == balm
+mod.data contains "../" or data.step == done
+mod.data.pos.x >= 100 && mod.registeredVia == balm
+mod && action != pass
 ```
 
 Fields are entry keys, with dots into nested objects and lists (a list
-matches when any element does). Operators are `== != < <= > >=`,
+matches when any element does), plus the shorthands above.
+A layer name alone (`mod`) asks whether the event has that layer. Operators are `== != < <= > >=`,
 `contains` (substring; on objects, of their JSON) and `matches`/`~`
 (regex). A field alone means present and not false. Combine with
 `&& || !` or `and or not`, and parentheses. Unquoted values are numbers,

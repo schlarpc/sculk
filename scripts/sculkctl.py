@@ -19,7 +19,7 @@ are up, pick one with --target, a substring of the file's path such as
 
 FILTER is the event filter language, for example
   'kind == packet && dir == inbound && owner != minecraft'
-  'channel matches "^waystones:" or payload contains "../"'
+  'channel matches "^waystones:" or mod.data contains "../"'
 """
 import argparse
 import json

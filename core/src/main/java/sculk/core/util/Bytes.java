@@ -23,11 +23,24 @@ public final class Bytes {
 
     /** Reads the leading VarInt (the packet id) of a frame, or -1 if malformed. */
     public static int leadingVarInt(byte[] frame) {
+        return varIntLength(frame, 0) < 0 ? -1 : varInt(frame, 0);
+    }
+
+    /** Reads the VarInt at {@code off}; check {@link #varIntLength} first. */
+    public static int varInt(byte[] bytes, int off) {
         int value = 0;
-        for (int i = 0; i < Math.min(5, frame.length); i++) {
-            int b = frame[i];
+        for (int i = 0; i < 5 && off + i < bytes.length; i++) {
+            int b = bytes[off + i];
             value |= (b & 0x7F) << (7 * i);
-            if ((b & 0x80) == 0) return value;
+            if ((b & 0x80) == 0) break;
+        }
+        return value;
+    }
+
+    /** The length in bytes of the VarInt at {@code off}, or -1 if there is no whole one. */
+    public static int varIntLength(byte[] bytes, int off) {
+        for (int i = 0; i < 5 && off + i < bytes.length; i++) {
+            if ((bytes[off + i] & 0x80) == 0) return i + 1;
         }
         return -1;
     }

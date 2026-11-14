@@ -177,8 +177,10 @@ class ControlServerTest {
         assertEquals(3, events.size(), all.body());
         for (JsonObject e : events) {
             assertTrue(e.get("id").getAsLong() > before);
-            assertEquals("inbound", e.get("dir").getAsString());
-            assertEquals("othermod", e.get("owner").getAsString());
+            assertEquals("inbound", e.getAsJsonObject("frame").get("dir").getAsString());
+            assertEquals("othermod", e.getAsJsonObject("mod").get("owner").getAsString());
+            assertEquals("minecraft", e.getAsJsonObject("packet").get("owner").getAsString());
+            assertEquals("server", e.getAsJsonObject("conn").get("side").getAsString());
         }
 
         List<JsonObject> last = lines(get("/events?limit=1&filter=" + enc(filter)).body());
@@ -215,7 +217,7 @@ class ControlServerTest {
         EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|" + body)));
         JsonObject event = lines(get("/events?filter=" + enc("channel contains " + marker)).body()).get(0);
-        assertTrue(event.get("hex").getAsString().length() < 2 * 10_000, "the log entry's hex is cut short");
+        assertTrue(event.getAsJsonObject("frame").get("hex").getAsString().length() < 2 * 10_000, "the log entry's hex is cut short");
 
         JsonObject frame = get("/frame?id=" + event.get("id").getAsLong()).json();
         byte[] expected = FakeGame.frame(1, "othermod:" + marker + "|" + body);
@@ -312,14 +314,14 @@ class ControlServerTest {
             socket.getOutputStream().write(("GET /events/stream?after=0&filter=" + filter + " HTTP/1.1\r\nHost: " + host()
                     + "\r\n" + auth() + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
             InputStream in = socket.getInputStream();
-            String text = readUntil(in, "\"payload\":\"old\"");
+            String text = readUntil(in, "\"data\":\"old\"");
             assertTrue(text.startsWith("HTTP/1.1 200"), text);
             assertTrue(text.contains("text/event-stream"), text);
 
             ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|new")));
-            String more = readUntil(in, "\"payload\":\"new\"");
+            String more = readUntil(in, "\"data\":\"new\"");
             assertTrue(more.contains("\ndata: {\"id\":"), more);
-            assertFalse(more.contains("\"payload\":\"old\""), "backlog events are not sent twice");
+            assertFalse(more.contains("\"data\":\"old\""), "backlog events are not sent twice");
         }
     }
 
@@ -477,7 +479,7 @@ class ControlServerTest {
         later.join();
         List<JsonObject> found = lines(toolText(waited));
         assertEquals(1, found.size(), toolText(waited));
-        assertEquals("late", found.get(0).get("payload").getAsString());
+        assertEquals("late", found.get(0).getAsJsonObject("mod").get("data").getAsString());
         assertTrue(millis < 5000, "returned when the event arrived, not at the timeout: " + millis + "ms");
     }
 

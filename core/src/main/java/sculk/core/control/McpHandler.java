@@ -33,14 +33,21 @@ final class McpHandler {
     private static final String FILTER_HELP = """
             Filter syntax (Wireshark-style; blank matches everything): \
             `kind == packet && dir == inbound && owner != minecraft`, \
-            `type matches "recipe|chat" and len > 1000`, `payload contains "../"`, `payload.pos.x >= 100`. \
+            `packet.type matches "recipe|chat" and len > 1000`, `mod.data contains "../"`, \
+            `mod.data.pos.x >= 100`, `mod && action != pass`. \
             Fields are event keys; dots walk into nested objects and lists (a list matches if any element does). \
             Operators: == != < <= > >= contains matches (~ is matches, a regex found anywhere). \
-            A field alone means present and not false. Combine with && || ! or and/or/not and parentheses. \
+            A field alone means present and not false, so `mod` alone means "is a custom payload". \
+            Combine with && || ! or and/or/not and parentheses. \
             Event kinds: start, connection, disconnect, payload_type, packet, script, script_error, script_reload, eval. \
-            Packet events carry id, seq, conn, side (client/server), dir (inbound/outbound), state, flow, type, \
-            class, owner (mod id), injected, action (pass/drop/replace...), len, packetId, and for custom \
-            payloads channel, registeredVia, payloadClass, payload (decoded tree), payloadHex, hex, roundTrip.""";
+            Packet events are layered: id, kind, t, injected, action (pass/drop/replace); \
+            conn {id, side (client/server), remote}; frame {seq, dir (inbound/outbound), len, hex, spans: \
+            [{field, off, len}] saying which bytes hold packet.id, packet.body, mod.channel, mod.data}; \
+            packet {id, state, flow, type, javaClass, owner}; and for custom payloads only \
+            mod {channel, owner (mod id), registeredVia, javaClass, roundTrip, data (decoded tree)}. \
+            connection and disconnect events have conn; payload_type events have mod. \
+            Shorthands: dir, len, side, type, channel, and owner (mod.owner, else packet.owner).""";
+
 
     private final Sculk engine;
     private final EventStore store;
@@ -145,7 +152,9 @@ final class McpHandler {
                         + "ran. The `sculk` global offers: on('packet'|'connection', fn), connections(), payloadTypes(), "
                         + "emit(obj), log(msg), schedule(ms, fn), tree(obj), with(record, field, value), hex(bytes), "
                         + "unhex(str), copy(bytes). Connections offer inject(dir, bytes), injectPacket(dir, obj), "
-                        + "replay(event). Packet events offer drop(), replaceFrame(bytes), replacePacket(obj). "
+                        + "replay(event). Packet events have the same fields and shorthands as logged events (e.mod.channel, "
+                        + "e.frame.dir, e.owner), plus e.frame.bytes, e.packet.object, e.mod.data as live objects and "
+                        + "e.conn as the live connection, and offer drop(), replaceFrame(bytes), replacePacket(obj). "
                         + "Globals persist between calls until sculk_reload. Returns the value of the last expression.",
                 Map.of("code", prop("string", "JavaScript source.")), List.of("code")));
         out.add(tool("sculk_reload",
