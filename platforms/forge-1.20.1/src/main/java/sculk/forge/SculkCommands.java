@@ -1,7 +1,11 @@
 package sculk.forge;
 
+import java.net.URI;
+import net.minecraft.Util;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.RegisterCommandsEvent;
 import sculk.core.command.SculkCommand;
 
 /**
@@ -17,8 +21,8 @@ final class SculkCommands {
 
     static void register(boolean dedicatedServer) {
         if (dedicatedServer) {
-            net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.event.RegisterCommandsEvent e) -> e.getDispatcher().register(
-                    SculkCommand.tree(s -> s.hasPermission(SculkCommand.OPERATOR_LEVEL), REPLY)));
+            MinecraftForge.EVENT_BUS.addListener((RegisterCommandsEvent e) -> e.getDispatcher().register(
+                    SculkCommand.tree(s -> s.hasPermission(SculkCommand.OPERATOR_LEVEL), REPLY, null)));
         } else {
             Client.register();
         }
@@ -27,7 +31,8 @@ final class SculkCommands {
     /** Separate so that a dedicated server never loads the client event class. */
     private static final class Client {
         static void register() {
-            net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.client.event.RegisterClientCommandsEvent e) -> e.getDispatcher().register(SculkCommand.tree(s -> true, REPLY)));
+            MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.client.event.RegisterClientCommandsEvent e) -> e.getDispatcher().register(
+                    SculkCommand.tree(s -> true, REPLY, url -> Util.getPlatform().openUri(URI.create(url)))));
         }
     }
 }

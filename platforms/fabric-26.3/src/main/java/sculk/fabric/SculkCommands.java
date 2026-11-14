@@ -1,5 +1,7 @@
 package sculk.fabric;
 
+import com.mojang.blaze3d.Blaze3D;
+import java.net.URI;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -19,7 +21,7 @@ final class SculkCommands {
                     (s, m) -> s.sendSuccess(() -> Component.literal(m), false),
                     (s, m) -> s.sendFailure(Component.literal(m)));
             CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> dispatcher.register(
-                    SculkCommand.tree(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS), reply)));
+                    SculkCommand.tree(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS), reply, null)));
         } else {
             Client.register();
         }
@@ -32,7 +34,7 @@ final class SculkCommands {
                     (s, m) -> s.sendFeedback(Component.literal(m)),
                     (s, m) -> s.sendError(Component.literal(m)));
             ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(
-                    SculkCommand.tree(s -> true, reply)));
+                    SculkCommand.tree(s -> true, reply, url -> Blaze3D.openUri(URI.create(url)))));
         }
     }
 }

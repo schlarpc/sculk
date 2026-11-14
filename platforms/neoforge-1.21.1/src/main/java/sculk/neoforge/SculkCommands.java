@@ -1,7 +1,11 @@
 package sculk.neoforge;
 
+import java.net.URI;
+import net.minecraft.Util;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import sculk.core.command.SculkCommand;
 
 /**
@@ -17,8 +21,8 @@ final class SculkCommands {
 
     static void register(boolean dedicatedServer) {
         if (dedicatedServer) {
-            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.RegisterCommandsEvent e) -> e.getDispatcher().register(
-                    SculkCommand.tree(s -> s.hasPermission(SculkCommand.OPERATOR_LEVEL), REPLY)));
+            NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) -> e.getDispatcher().register(
+                    SculkCommand.tree(s -> s.hasPermission(SculkCommand.OPERATOR_LEVEL), REPLY, null)));
         } else {
             Client.register();
         }
@@ -27,7 +31,8 @@ final class SculkCommands {
     /** Separate so that a dedicated server never loads the client event class. */
     private static final class Client {
         static void register() {
-            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.RegisterClientCommandsEvent e) -> e.getDispatcher().register(SculkCommand.tree(s -> true, REPLY)));
+            NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.RegisterClientCommandsEvent e) -> e.getDispatcher().register(
+                    SculkCommand.tree(s -> true, REPLY, url -> Util.getPlatform().openUri(URI.create(url)))));
         }
     }
 }

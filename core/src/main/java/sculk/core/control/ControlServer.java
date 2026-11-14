@@ -199,6 +199,10 @@ public final class ControlServer {
     public String token() { return token; }
     public Path file() { return file; }
     public EventStore store() { return store; }
+    /** The base URL, on 127.0.0.1. */
+    public String url() { return "http://127.0.0.1:" + port; }
+    /** The web UI, signed in: the page takes the token from the fragment and drops it from the address bar. */
+    public String uiUrl() { return url() + "/ui/#token=" + token; }
 
     public void stop() {
         for (HttpServer server : servers) server.stop(0);
@@ -207,8 +211,8 @@ public final class ControlServer {
     /** Writes port and token where only the user can read them. */
     private void writeFile(int port) throws IOException {
         Map<String, Object> info = new LinkedHashMap<>();
-        info.put("url", "http://127.0.0.1:" + port);
-        info.put("mcp", "http://127.0.0.1:" + port + "/mcp");
+        info.put("url", url());
+        info.put("mcp", url() + "/mcp");
         info.put("port", port);
         info.put("token", token);
         info.put("pid", ProcessHandle.current().pid());

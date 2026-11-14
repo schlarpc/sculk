@@ -31,8 +31,8 @@ next.
 
 ## Web UI
 
-`scripts/sculkctl.py ui` opens a web UI onto the running game. Agents get the
-same over MCP.
+`scripts/sculkctl.py ui`, or `/sculk ui` in game, opens a web UI onto the
+running game. Agents get the same over MCP.
 
 ![The events page: filtered mod traffic, a decoded Waystones packet and its bytes, and the JavaScript console](docs/images/events.png)
 
@@ -41,10 +41,18 @@ with Wireshark-style filters. Mod payloads are decoded with the mod's own
 codec, next to the raw bytes. Right-click to replay a packet or drop ones like
 it.
 
-Type `/sculk mark <description>` in game chat to drop a `mark` event into
-the stream at that moment, then find it with the filter `kind == mark`. In a
-game client it is a client command, so it works on any server; a dedicated
-server offers it to operators.
+**In game.** `/sculk` works from chat:
+
+| Command | |
+|---|---|
+| `/sculk mark <description>` | drops a `mark` event into the stream at that moment; find it with `kind == mark` |
+| `/sculk script list` | the installed scripts and their state |
+| `/sculk script run <name>`, `stop <name>` | start or stop one (tab completes the names) |
+| `/sculk script reload` | restart all scripts from disk |
+| `/sculk ui` | open the web UI in your browser, signed in (game clients only) |
+
+In a game client these are client commands, so they work on any server; a
+dedicated server offers them to operators.
 
 ![The scripts page: installed scripts, one open in the editor, and its live output](docs/images/scripts.png)
 

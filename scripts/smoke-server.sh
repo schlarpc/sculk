@@ -59,14 +59,19 @@ if [ -f "$control" ]; then
     [ "$(ctl script run smoke.js)" = 42 ] || { echo "FAIL: script run"; ok=0; }
     [ -n "$(ctl events 'kind == script_log && script == smoke.js && message == "smoke server"')" ] \
         || { echo "FAIL: script_log (or dist) from smoke.js"; ok=0; }
-    ctl script rm smoke.js > /dev/null || { echo "FAIL: script rm"; ok=0; }
-    # /sculk mark, typed at the server console (an operator).
+    # /sculk, typed at the server console (an operator).
+    console_saw() {
+        for _ in $(seq 1 20); do
+            [ -n "$(ctl events "$1")" ] && return 0
+            sleep 0.5
+        done
+        return 1
+    }
     echo 'sculk mark smoke console' >&3
-    for _ in $(seq 1 20); do
-        [ -n "$(ctl events 'kind == mark && text == "smoke console" && by == command')" ] && break
-        sleep 0.5
-    done
-    [ -n "$(ctl events 'kind == mark && text == "smoke console" && by == command')" ] || { echo "FAIL: /sculk mark"; ok=0; }
+    console_saw 'kind == mark && text == "smoke console" && by == command' || { echo "FAIL: /sculk mark"; ok=0; }
+    echo 'sculk script stop smoke.js' >&3
+    console_saw 'kind == script_stop && script == smoke.js && cause == user' || { echo "FAIL: /sculk script stop"; ok=0; }
+    ctl script rm smoke.js > /dev/null || { echo "FAIL: script rm"; ok=0; }
     python3 - "$control" <<'PY' || { echo "FAIL: control server /mcp"; ok=0; }
 import json, sys, urllib.request
 info = json.load(open(sys.argv[1]))
