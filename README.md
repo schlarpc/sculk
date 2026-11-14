@@ -55,6 +55,9 @@ scripts/sculkctl.py mcp-config      # connect an MCP client (e.g. Claude Code) t
 `gradle build` also runs `nix build .#web` for the control server's web UI
 (`web/`); pass `-Psculk.webDir=<dir>` to use a prebuilt one instead.
 
+To work on the web UI without Minecraft, run `web/tools/mock-server.py`: it
+serves the UI from source (rebuilt on reload) against a made-up game.
+
 The first build of each target downloads and decompiles Minecraft and takes a
 few minutes.
 
