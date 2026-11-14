@@ -297,6 +297,33 @@ class EventStoreTest {
     }
 
     @Test
+    void aCancelledMatchScanKeepsOnlyWholeChunks() {
+        List<StoredEvent> all = events(40_000, 9);
+        EventStore store = new EventStore(50_000, 1L << 30);
+        store.matchChunk = 5_000;
+        for (StoredEvent e : all) store.add(e);
+        String filter = "frame.hex contains ab"; // not indexed: the slow kind of scan
+        long[] seen = {0};
+        EventStore.Progress quitting = new EventStore.Progress() {
+            @Override
+            public void tick(long done, long total) {
+                seen[0] = done;
+            }
+
+            @Override
+            public boolean cancelled() {
+                return seen[0] > 17_000; // partway into the fourth chunk
+            }
+        };
+        assertThrows(EventStore.Cancelled.class, () -> store.page(filter, 0, 10, quitting));
+        // Picking up where it stopped: no match counted twice, none missed.
+        List<Long> want = expected(all, filter);
+        Map<String, Object> page = store.page(filter, 0, Integer.MAX_VALUE, EventStore.Progress.NONE);
+        assertEquals((long) want.size(), page.get("total"));
+        assertEquals(want, pageIds(page));
+    }
+
+    @Test
     void scansReportProgressAndStopWhenCancelled() {
         EventStore store = new EventStore(50_000, 1L << 30);
         for (StoredEvent e : events(40_000, 6)) store.add(e);

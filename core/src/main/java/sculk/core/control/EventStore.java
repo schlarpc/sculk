@@ -56,6 +56,8 @@ import sculk.core.Sculk;
 public final class EventStore implements AutoCloseable {
     /** Scans report progress, and check for cancellation, this often. */
     private static final int TICK = 8192;
+    /** Match lists are extended this many ids at a time; see {@link #matches}. Smaller in tests. */
+    long matchChunk = 1 << 18;
     private static final long SEGMENT_BYTES = 64L << 20;
     private final long segmentBytes;
     private static final Gson READ = new GsonBuilder().setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE).create();
@@ -434,14 +436,39 @@ public final class EventStore implements AutoCloseable {
                 m.size -= gone;
                 m.removed += gone;
             }
+            // In chunks, so a scan that is cancelled (the caller went away) keeps what it finished:
+            // a chunk is either wholly in the list, with scannedTo past it, or not at all.
             long from = Math.max(m.scannedTo + 1, first);
-            if (from <= last) {
-                Matches target = m;
-                scan(m.filter, from, last, true, progress, (id, full) -> {
-                    target.add(id);
-                    return true;
-                });
-                m.scannedTo = last;
+            long grand = Math.max(0, last - from + 1), base = 0;
+            Matches target = m;
+            while (from <= last) {
+                if (progress.cancelled()) throw new Cancelled();
+                long to = Math.min(last, from + matchChunk - 1);
+                int sizeBefore = m.size;
+                long offset = base;
+                Progress chunk = new Progress() {
+                    @Override
+                    public void tick(long done, long total) {
+                        progress.tick(offset + done, grand);
+                    }
+
+                    @Override
+                    public boolean cancelled() {
+                        return progress.cancelled();
+                    }
+                };
+                try {
+                    scan(m.filter, from, to, true, chunk, (id, full) -> {
+                        target.add(id);
+                        return true;
+                    });
+                } catch (Cancelled c) {
+                    m.size = sizeBefore;
+                    throw c;
+                }
+                m.scannedTo = to;
+                base += to - from + 1;
+                from = to + 1;
             }
             return m;
         }

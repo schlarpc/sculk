@@ -59,6 +59,7 @@ import sculk.core.util.Bytes;
  *   GET  /events?filter=&amp;after=&amp;before=&amp;limit=   JSON Lines over the whole capture; see {@link EventFilter}
  *   GET  /events/page?filter=&amp;from=&amp;count=   matches by position in the whole capture: {"start","total","from","events"}
  *   GET  /events/position?filter=&amp;id=         the position of the first match at or after an id
+ *                                       (both stream progress, and stop when the caller leaves, given Accept: text/event-stream)
  *   GET  /events/stats?filter=&amp;by=&amp;after=&amp;before=&amp;limit=   counts, bytes, first and last, grouped by a field
  *   GET  /events/stream?filter=&amp;after=      the same as server-sent events, live
  *   GET  /frame?id=                         the whole frame of a packet event
@@ -255,7 +256,8 @@ public final class ControlServer {
                     case "GET /events/position" -> {
                         Long id = longParam(query, "id");
                         if (id == null) throw new IllegalArgumentException("id is required");
-                        json(ex, 200, store.position(query.get("filter"), id, EventStore.Progress.NONE));
+                        EventFilter.analyze(query.get("filter")); // a bad filter is a 400 before any streaming
+                        scanning(ex, progress -> EventLog.toJson(store.position(query.get("filter"), id, progress)));
                     }
                     case "GET /frame" -> frame(ex, query);
                     case "POST /eval" -> json(ex, 200, engine.scripts().evalForRepl(body(ex)));
@@ -387,7 +389,60 @@ public final class ControlServer {
     private void page(HttpExchange ex, Map<String, String> query) throws IOException {
         Long from = longParam(query, "from");
         int count = Math.min(Integer.parseInt(query.getOrDefault("count", "200")), 2000);
-        Map<String, Object> page = store.page(query.get("filter"), from == null ? 0 : from, count, EventStore.Progress.NONE);
+        EventFilter.analyze(query.get("filter")); // a bad filter is a 400 before any streaming
+        scanning(ex, progress -> pageJson(store.page(query.get("filter"), from == null ? 0 : from, count, progress)));
+    }
+
+    /**
+     * Answers with the JSON {@code work} makes. A caller that accepts
+     * text/event-stream gets server-sent events instead: {@code progress}
+     * ({"done":…, "total":…}) while a scan runs, then {@code result}; and the
+     * scan stops if the caller goes away, rather than finishing for nobody.
+     */
+    private void scanning(HttpExchange ex, java.util.function.Function<EventStore.Progress, String> work) throws IOException {
+        String accept = ex.getRequestHeaders().getFirst("Accept");
+        if (accept == null || !accept.contains("text/event-stream")) {
+            send(ex, 200, "application/json", work.apply(EventStore.Progress.NONE) + "\n");
+            return;
+        }
+        ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+        ex.getResponseHeaders().set("Cache-Control", "no-store");
+        ex.sendResponseHeaders(200, 0);
+        OutputStream out = ex.getResponseBody();
+        long started = System.currentTimeMillis();
+        EventStore.Progress progress = new EventStore.Progress() {
+            long next = started + 150;
+            boolean gone;
+
+            @Override
+            public void tick(long done, long total) {
+                long now = System.currentTimeMillis();
+                if (gone || now < next) return;
+                next = now + 200;
+                try {
+                    out.write(("event: progress\ndata: {\"done\":" + done + ",\"total\":" + total + "}\n\n").getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                } catch (IOException e) {
+                    gone = true;
+                }
+            }
+
+            @Override
+            public boolean cancelled() {
+                return gone;
+            }
+        };
+        String result;
+        try {
+            result = work.apply(progress);
+        } catch (EventStore.Cancelled e) {
+            return; // The caller went away.
+        }
+        out.write(("event: result\ndata: " + result + "\n\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+
+    private static String pageJson(Map<String, Object> page) {
         StringBuilder sb = new StringBuilder("{\"start\":").append(page.get("start"))
                 .append(",\"total\":").append(page.get("total"))
                 .append(",\"from\":").append(page.get("from"))
@@ -398,7 +453,7 @@ public final class ControlServer {
             if (i > 0) sb.append(',');
             sb.append(events.get(i).json());
         }
-        send(ex, 200, "application/json", sb.append("]}\n").toString());
+        return sb.append("]}").toString();
     }
 
     private static Long longParam(Map<String, String> query, String key) {

@@ -823,6 +823,28 @@ class ControlServerTest {
     }
 
     @Test
+    void pagesStreamTheirResultWhenAskedTo() throws IOException {
+        Response plain = request("GET", "/events/page?filter=" + enc("kind == packet") + "&from=0&count=3", null, auth());
+        JsonObject want = plain.json();
+        Response streamed = request("GET", "/events/page?filter=" + enc("kind == packet") + "&from=0&count=3", null, auth(),
+                "Accept: text/event-stream");
+        assertTrue(streamed.header("Content-Type").startsWith("text/event-stream"), streamed.head());
+        String result = null;
+        for (String block : streamed.body().split("\n\n")) {
+            if (block.contains("event: result")) result = block.substring(block.indexOf("data: ") + 6);
+        }
+        assertNotNull(result, streamed.body());
+        // The same answer, give or take events that arrived in between.
+        assertEquals(want.get("start"), GSON.fromJson(result, JsonObject.class).get("start"));
+        assertEquals(want.getAsJsonArray("events").get(0), GSON.fromJson(result, JsonObject.class).getAsJsonArray("events").get(0));
+        // A bad filter is still a plain 400.
+        assertEquals(400, request("GET", "/events/page?filter=" + enc("kind =="), null, auth(), "Accept: text/event-stream").status());
+        assertEquals(400, request("GET", "/events/position?id=1&filter=" + enc("(("), null, auth(), "Accept: text/event-stream").status());
+        Response pos = request("GET", "/events/position?id=1&filter=", null, auth(), "Accept: text/event-stream");
+        assertTrue(pos.body().contains("event: result"), pos.body());
+    }
+
+    @Test
     void mcpManagesScripts() throws IOException {
         String name = "mcp-" + System.nanoTime() + ".js";
         JsonObject w = callTool("sculk_script_write", GSON.toJson(java.util.Map.of(
