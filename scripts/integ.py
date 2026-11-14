@@ -183,8 +183,14 @@ def check(server, client):
     apple_bad = [mod(e)["roundTrip"] for e in custom
                  if mod(e).get("owner") == "appleskin" and not str(mod(e)["roundTrip"]).startswith("ok")]
     r.check("appleskin payloads re-encode byte-for-byte", not apple_bad, apple_bad[:3])
-    unsplit = [mod(e)["channel"] for e in custom
-               if [s["field"] for s in e["frame"]["spans"]] != ["packet.id", "mod.channel", "mod.data"]]
+    # A payload with no body (an empty "ack" message) has no mod.data span: the channel ends the frame.
+    def split(e):
+        spans = e["frame"]["spans"]
+        fields = [s["field"] for s in spans]
+        if fields == ["packet.id", "mod.channel", "mod.data"]:
+            return True
+        return fields == ["packet.id", "mod.channel"] and spans[1]["off"] + spans[1]["len"] == e["frame"]["len"]
+    unsplit = [mod(e)["channel"] for e in custom if not split(e)]
     r.check("custom payload frames split into id, channel and data", not unsplit, unsplit[:3])
 
     # Wire integrity: every custom payload frame the client received was sent by the server.
