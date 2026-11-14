@@ -183,7 +183,7 @@ def cmd_script(c, a):
             if state == "running":
                 state += f" ({st.get('listeners', 0)} listeners, {st.get('timers', 0)} timers)"
                 if st.get("rejected"):
-                    state += f"  older version; the file does not compile: {st['rejected'].get('error')}"
+                    state += f"  older version; error: {st['rejected'].get('error')}"
             elif state == "failed":
                 state += f": {st.get('error')}"
             elif state == "stopped" and st.get("why") not in (None, "not-started"):
