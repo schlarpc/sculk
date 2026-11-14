@@ -67,6 +67,16 @@ def rpc(method, params):
 rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}})
 r = rpc("tools/call", {"name": "sculk_events", "arguments": {"filter": "kind == connection", "limit": 1}})
 assert not r["isError"] and '"kind":"connection"' in r["content"][0]["text"], r
+r = rpc("tools/call", {"name": "sculk_stats", "arguments": {"filter": "kind == packet", "by": "type"}})
+stats = json.loads(r["content"][0]["text"])
+assert not r["isError"] and stats["matched"] > 0 and stats["groups"], r
+# The capture: events by position, and their frames read back whole.
+req = lambda path: urllib.request.urlopen(urllib.request.Request(info["url"] + path,
+    headers={"Authorization": "Bearer " + info["token"]}), timeout=10)
+page = json.load(req("/events/page?filter=kind%20%3D%3D%20packet&from=0&count=5"))
+assert page["total"] > 0 and page["events"] and page["events"][0]["kind"] == "packet", page
+status = json.load(req("/status"))
+assert status["capture"]["firstId"] >= 1 and status["capture"].get("diskBytes") is not None, status["capture"]
 PY
     python3 - "$control" <<'PY' || { echo "FAIL: control server web UI"; ok=0; }
 import json, sys, urllib.request
