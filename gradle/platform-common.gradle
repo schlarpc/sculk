@@ -72,3 +72,9 @@ processResources {
         dirPermissions { unix('rwxr-xr-x') }
     }
 }
+
+// runServer reads its console from Gradle's stdin, so commands can be typed
+// into a dev server (scripts/smoke-server.sh types /sculk mark this way).
+tasks.matching { it.name == 'runServer' }.configureEach {
+    if (it instanceof JavaExec) it.standardInput = System.in
+}

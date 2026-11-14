@@ -39,6 +39,11 @@ final class NeoForgePlatform implements Platform {
     }
 
     @Override
+    public void registerCommands() {
+        SculkCommands.register(dedicatedServer());
+    }
+
+    @Override
     public String loader() {
         return "neoforge";
     }

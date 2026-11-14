@@ -362,6 +362,8 @@ button.link:hover { color: var(--glow-hot); background: none; }
 .k-eval .c-kind, .k-eval .c-summary, .k-script_reload .c-summary { color: #ffd27a; }
 .k-payload_type .c-kind, .k-payload_type .c-summary { color: var(--bone-dim); }
 .k-start { color: var(--bone); }
+/* marks dropped with /sculk mark stand out from the packets around them */
+.k-mark .c-kind, .k-mark .c-summary { color: var(--glow-hot); }
 .k-script_error, .k-log_error, .rt-bad .c-summary { color: var(--red); }
 .a-replace .c-dir { color: var(--gold); }
 .a-drop .c-dir { color: var(--red); }

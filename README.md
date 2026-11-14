@@ -41,6 +41,11 @@ with Wireshark-style filters. Mod payloads are decoded with the mod's own
 codec, next to the raw bytes. Right-click to replay a packet or drop ones like
 it.
 
+Type `/sculk mark <description>` in game chat to drop a `mark` event into
+the stream at that moment, then find it with the filter `kind == mark`. In a
+game client it is a client command, so it works on any server; a dedicated
+server offers it to operators.
+
 ![The scripts page: installed scripts, one open in the editor, and its live output](docs/images/scripts.png)
 
 **Scripts.** Write, run and toggle JavaScript in the game, with completions

@@ -139,6 +139,11 @@ public final class Sculk {
         instance = sculk;
         LOG.info("sculk core initialised on {}", platform.describe());
         LOG.info("scripting: {}", ScriptHost.selfTest());
+        try {
+            platform.registerCommands();
+        } catch (RuntimeException | LinkageError e) {
+            LOG.error("cannot register the /sculk command", e);
+        }
         sculk.log(entry("start", Map.of("platform", platform.describe())));
         List<Path> extra = new ArrayList<>();
         String paths = System.getProperty("sculk.scripts");
@@ -292,12 +297,24 @@ public final class Sculk {
     }
 
     /**
+     * Records a {@code mark} event: a note dropped into the event stream, so
+     * a moment in play can be found among the packets later. {@code by} says
+     * where it came from ({@code command} for {@code /sculk mark}). Returns
+     * the event's id, or 0 when nothing records events.
+     */
+    public long mark(String text, String by) {
+        LOG.info("mark: {}", text);
+        return log(entry("mark", Map.of("text", text, "by", by)), null);
+    }
+
+    /**
      * Records an entry, giving it the next {@code id}. {@code frame}, for
      * packets, is the whole frame, kept in memory for the control server
-     * (the entry itself may carry a shortened hex copy).
+     * (the entry itself may carry a shortened hex copy). Returns the entry's
+     * id, or 0 when nothing records events.
      */
-    public void log(Map<String, Object> entry, byte[] frame) {
-        if (!logging()) return;
+    public long log(Map<String, Object> entry, byte[] frame) {
+        if (!logging()) return 0;
         synchronized (logLock) {
             long id = ++lastEventId;
             Map<String, Object> e = new LinkedHashMap<>();
@@ -306,6 +323,7 @@ public final class Sculk {
             String line = EventLog.line(e);
             if (eventLog != null) eventLog.writeLine(line);
             if (eventStore != null) eventStore.add(new StoredEvent(id, e, line, frame == null ? null : frame.clone()));
+            return id;
         }
     }
 

@@ -273,7 +273,8 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 ### Events
 
 `-Dsculk.eventLog=path` writes a JSON Lines log of everything sculk sees:
-`start`, `connection`, `disconnect`, `payload_type`, `packet`, `eval`, and
+`start`, `connection`, `disconnect`, `payload_type`, `packet`, `eval`,
+`mark` (`text`, and `by`: `command` for `/sculk mark`), and
 for scripts `script` (`sculk.emit`), `script_log` (`sculk.log`),
 `script_error`, `script_run`, `script_stop`, `script_file` (created, saved,
 changed, renamed, enabled, disabled, deleted; `by` is `api` or `disk`) and

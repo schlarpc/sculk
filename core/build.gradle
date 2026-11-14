@@ -2,7 +2,7 @@
 //
 // Rules for this module:
 //   * No Minecraft, Mixin, or mod-loader classes. Ever.
-//   * Netty, SLF4J and Gson are compileOnly: every supported Minecraft version
+//   * Netty, SLF4J, Gson and Brigadier are compileOnly: every supported Minecraft version
 //     ships them, so the game provides them at runtime. Pin the oldest version
 //     any target ships so we never compile against newer APIs.
 //   * Bytecode targets Java 17, the oldest JVM any platform runs on (1.20.1).
@@ -17,12 +17,17 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 repositories {
     mavenCentral()
+    exclusiveContent {
+        forRepository { maven { name = 'Mojang'; url = 'https://libraries.minecraft.net' } }
+        filter { includeModule 'com.mojang', 'brigadier' }
+    }
 }
 
 dependencies {
     compileOnlyApi 'io.netty:netty-transport:4.1.97.Final'
     compileOnlyApi 'org.slf4j:slf4j-api:2.0.9'
     compileOnlyApi 'com.google.code.gson:gson:2.10.1'
+    compileOnlyApi 'com.mojang:brigadier:1.1.8'
     // Relocated Rhino (sculk.shaded.org.mozilla); see libs/rhino.
     api project(path: ':libs:rhino', configuration: 'shaded')
 
@@ -32,6 +37,7 @@ dependencies {
     testImplementation 'io.netty:netty-transport:4.1.97.Final'
     testImplementation 'io.netty:netty-codec:4.1.97.Final'
     testImplementation 'com.google.code.gson:gson:2.10.1'
+    testImplementation 'com.mojang:brigadier:1.1.8'
     testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.9'
 }
 

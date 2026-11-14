@@ -198,6 +198,7 @@ public final class ControlServer {
     public boolean ipv6() { return servers.size() > 1; }
     public String token() { return token; }
     public Path file() { return file; }
+    public EventStore store() { return store; }
 
     public void stop() {
         for (HttpServer server : servers) server.stop(0);

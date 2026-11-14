@@ -49,6 +49,11 @@ final class ForgePlatform implements Platform {
     }
 
     @Override
+    public void registerCommands() {
+        SculkCommands.register(dedicatedServer());
+    }
+
+    @Override
     public String loader() {
         return "forge";
     }

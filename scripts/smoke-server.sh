@@ -23,9 +23,13 @@ PROPS
 
 cd "$root"
 rm -f "$control"
-setsid gradle --console=plain -Psculk.control=0 ":platforms:$platform:runServer" > "$log" 2>&1 < /dev/null &
+# The server console reads this pipe, so the test can type commands into it.
+console="$run/smoke.console"
+rm -f "$console"; mkfifo "$console"
+setsid gradle --console=plain -Psculk.control=0 ":platforms:$platform:runServer" > "$log" 2>&1 < "$console" &
 pgid=$!
-trap 'kill -- -"$pgid" 2>/dev/null || true' EXIT
+exec 3> "$console"
+trap 'exec 3>&-; kill -- -"$pgid" 2>/dev/null || true; rm -f "$console"' EXIT
 
 for _ in $(seq 1 180); do
     grep -q 'Done (' "$log" && break
@@ -56,6 +60,13 @@ if [ -f "$control" ]; then
     [ -n "$(ctl events 'kind == script_log && script == smoke.js && message == "smoke server"')" ] \
         || { echo "FAIL: script_log (or dist) from smoke.js"; ok=0; }
     ctl script rm smoke.js > /dev/null || { echo "FAIL: script rm"; ok=0; }
+    # /sculk mark, typed at the server console (an operator).
+    echo 'sculk mark smoke console' >&3
+    for _ in $(seq 1 20); do
+        [ -n "$(ctl events 'kind == mark && text == "smoke console" && by == command')" ] && break
+        sleep 0.5
+    done
+    [ -n "$(ctl events 'kind == mark && text == "smoke console" && by == command')" ] || { echo "FAIL: /sculk mark"; ok=0; }
     python3 - "$control" <<'PY' || { echo "FAIL: control server /mcp"; ok=0; }
 import json, sys, urllib.request
 info = json.load(open(sys.argv[1]))

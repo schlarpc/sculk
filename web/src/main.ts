@@ -110,6 +110,8 @@ function summary(e: SculkEvent): string {
       return e.ok ? `reloaded ${(e.loaded as string[] | undefined)?.join(", ") || "no scripts"}` : `reload failed: ${str(e.errors)}`;
     case "start":
       return str(e.platform);
+    case "mark":
+      return str(e.text);
     default: {
       const { id: _id, kind: _kind, t: _t, ...rest } = e;
       return JSON.stringify(rest);

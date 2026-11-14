@@ -201,6 +201,8 @@ function otherSections(e: SculkEvent): HTMLElement[] {
     }
     case "start":
       return [fieldTable([["game", [["platform", e.platform, "platform"]]]])];
+    case "mark":
+      return [section("Mark", el("pre", "detail-pre", String(e.text ?? ""))), fieldTable([["from", [["by", e.by, "by"]]]])];
     default:
       return [jsonTree(e, 3, "")];
   }

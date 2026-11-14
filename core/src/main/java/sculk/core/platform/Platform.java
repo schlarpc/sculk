@@ -35,6 +35,15 @@ public interface Platform {
         return false;
     }
 
+    /**
+     * Registers the {@code /sculk} command ({@link sculk.core.command.SculkCommand#tree})
+     * with the loader: in a game client as a client command, which works on
+     * any server and never reaches it; in a dedicated server for operators
+     * ({@link sculk.core.command.SculkCommand#OPERATOR_LEVEL}). Called once
+     * from {@code Sculk.init}.
+     */
+    default void registerCommands() {}
+
     /** Describes a packet object seen at (or destined for) {@code codec}. */
     PacketInfo describe(Object packet, Object codec);
 
