@@ -11,9 +11,18 @@ import { shortClass, type Span } from "./event";
  * on hover) rather than a key, {@code $bytes} shows as hex, and an object
  * that could not be read ({@code $string}, {@code $reflectionError}) shows
  * as its string.
+ *
+ * With a {@code path} (the value's field path, such as {@code mod.data}),
+ * each entry is marked with its own path for the context menu: list indices
+ * are left out, since a filter path through a list matches any element.
  */
-export function jsonTree(value: unknown, open = 2, depth = 0): HTMLElement {
+export function jsonTree(value: unknown, open = 2, path: string | null = null, depth = 0, inList = false): HTMLElement {
   if (value === null || typeof value !== "object") return primitive(value);
+  const classLabel = (cls: string) => {
+    const label = classTag(cls);
+    if (path !== null) mark(label, `${path ? path + "." : ""}$class`, cls, inList);
+    return label;
+  };
   if (!Array.isArray(value)) {
     const obj = value as Record<string, unknown>;
     if (typeof obj.$bytes === "string" && Object.keys(obj).length === 1) {
@@ -54,9 +63,12 @@ export function jsonTree(value: unknown, open = 2, depth = 0): HTMLElement {
   );
   details.append(summary);
   const list = el("ul", "j-list");
+  const isArray = Array.isArray(value);
   for (const [k, v] of entries) {
     const li = el("li");
-    li.append(el("span", "j-key", k), el("span", "j-punct", ": "), jsonTree(v, open, depth + 1));
+    const childPath = path === null ? null : isArray ? path : /^[\w$-]+$/.test(k) ? (path ? `${path}.${k}` : k) : null;
+    if (childPath) mark(li, childPath, v, inList || isArray);
+    li.append(el("span", "j-key", k), el("span", "j-punct", ": "), jsonTree(v, open, childPath, depth + 1, inList || isArray));
     list.append(li);
   }
   details.append(list);
@@ -84,10 +96,22 @@ function preview(entries: [string, unknown][], isArray: boolean, budget: number)
   return ` ${parts.join(", ")} `;
 }
 
-function classLabel(cls: string): HTMLElement {
+function classTag(cls: string): HTMLElement {
   const label = el("span", "j-class", shortClass(cls) + " ");
   label.title = cls;
   return label;
+}
+
+/**
+ * Marks an element as standing for a field, for the context menu:
+ * {@code data-path}, the value as JSON when it is a plain value, and
+ * whether the path went through a list.
+ */
+export function mark(node: HTMLElement, path: string, value: unknown, inList = false): void {
+  node.dataset.path = path;
+  if (value === null || typeof value !== "object") node.dataset.value = JSON.stringify(value ?? null);
+  else delete node.dataset.value;
+  if (inList) node.dataset.inList = "";
 }
 
 function primitive(value: unknown): HTMLElement {
@@ -100,6 +124,9 @@ function primitive(value: unknown): HTMLElement {
 
 const HEX_LIMIT = 16 * 1024;
 
+/** The bytes behind each hex dump, for the context menu. */
+export const frameOf = new WeakMap<HTMLElement, Uint8Array>();
+
 /** A short CSS-safe name for a span's field, for its colour: mod.channel → mod-channel. */
 export const spanClass = (span: Span) => `sp-${span.field.replace(/[^a-z0-9]+/gi, "-")}`;
 
@@ -110,6 +137,7 @@ export const spanClass = (span: Span) => `sp-${span.field.replace(/[^a-z0-9]+/gi
  */
 export function hexDump(bytes: Uint8Array, spans: Span[] = []): HTMLElement {
   const root = el("div", "hexdump");
+  frameOf.set(root, bytes);
   const shown = Math.min(bytes.length, HEX_LIMIT);
   const spanAt: (Span | undefined)[] = new Array(shown);
   for (const s of spans) for (let i = s.off; i < Math.min(s.off + s.len, shown); i++) spanAt[i] = s;

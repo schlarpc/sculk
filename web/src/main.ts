@@ -3,8 +3,12 @@ import { byId, el, store } from "./dom";
 import { installTextures } from "./textures";
 import { conn, field, frame, mod, roundTripBad } from "./event";
 import { inspect } from "./inspector";
+import { menuOpen, onMenuClose, showMenu, type MenuItem } from "./menu";
+import { frameOf } from "./views";
 
 const MAX_ROWS = 5000;
+/** How many events either side of one "Show in context" loads. */
+const CONTEXT = 150;
 const BACKLOG = 500;
 const TOKEN_KEY = "sculk.token";
 
@@ -113,6 +117,40 @@ function filterValue(v: unknown): string {
   return JSON.stringify(str(v));
 }
 
+/** Wraps a filter in parentheses when it has a top-level-looking "or", so "&& x" binds to all of it. */
+function grouped(filter: string): string {
+  return /\|\||\bor\b/.test(filter) ? `(${filter})` : filter;
+}
+
+const hexOf = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+/** A JavaScript string literal. */
+const js = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+
+async function copy(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(text.length > 80 ? `copied ${text.length.toLocaleString()} characters` : `copied ${text}`);
+  } catch {
+    toast("the browser refused clipboard access");
+  }
+}
+
+let toastTimer = 0;
+function toast(text: string): void {
+  let t = document.getElementById("toast");
+  if (!t) {
+    t = el("div", "toast");
+    t.id = "toast";
+    t.setAttribute("role", "status");
+    document.body.append(t);
+  }
+  t.textContent = text;
+  t.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => t?.classList.remove("on"), 2200);
+}
+
 // ---- the app ----
 
 class App {
@@ -142,6 +180,9 @@ class App {
     this.wireFilter();
     this.wireTable();
     this.wireRepl();
+    this.wireMenu();
+    // Rows that arrived while a menu was open are drawn when it closes.
+    onMenuClose(() => this.flush());
     byId<HTMLButtonElement>("reload").onclick = () => void this.reload();
     this.filter.value = store.get("sculk.filter") ?? "";
     void this.applyFilter();
@@ -321,7 +362,8 @@ class App {
 
   private add(e: SculkEvent): void {
     this.pending.push(e);
-    if (!this.flushQueued && !this.paused) {
+    // While a context menu is open, hold new rows so the table does not move under it.
+    if (!this.flushQueued && !this.paused && !menuOpen()) {
       this.flushQueued = true;
       requestAnimationFrame(() => this.flush());
     }
@@ -330,7 +372,7 @@ class App {
 
   private flush(): void {
     this.flushQueued = false;
-    if (this.paused || !this.pending.length) return;
+    if (this.paused || menuOpen() || !this.pending.length) return;
     const atBottom = this.wrap.scrollTop + this.wrap.clientHeight >= this.wrap.scrollHeight - 40;
     const batch = this.pending.slice(-MAX_ROWS);
     this.pending = [];
@@ -395,7 +437,7 @@ class App {
         if (text) td.title = text;
       }
       if (cls === "c-dir" && dirTitle) td.title = dirTitle;
-      if (field) td.dataset.field = field;
+      if (field) td.dataset.field = td.dataset.path = field;
       tr.append(td);
     }
     return tr;
@@ -426,6 +468,176 @@ class App {
     if (!e) return;
 
     inspect(this.detail, e, time(e.t), (frameId) => this.guard(() => this.api.frame(frameId)), () => this.selected === id);
+  }
+
+  // ---- context menu ----
+
+  private wireMenu(): void {
+    document.addEventListener("contextmenu", (ev) => {
+      const target = ev.target as HTMLElement;
+      let row = target.closest<HTMLTableRowElement>("#rows tr");
+      // The Menu key or Shift+F10 on the table opens the menu for the selected row.
+      const keyboard = !row && target === this.wrap && this.selected !== null;
+      if (keyboard) row = this.rowById.get(this.selected as number) ?? null;
+      if (!row && !this.detail.contains(target)) return; // the browser's own menu elsewhere
+      const id = row ? Number(row.dataset.id) : this.selected;
+      const event = id === null ? undefined : this.events.get(id);
+      if (!event) return;
+      ev.preventDefault();
+      if (row && event.id !== this.selected) this.select(event.id);
+      let x = ev.clientX, y = ev.clientY;
+      let at: HTMLElement = target;
+      if (keyboard && row) {
+        const r = row.getBoundingClientRect();
+        x = r.left + 80;
+        y = r.bottom;
+        at = row.querySelector<HTMLElement>(".c-summary") ?? row;
+      }
+      showMenu(x, y, this.menuItems(event, at), "Shift+click: edit the filter before it runs");
+    });
+  }
+
+  private menuItems(e: SculkEvent, target: HTMLElement): MenuItem[] {
+    const items: MenuItem[] = [];
+    const fieldEl = target.closest<HTMLElement>("[data-path]");
+    const path = fieldEl?.dataset.path;
+    if (fieldEl && path) {
+      const value = fieldEl.dataset.value !== undefined ? (JSON.parse(fieldEl.dataset.value) as unknown) : field(e, path);
+      if (value !== undefined) items.push(...this.filterItems(path, value, fieldEl.dataset.inList !== undefined), "separator");
+    }
+
+    const hex = target.closest<HTMLElement>(".hexdump");
+    const bytes = hex ? frameOf.get(hex) : undefined;
+    const spanField = hex ? target.closest<HTMLElement>("[data-field]")?.dataset.field : undefined;
+    if (bytes && spanField) {
+      const span = frame(e)?.spans?.find((s) => s.field === spanField);
+      if (span) {
+        const part = bytes.slice(span.off, span.off + span.len);
+        items.push(
+          { heading: `${spanField} · ${span.len} bytes` },
+          { label: "Copy as hex", run: () => void copy(hexOf(part)) },
+          { label: "Copy as sculk.unhex(…)", run: () => void copy(`sculk.unhex(${js(hexOf(part))})`) },
+          "separator",
+        );
+      }
+    }
+
+    items.push({ heading: `#${e.id} · ${e.kind}` });
+    items.push({ label: "Show in context", hint: "clear the filter", run: () => void this.showInContext(e.id) });
+    const f = frame(e);
+    if (e.kind === "packet" && typeof f?.len === "number" && f.len > 0) {
+      items.push(
+        { label: "Replay…", hint: "in the console", run: () => void this.prefillReplay(e) },
+        { label: "Drop packets like this…", hint: "in the console", run: () => this.prefillDrop(e) },
+        { label: "Copy frame as hex", run: () => void this.withFrame(e, (b) => copy(hexOf(b))) },
+        { label: "Copy frame as sculk.unhex(…)", run: () => void this.withFrame(e, (b) => copy(`sculk.unhex(${js(hexOf(b))})`)) },
+      );
+    }
+    return items;
+  }
+
+  /** Filter actions for one field: {@code inList} when its path goes through a list (any element matches). */
+  private filterItems(path: string, value: unknown, inList: boolean): MenuItem[] {
+    let is: string, isNot: string;
+    if (value !== null && typeof value === "object") {
+      // An object or list: whether it is there at all.
+      is = path;
+      isNot = `!${path}`;
+    } else {
+      is = `${path} == ${filterValue(value)}`;
+      isNot = inList ? `!(${is})` : `${path} != ${filterValue(value)}`;
+    }
+    const current = () => this.filter.value.trim();
+    const apply = (next: string, prepare: boolean) => {
+      this.filter.value = next;
+      if (prepare) {
+        this.filter.focus();
+        this.filter.setSelectionRange(next.length, next.length);
+      } else void this.applyFilter();
+    };
+    return [
+      { heading: is.length > 70 ? is.slice(0, 69) + "…" : is },
+      { label: "Filter on this", run: (ev) => apply(is, ev.shiftKey) },
+      { label: "Narrow", hint: "… && this", run: (ev) => apply(current() ? `${grouped(current())} && ${is}` : is, ev.shiftKey) },
+      { label: "Exclude", hint: "… && not this", run: (ev) => apply(current() ? `${grouped(current())} && ${isNot}` : isNot, ev.shiftKey) },
+      { label: "Widen", hint: "… || this", run: (ev) => apply(current() ? `${current()} || ${is}` : is, ev.shiftKey) },
+      "separator",
+      { label: "Copy value", run: () => void copy(typeof value === "string" ? value : JSON.stringify(value)) },
+      { label: "Copy path", run: () => void copy(path) },
+      { label: "Copy as filter", run: () => void copy(is) },
+    ];
+  }
+
+  private async withFrame(e: SculkEvent, use: (bytes: Uint8Array) => unknown): Promise<void> {
+    try {
+      const bytes = await this.guard(() => this.api.frame(e.id));
+      if (bytes) await use(bytes);
+      else if (bytes === null) toast("the game no longer holds this frame");
+    } catch (err) {
+      toast((err as Error).message);
+    }
+  }
+
+  private async prefillReplay(e: SculkEvent): Promise<void> {
+    const dir = String(field(e, "dir"));
+    const id = conn(e)?.id;
+    const name = String(field(e, "channel") ?? field(e, "type") ?? "?");
+    await this.withFrame(e, (bytes) =>
+      this.prefillRepl(
+        `// Replay #${e.id} (${name}): send its frame again, ${dir}, on connection #${id}.\n` +
+          `sculk.connection(${id}).inject(${js(dir)}, sculk.unhex(${js(hexOf(bytes))}))`,
+      ),
+    );
+  }
+
+  private prefillDrop(e: SculkEvent): void {
+    const dir = String(field(e, "dir"));
+    const channel = field(e, "channel");
+    const test = channel ? `e.channel === ${js(String(channel))}` : `e.type === ${js(String(field(e, "type")))}`;
+    this.prefillRepl(
+      `// Drop ${dir} ${String(channel ?? field(e, "type"))} packets, until scripts are reloaded.\n` +
+        `sculk.on('packet', e => {\n  if (e.dir === ${js(dir)} && ${test}) e.drop();\n});`,
+    );
+  }
+
+  private prefillRepl(code: string): void {
+    const input = byId<HTMLTextAreaElement>("repl-input");
+    input.value = code;
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+    input.setSelectionRange(code.length, code.length);
+    toast("in the console: check it, then press Enter to run it");
+  }
+
+  /** Clears the filter and shows the events around {@code id}, holding live ones back until Resume. */
+  private async showInContext(id: number): Promise<void> {
+    this.filter.value = "";
+    store.set("sculk.filter", "");
+    this.stream?.abort();
+    const controller = new AbortController();
+    this.stream = controller;
+    this.setLive(false);
+    let around: SculkEvent[] | undefined;
+    try {
+      around = await this.guard(() => this.api.events("", CONTEXT * 2 + 1, Math.max(0, id - CONTEXT - 1)));
+    } catch (err) {
+      toast((err as Error).message);
+      return;
+    }
+    if (!around || controller.signal.aborted) return;
+    this.filterError.hidden = true;
+    this.filter.classList.remove("invalid");
+    this.setPaused(false);
+    this.clearRows();
+    for (const ev of around) this.add(ev);
+    this.flush();
+    const last = around[around.length - 1];
+    if (last) this.lastId = last.id;
+    this.setPaused(true);
+    this.select(id);
+    this.rowById.get(id)?.scrollIntoView({ block: "center" });
+    if (!this.rowById.has(id)) toast("the game no longer holds that event");
+    void this.follow("", controller.signal);
   }
 
   // ---- repl and reload ----

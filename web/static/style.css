@@ -481,6 +481,77 @@ input.invalid { border-color: var(--red); }
 .repl-in .prompt { padding-top: 6px; }
 .repl-in textarea { flex: 1; resize: none; }
 
+/* ---- context menu and toast ---- */
+
+.menu {
+  position: fixed;
+  z-index: 10;
+  min-width: 260px;
+  max-width: min(520px, calc(100vw - 8px));
+  padding: 4px;
+  font-size: 12px;
+  background-color: var(--sculk-900);
+  background-image: var(--tex-panel);
+  background-size: var(--tex-size);
+  border: 2px solid #000;
+  box-shadow: inset 2px 2px 0 var(--sculk-600), inset -2px -2px 0 var(--void), 4px 4px 0 rgba(0, 0, 0, 0.6);
+}
+.menu-heading {
+  padding: 4px 8px 2px;
+  color: var(--glow-mid);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 2px 8px;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  box-shadow: none;
+  border: 0;
+}
+.menu-item:hover, .menu-item:focus-visible {
+  outline: none;
+  color: var(--glow-hot);
+  background: var(--glow-low);
+  box-shadow: none;
+}
+.menu-item:disabled { color: var(--text-faint); }
+.menu-hint { color: var(--text-faint); }
+.menu-item:hover .menu-hint, .menu-item:focus-visible .menu-hint { color: var(--glow-mid); }
+.menu-sep { height: 2px; margin: 4px 2px; background: var(--sculk-700); }
+.menu-foot { padding: 4px 8px 2px; color: var(--text-faint); border-top: 2px solid var(--sculk-700); margin-top: 4px; }
+
+.toast {
+  position: fixed;
+  z-index: 11;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--glow-hot);
+  background: var(--sculk-900);
+  border: 2px solid var(--glow-mid);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+.toast.on { opacity: 1; }
+
+/* the inspector's fields can be right-clicked */
+.detail-body [data-path] { cursor: context-menu; }
+.kv-key[data-path] { cursor: help; }
+
 /* ---- login ---- */
 
 .login { color: var(--text); max-width: 34rem; padding: 18px; }

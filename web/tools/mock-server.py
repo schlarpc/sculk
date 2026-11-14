@@ -490,6 +490,7 @@ class Game:
         self.seq = 0
         self.mods = [m for m in mod_payloads() if m[5] > 0]
         self.lock = threading.Lock()
+        self.drops = []  # (dir, field, value) from sculk.on('packet', ...) drop snippets
 
     # -- events
 
@@ -535,6 +536,8 @@ class Game:
 
     def packet_event(self, cid, d, state, t, frame, cls, owner="minecraft", channel=None, injected=False, action="pass", mod=None):
         """A packet event shaped as Sculk.java logs it (see PacketEvent.toJson)."""
+        if any(d == rd and (channel if rf == "channel" else t) == rv for rd, rf, rv in self.drops):
+            action = "drop"
         self.seq += 1
         e = {
             "conn": self.conn_layer(cid),
@@ -619,8 +622,32 @@ class Game:
     # -- the toy REPL
 
     def eval(self, code):
-        src = code.strip().rstrip(";")
         self.store.add("eval", {"source": code[:4096] + ("..." if len(code) > 4096 else "")})
+        src = re.sub(r"^\s*//.*$", "", code, flags=re.M).strip().rstrip(";")
+        # The web UI's "Replay…" snippet: inject a frame again.
+        m = re.fullmatch(r"sculk\.connection\((\d+)\)\.inject\('(\w+)', sculk\.unhex\('([0-9a-f]*)'\)\)", src)
+        if m:
+            cid, d, h = int(m.group(1)), m.group(2), m.group(3)
+            if not any(c == cid for c, _ in self.open):
+                return {"ok": False, "error": "TypeError: Cannot call method \"inject\" of null (repl:1)"}
+            original = next((e for e in reversed(self.store.events) if e[3] is not None and e[3].hex() == h), None)
+            if original is None:
+                return {"ok": False, "error": "mock backend: replay only knows frames it made"}
+            e = json.loads(original[2])
+            for k in ("id", "kind", "t"):
+                e.pop(k)
+            self.seq += 1
+            e["frame"]["seq"] = self.seq
+            e["frame"]["dir"] = d
+            e["injected"] = True
+            e["action"] = "pass"
+            self.store.add("packet", e, original[3])
+            return {"ok": True, "result": None}
+        # The web UI's "Drop packets like this…" snippet.
+        m = re.fullmatch(r"sculk\.on\('packet', e => \{\s*if \(e\.dir === '(\w+)' && e\.(channel|type) === '([^']+)'\) e\.drop\(\);\s*\}\)", src)
+        if m:
+            self.drops.append((m.group(1), m.group(2), m.group(3)))
+            return {"ok": True, "result": None}
         m = re.fullmatch(r"mock\.(\w+)\((.*)\)", src, re.S)
         if m:
             name, arg = m.group(1), m.group(2).strip()
@@ -670,6 +697,7 @@ class Game:
                                       "(mock backend: try sculk.connections(), sculk.log(\"hi\"), 1+2, mock.burst(500))"}
 
     def reload(self):
+        self.drops.clear()
         ok = random.random() < 0.8
         result = {"ok": ok, "loaded": SCRIPTS if ok else SCRIPTS[:1],
                   "errors": [] if ok else [{"script": SCRIPTS[1], "error": "SyntaxError: missing ; before statement (fuzz-backpacks.js#17)"}]}

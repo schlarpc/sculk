@@ -215,7 +215,7 @@ sculk.on('packet', e => {
   if (e.channel === 'somemod:sync') sculk.emit(sculk.tree(e.mod.data)); // shorthands work here too
 });
 sculk.on('connection', c => sculk.log('connected as ' + c.side));
-// c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event)
+// c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event); sculk.connection(id) finds one
 // sculk.emit(obj), sculk.schedule(ms, fn), sculk.payloadTypes(), sculk.tree(obj),
 // sculk.with(record, 'field', value), sculk.copy(bytes), sculk.hex(bytes), sculk.unhex(str)
 ```
@@ -338,7 +338,12 @@ double-click a cell to narrow the filter), an inspector, and a REPL with
 history. The inspector leads with what matters for the event's kind: for a
 packet, a summary line, the decoded payload with its round trip, the whole
 frame as a hex dump tinted by `frame.spans`, then the layers as a table
-(each label's tooltip is its filter path) and the raw event. Static files are the only thing
+(each label's tooltip is its filter path) and the raw event. Right-click any
+field, in the table or the inspector (including a payload tree's leaves),
+to filter on it, narrow, exclude or widen the filter, or copy it; a packet
+also offers "show in context" (clears the filter and scrolls to it), and
+replaying it or dropping packets like it, which put a script in the REPL to
+check and run rather than acting directly. Static files are the only thing
 served without the token. They are sent with a strict CSP (`script-src
 'self'`, no inline code, `frame-ancestors 'none'`), and the Host and Origin
 checks still apply.

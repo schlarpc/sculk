@@ -43,9 +43,12 @@ function fieldTable(groups: [string, Row[]][]): HTMLElement {
     if (!present.length) continue;
     table.append(el("div", "kv-group", group));
     for (const [label, value, path] of present) {
+      const full = path ?? `${group}.${label}`;
       const k = el("div", "kv-key", label);
-      k.title = path ?? `${group}.${label}`;
+      k.title = full;
       const v = el("div", "kv-val");
+      // The menu reads the raw value from the event: the cell may show it formatted.
+      k.dataset.path = v.dataset.path = full;
       if (value instanceof HTMLElement) v.append(value);
       else v.textContent = Array.isArray(value) ? value.join(" → ") : String(value);
       table.append(k, v);
@@ -54,16 +57,18 @@ function fieldTable(groups: [string, Row[]][]): HTMLElement {
   return table;
 }
 
-function badge(text: string, cls: string, title?: string): HTMLElement {
+/** A badge; {@code path} is the field it shows, for its tooltip and the context menu. */
+function badge(text: string, cls: string, path?: string, title?: string): HTMLElement {
   const b = el("span", `badge ${cls}`, text);
-  if (title) b.title = title;
+  if (path) b.dataset.path = path;
+  if (title ?? path) b.title = (title ?? path) as string;
   return b;
 }
 
 function roundTripBadge(rt: string): HTMLElement {
   const word = rt.split(/[: ]/)[0] ?? rt;
   const cls = roundTripBad(rt) ? "b-bad" : word === "ok" ? "b-ok" : "b-meh";
-  return badge(`round trip: ${word}`, cls, rt);
+  return badge(`round trip: ${word}`, cls, "mod.roundTrip", rt);
 }
 
 function classTag(cls: string | null | undefined): HTMLElement | null {
@@ -76,28 +81,35 @@ function classTag(cls: string | null | undefined): HTMLElement | null {
 function header(e: SculkEvent, time: string): HTMLElement {
   const head = el("div", "detail-head");
   const top = el("div", "detail-top");
-  top.append(el("span", "detail-kind", e.kind), el("span", "detail-id", `#${e.id} · ${time}`));
+  const kind = el("span", "detail-kind", e.kind);
+  kind.dataset.path = "kind";
+  top.append(kind, el("span", "detail-id", `#${e.id} · ${time}`));
   head.append(top);
   if (e.kind !== "packet") return head;
 
   const dir = field(e, "dir");
   const line = el("div", "detail-line");
   const arrow = dir === "inbound" ? "◀ in" : dir === "outbound" ? "▶ out" : "";
-  if (arrow) line.append(el("span", `detail-dir d-${String(dir)}`, arrow));
-  const name = String(field(e, "channel") ?? field(e, "type") ?? "?");
-  line.append(el("span", "detail-name", name));
+  if (arrow) {
+    const d = el("span", `detail-dir d-${String(dir)}`, arrow);
+    d.dataset.path = "dir";
+    line.append(d);
+  }
+  const name = el("span", "detail-name", String(field(e, "channel") ?? field(e, "type") ?? "?"));
+  name.dataset.path = mod(e) ? "channel" : "type";
+  line.append(name);
   head.append(line);
 
   const badges = el("div", "detail-badges");
   const owner = field(e, "owner");
-  if (owner) badges.append(badge(String(owner), "b-owner", mod(e) ? "mod.owner" : "packet.owner"));
+  if (owner) badges.append(badge(String(owner), "b-owner", "owner", mod(e) ? "mod.owner" : "packet.owner"));
   const len = frame(e)?.len;
-  if (typeof len === "number") badges.append(badge(`${len} B`, "b-plain", "frame.len"));
+  if (typeof len === "number") badges.append(badge(`${len} B`, "b-plain", "len", "frame.len"));
   const state = packet(e)?.state;
   if (state && state !== "play") badges.append(badge(state, "b-plain", "packet.state"));
-  if (e.injected) badges.append(badge("✦ injected", "b-inj", "sent by a script, not the game"));
-  if (e.action === "drop") badges.append(badge("✕ dropped", "b-bad", "a script dropped it"));
-  if (e.action === "replace") badges.append(badge("↻ replaced", "b-meh", "a script replaced it"));
+  if (e.injected) badges.append(badge("✦ injected", "b-inj", "injected", "sent by a script, not the game"));
+  if (e.action === "drop") badges.append(badge("✕ dropped", "b-bad", "action", "a script dropped it"));
+  if (e.action === "replace") badges.append(badge("↻ replaced", "b-meh", "action", "a script replaced it"));
   const rt = mod(e)?.roundTrip;
   if (rt) badges.append(roundTripBadge(rt));
   head.append(badges);
@@ -112,10 +124,13 @@ function packetSections(e: SculkEvent, loadFrame: FrameLoader, stillShown: () =>
     const title = el("span");
     title.append("Payload ");
     const tag = classTag(m.javaClass);
-    if (tag) title.append(tag);
+    if (tag) {
+      tag.dataset.path = "mod.javaClass";
+      title.append(tag);
+    }
     const body = m.data === undefined || m.data === null
       ? el("p", "hint", "not decoded: no codec for this channel on this side")
-      : jsonTree(m.data, 4);
+      : jsonTree(m.data, 4, "mod.data");
     const rt = m.roundTrip && roundTripBad(m.roundTrip) ? el("p", "error detail-rt", m.roundTrip) : null;
     out.push(section(title, rt, body));
   }
@@ -153,7 +168,7 @@ function packetSections(e: SculkEvent, loadFrame: FrameLoader, stillShown: () =>
 function otherSections(e: SculkEvent): HTMLElement[] {
   switch (e.kind) {
     case "script":
-      return [section("Data", jsonTree(e.data, 4))];
+      return [section("Data", jsonTree(e.data, 4, "data"))];
     case "script_error":
       return [
         section("Error", el("pre", "error detail-pre", String(e.error ?? ""))),
@@ -187,7 +202,7 @@ function otherSections(e: SculkEvent): HTMLElement[] {
     case "start":
       return [fieldTable([["game", [["platform", e.platform, "platform"]]]])];
     default:
-      return [jsonTree(e, 3)];
+      return [jsonTree(e, 3, "")];
   }
 }
 
@@ -195,5 +210,5 @@ function otherSections(e: SculkEvent): HTMLElement[] {
 export function inspect(container: HTMLElement, e: SculkEvent, time: string, loadFrame: FrameLoader,
     stillShown: () => boolean): void {
   const body = e.kind === "packet" ? packetSections(e, loadFrame, stillShown) : otherSections(e);
-  container.replaceChildren(header(e, time), ...body, foldable("Raw event", false, jsonTree(e, 1)));
+  container.replaceChildren(header(e, time), ...body, foldable("Raw event", false, jsonTree(e, 1, "")));
 }
