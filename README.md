@@ -31,32 +31,21 @@ next.
 
 ## Web UI
 
-The control server (`-Dsculk.control=PORT`) serves a web UI on localhost;
-`scripts/sculkctl.py ui` opens it, signed in. The same powers are there for
-agents over MCP.
+`scripts/sculkctl.py ui` opens a web UI onto the running game. Agents get the
+same over MCP.
 
-![The events page: a Wireshark-style filter over mod payloads, a decoded Waystones teleport packet in the inspector with its frame bytes, and the JavaScript console](docs/images/events.png)
+![The events page: filtered mod traffic, a decoded Waystones packet and its bytes, and the JavaScript console](docs/images/events.png)
 
-**Events.** Every event of the session is captured (to a temporary
-directory, 2 GiB by default) and the table scrolls through all of it, live.
-Filters are Wireshark-style (`kind == packet && owner != minecraft`,
-`mod.data contains "../"`); double-click or right-click a cell to narrow on
-it. The inspector shows a payload decoded by its mod's own codec, the frame
-with each field's bytes marked, and whether re-encoding gives the same bytes.
-Right-click to replay a packet or drop ones like it. The console runs
-JavaScript in the game.
+**Events.** Watch every packet live or scroll back through the whole session,
+with Wireshark-style filters. Mod payloads are decoded with the mod's own
+codec, next to the raw bytes. Right-click to replay a packet or drop ones like
+it.
 
-![The scripts page: installed scripts with their state and enable switches, a script open in the editor with API completions, and its live output](docs/images/scripts.png)
+![The scripts page: installed scripts, one open in the editor, and its live output](docs/images/scripts.png)
 
-**Scripts.** Scripts live in the game's `config/sculk/scripts/`, so a
-modpack can ship them. Each runs in its own scope and owns its listeners and
-timers, so it starts, stops and restarts alone; a `// ==Sculk==` header
-names it and says whether it runs at startup or only when asked. The editor
-checks syntax with the game's own JavaScript engine and completes the
-`sculk` API; below it, the script's log, emits and errors stream live.
-
-(These screenshots are of `web/tools/mock-server.py`, which plays a made-up
-modded game for working on the UI.)
+**Scripts.** Write, run and toggle JavaScript in the game, with completions
+and live output. Scripts sit in `config/sculk/scripts/`, so a modpack can
+ship them.
 
 ## Development
 
