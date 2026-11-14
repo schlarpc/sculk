@@ -13,7 +13,7 @@ test("status: running, idle, older version, failed, stopped", () => {
   assert.equal(statusView(info(running({ listeners: 0 }))).cls, "idle");
   const rejected = statusView(info(running({ rejected: { hash: "h2", error: "missing ;" } }), "h2"));
   assert.equal(rejected.cls, "stale");
-  assert.ok(/^error: missing ;$/.test(rejected.detail ?? ""));
+  assert.ok(/^syntax error: missing ;$/.test(rejected.detail ?? ""));
   assert.equal(statusView(info(running(), "h2")).cls, "stale", "the file moved on without the watcher");
   const failed = statusView(info({ state: "failed", hash: "h1", error: "boom", at: 0 }));
   assert.equal(failed.cls, "failed");

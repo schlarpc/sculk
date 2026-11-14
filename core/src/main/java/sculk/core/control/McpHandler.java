@@ -612,7 +612,7 @@ final class McpHandler {
         if (!(status instanceof Map<?, ?> m)) return "";
         Object state = m.get("state");
         if ("running".equals(state)) {
-            return m.get("rejected") instanceof Map<?, ?> r ? "running an older version; error: " + r.get("error") : "running";
+            return m.get("rejected") instanceof Map<?, ?> r ? "running an older version; syntax error: " + r.get("error") : "running";
         }
         if ("failed".equals(state)) return "failed: " + m.get("error");
         return "stopped (" + m.get("why") + ")";

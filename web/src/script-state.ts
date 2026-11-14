@@ -26,7 +26,7 @@ export function statusView(s: ScriptInfo): StatusView {
   switch (st.state) {
     case "running": {
       if (st.rejected) {
-        return { cls: "stale", text: "running an older version", detail: `error: ${st.rejected.error}` };
+        return { cls: "stale", text: "running an older version", detail: `syntax error: ${st.rejected.error}` };
       }
       if (s.hash && st.hash !== s.hash) {
         return { cls: "stale", text: "running an older version", detail: "the file changed since it started" };
