@@ -10,9 +10,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.Connection;
 import net.minecraft.network.ConnectionProtocol;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket;
@@ -22,6 +25,7 @@ import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.loading.FMLLoader;
 import net.minecraftforge.forgespi.language.IModFileInfo;
 import net.minecraftforge.network.simple.IndexedMessageCodec;
+import sculk.core.Sculk;
 import sculk.core.payload.PayloadRegistration;
 import sculk.core.payload.PayloadRegistry;
 import sculk.core.platform.PacketInfo;
@@ -51,6 +55,28 @@ final class ForgePlatform implements Platform {
     @Override
     public void registerCommands() {
         SculkCommands.register(dedicatedServer());
+    }
+
+    @Override
+    public void chat(String text) {
+        if (dedicatedServer()) Platform.super.chat(text);
+        else ClientChat.show(text);
+    }
+
+    /** Separate so that a dedicated server never loads client classes. */
+    private static final class ClientChat {
+        static void show(String text) {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc == null) {
+                Sculk.LOG.info("[chat] {}", text); // The game window is not up yet.
+                return;
+            }
+            Component line = Component.literal("[sculk] ")
+                    .withStyle(ChatFormatting.DARK_AQUA)
+                    .append(Component.literal(text).withStyle(ChatFormatting.WHITE));
+            // Chat belongs to the render thread; a local line, never sent to the server.
+            mc.execute(() -> mc.gui.getChat().addMessage(line));
+        }
     }
 
     @Override

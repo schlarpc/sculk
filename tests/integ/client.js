@@ -24,6 +24,7 @@ sculk.on('packet', e => {
   if (!joined && e.dir === 'inbound' && e.packet.state === 'play') {
     joined = true;
     sculk.emit({ step: 'client_joined' });
+    sculk.chat('integ chat check'); // integ.py looks for it in the client's own chat log
     sculk.schedule(90000, () => {
       if (scheduled) return;
       sculk.emit({ step: 'client_inject_skipped', reason: 'no move packet within 90s of joining' });

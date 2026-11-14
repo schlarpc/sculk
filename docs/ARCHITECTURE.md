@@ -267,14 +267,16 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 // c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event); sculk.connection(id) finds one
 // sculk.emit(obj), sculk.schedule(ms, fn), sculk.payloadTypes(), sculk.tree(obj),
 // sculk.with(record, 'field', value), sculk.copy(bytes), sculk.hex(bytes), sculk.unhex(str)
-// sculk.log(msg) (a script_log event), sculk.scope(name), sculk.name, sculk.dist ('client' or 'server')
+// sculk.log(msg) (a script_log event), sculk.chat(msg) (a chat line only the player sees; a chat event),
+// sculk.scope(name), sculk.name, sculk.dist ('client' or 'server')
 ```
 
 ### Events
 
 `-Dsculk.eventLog=path` writes a JSON Lines log of everything sculk sees:
 `start`, `connection`, `disconnect`, `payload_type`, `packet`, `eval`,
-`mark` (`text`, and `by`: `command` for `/sculk mark`), `mcp_client`
+`mark` (`text`, and `by`: `command` for `/sculk mark`), `chat` (`text`
+shown to the player, and `script` when a script said it), `mcp_client`
 (`action`: requested, accepted or revoked; `client`: `{number, client,
 since, approved}`), and
 for scripts `script` (`sculk.emit`), `script_log` (`sculk.log`),

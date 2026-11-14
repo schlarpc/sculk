@@ -297,6 +297,23 @@ public final class Sculk {
     }
 
     /**
+     * Shows {@code text} to the player (see {@link Platform#chat}) and
+     * records it as a {@code chat} event. {@code script} is the script that
+     * said it, or null when sculk itself did.
+     */
+    public void chat(String text, String script) {
+        try {
+            platform.chat(text);
+        } catch (RuntimeException | LinkageError e) {
+            LOG.warn("cannot show in chat: {}", text, e);
+        }
+        Map<String, Object> e = new LinkedHashMap<>();
+        if (script != null) e.put("script", script);
+        e.put("text", text);
+        log(entry("chat", e));
+    }
+
+    /**
      * Records a {@code mark} event: a note dropped into the event stream, so
      * a moment in play can be found among the packets later. {@code by} says
      * where it came from ({@code command} for {@code /sculk mark}). Returns

@@ -176,6 +176,9 @@ def check(server, client, outs=None, stress=False):
         failures = [line.strip()[:200] for text in outs for line in text.splitlines()
                     if any(f in line for f in HOOK_FAILURES)]
         r.check("no sculk hook failures in the game logs", not failures, failures[:3])
+        # sculk.chat: a local line in the client's chat, which the game logs as it shows it.
+        shown = [line for line in outs[1].splitlines() if "[CHAT]" in line and "[sculk] integ chat check" in line]
+        r.check("sculk.chat showed a line in the client's chat", bool(shown))
 
     # Registry and attribution.
     types = [e["mod"] for e in server if e["kind"] == "payload_type"]

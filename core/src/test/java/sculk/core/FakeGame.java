@@ -104,6 +104,10 @@ public final class FakeGame {
     }
 
     static final class FakePlatform implements Platform {
+        /** What {@link #chat} showed the player, oldest first. */
+        static final java.util.List<String> CHAT = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override public void chat(String text) { CHAT.add(text); }
         @Override public String loader() { return "fake"; }
         @Override public String minecraftVersion() { return "0"; }
 

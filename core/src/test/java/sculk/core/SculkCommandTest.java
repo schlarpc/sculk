@@ -176,6 +176,28 @@ class SculkCommandTest {
     }
 
     @Test
+    void aWaitingMcpClientIsAnnouncedInChat() throws Exception {
+        String client = "cmd-chat-" + System.nanoTime();
+        pairingClient(client);
+        int n = waitingNumber(client);
+        assertTrue(FakeGame.FakePlatform.CHAT.contains("MCP client #" + n + " (" + client + ") wants access: type /sculk mcp accept " + n),
+                FakeGame.FakePlatform.CHAT.toString());
+        FakeGame.sculk().control().mcpRevoke(n);
+    }
+
+    @Test
+    void scriptsChatWithThePlayerOnly() {
+        String text = "chat-" + System.nanoTime();
+        FakeGame.sculk().scripts().eval("sculk.chat('" + text + "')");
+        assertTrue(FakeGame.FakePlatform.CHAT.contains(text));
+        Sculk sculk = FakeGame.sculk();
+        var e = sculk.control().store().get(sculk.lastEventId()).fields();
+        assertEquals("chat", e.get("kind"));
+        assertEquals(text, e.get("text"));
+        assertEquals("console", e.get("script"));
+    }
+
+    @Test
     void mcpTokenIsPrinted() throws Exception {
         assertEquals(1, run("sculk mcp token"));
         assertTrue(replies.get(0).contains(FakeGame.sculk().control().token()), replies.toString());

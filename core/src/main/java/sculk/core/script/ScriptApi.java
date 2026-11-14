@@ -155,6 +155,16 @@ public final class ScriptApi implements AutoCloseable {
         engine.log(e);
     }
 
+    /**
+     * Shows {@code message} to the player only: a local chat line in a game
+     * client (never sent to the server), the console in a dedicated server.
+     * Recorded as {@code {"kind":"chat", "script":..., "text":...}}.
+     */
+    public void chat(Object message) {
+        Object value = ScriptHost.toJava(message);
+        engine.chat(value instanceof String s ? s : EventLog.toJson(jsonSafe(value, 4)), name);
+    }
+
     /** Writes {@code data} (a JS object) to the event log as {@code {"kind":"script", "script":..., "data":...}}. */
     public void emit(Object data) {
         Map<String, Object> e = Sculk.entry("script", Map.of());

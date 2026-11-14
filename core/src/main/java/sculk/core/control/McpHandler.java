@@ -59,7 +59,8 @@ final class McpHandler {
             // @dist        client    (optional; client or server: only in a game client, or only in a dedicated server)
             // ==/Sculk==
             The `sculk` global offers: on('packet'|'connection', fn), connections(), connection(id), payloadTypes(), \
-            emit(obj) (a `script` event), log(msg) (a `script_log` event), schedule(ms, fn), tree(obj), \
+            emit(obj) (a `script` event), log(msg) (a `script_log` event), chat(msg) (a chat line only the player sees; \
+            a `chat` event), schedule(ms, fn), tree(obj), \
             with(record, field, value), hex(bytes), unhex(str), copy(bytes), scope(name) (another running script's \
             globals), name, dist. Connections offer inject(dir, bytes), injectPacket(dir, obj), replay(event). \
             Packet events have the same fields and shorthands as logged events (e.mod.channel, e.frame.dir, e.owner), \
@@ -453,9 +454,9 @@ final class McpHandler {
             pending.put(sessionId, created);
         }
         if (!joined) {
-            Sculk.LOG.info("MCP client #{} ({}) is waiting for approval: /sculk mcp accept {}",
-                    created.number, created.client, created.number);
             engine.log(Sculk.entry("mcp_client", clientEntry("requested", created)));
+            engine.chat("MCP client #" + created.number + " (" + created.client + ") wants access: type /sculk mcp accept "
+                    + created.number, null);
         }
         return created;
     }

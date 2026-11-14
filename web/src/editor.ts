@@ -147,6 +147,7 @@ const SCULK_API: Completion[] = [
   { label: "payloadTypes", type: "method", detail: "()", info: "Every registered custom payload type, as payload_type events show them." },
   { label: "emit", type: "method", detail: "(obj)", info: "Writes {kind: 'script', script, data: obj} to the event log." },
   { label: "log", type: "method", detail: "(msg)", info: "Writes msg to the game log and a script_log event (this script's output pane)." },
+  { label: "chat", type: "method", detail: "(msg)", info: "Shows msg to the player only: a local chat line in a game client (never sent to the server), the console in a dedicated server. A chat event." },
   { label: "schedule", type: "method", detail: "(ms, fn)", info: "Runs fn once after ms milliseconds, unless the script stops first." },
   { label: "tree", type: "method", detail: "(obj)", info: "A plain object tree of any value: records, mod payloads, packets." },
   { label: "with", type: "method", detail: "(record, field, value)", info: "A copy of a record with one component replaced, for editing decoded payloads." },

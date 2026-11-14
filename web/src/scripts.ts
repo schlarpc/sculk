@@ -554,6 +554,8 @@ export class ScriptsPage {
         return this.line(s(e.message), "o-log", e.t);
       case "script":
         return this.line(s(e.data), "o-emit", e.t, "emit");
+      case "chat":
+        return this.line(s(e.text), "o-log", e.t, "chat");
       case "script_error":
         return this.line(
           `${e.callback ? `${s(e.callback)}: ` : ""}${s(e.error)}${e.kept ? "\n  not applied: the previous version is still running" : ""}${e.packet ? `\n  on ${s(e.packet)}` : ""}`,
@@ -584,7 +586,7 @@ export class ScriptsPage {
       for (const e of backlog) this.event(e);
       if (backlog.length) last = (backlog[backlog.length - 1] as SculkEvent).id;
       else last = (await this.env.guard((api) => api.status()))?.lastEventId ?? 0;
-      if (!backlog.length) this.line("No output yet. sculk.log(…) and sculk.emit(…) show here, with errors, starts and stops.", "o-dim");
+      if (!backlog.length) this.line("No output yet. sculk.log(…), sculk.chat(…) and sculk.emit(…) show here, with errors, starts and stops.", "o-dim");
     } catch (e) {
       this.line(`cannot load output: ${(e as Error).message}`, "o-err");
       return;
