@@ -111,7 +111,7 @@ final class ForgePlatform implements Platform {
         for (PayloadRegistration reg : PayloadRegistry.forChannel(channel)) {
             if (reg.codec() instanceof IndexedMessageCodec codec) return new SimpleChannelCodec(codec);
         }
-        return null;
+        return VanillaPayloads.codec(channel);
     }
 
     @Override

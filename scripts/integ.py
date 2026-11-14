@@ -276,7 +276,9 @@ def stress_check(r, server, client, pk, mod, dir_, hex_):
         c["channels:" + m["channel"]] += 1
         if m.get("data") is not None:
             c["decoded"] += 1
-        c["rt:" + str(m.get("roundTrip")).split(":")[0].split(" ")[0]] += 1
+        rt = str(m.get("roundTrip"))
+        # "ok (opaque payload)": the packet re-encodes, but nothing decoded the payload to check.
+        c["rt:" + ("opaque" if "opaque" in rt else rt.split(":")[0].split(" ")[0])] += 1
     print("  per mod (both sides):")
     print(f"    {'owner':24} {'channels':>8} {'payloads':>8} {'decoded':>8}  round trip")
     for owner, c in sorted(rows.items(), key=lambda kv: -kv[1]["payloads"]):
