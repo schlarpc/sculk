@@ -40,6 +40,14 @@ class ScriptApiTest {
     }
 
     @Test
+    void connectionsCanBeFoundById() {
+        EmbeddedChannel ch = FakeGame.channel(Side.CLIENT);
+        int id = sculk.core.net.SculkConnection.peek(ch).getId();
+        assertEquals("client", FakeGame.sculk().scripts().eval("sculk.connection(" + id + ").side"));
+        assertNull(FakeGame.sculk().scripts().eval("sculk.connection(-1)"));
+    }
+
+    @Test
     void scriptsCanEditRecords() {
         Object result = FakeGame.sculk().scripts().eval("""
                 sculk.tree(sculk.with(new Packages.sculk.core.FakeGame.Packet(1, 'a'), 'text', 'b'))

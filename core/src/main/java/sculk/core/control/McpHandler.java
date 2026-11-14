@@ -149,7 +149,7 @@ final class McpHandler {
                 Map.of("id", prop("integer", "Event id.")), List.of("id")));
         out.add(tool("sculk_eval",
                 "Evaluate JavaScript (Rhino, ES6) in the live script scope of the game process, where startup scripts "
-                        + "ran. The `sculk` global offers: on('packet'|'connection', fn), connections(), payloadTypes(), "
+                        + "ran. The `sculk` global offers: on('packet'|'connection', fn), connections(), connection(id), payloadTypes(), "
                         + "emit(obj), log(msg), schedule(ms, fn), tree(obj), with(record, field, value), hex(bytes), "
                         + "unhex(str), copy(bytes). Connections offer inject(dir, bytes), injectPacket(dir, obj), "
                         + "replay(event). Packet events have the same fields and shorthands as logged events (e.mod.channel, "

@@ -133,6 +133,14 @@ public final class ScriptApi implements AutoCloseable {
         return engine.connections();
     }
 
+    /** The open connection with this id (as in {@code conn.id}), or null. */
+    public SculkConnection connection(int id) {
+        for (SculkConnection c : engine.connections()) {
+            if (c.getId() == id) return c;
+        }
+        return null;
+    }
+
     public List<Map<String, Object>> payloadTypes() {
         return engine.payloadTypes();
     }
