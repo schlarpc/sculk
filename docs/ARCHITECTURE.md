@@ -377,11 +377,28 @@ GET  /ui/...                            the web UI (no token needed for its stat
 `repl`, `reload`, `script ls|cat|push|run|stop|enable|disable|rm|mv`) and
 finds the server through its control file.
 
-The MCP server speaks protocol versions 2025-11-25 back to 2024-11-05
-(JSON-RPC batches only for the versions that have them; a request whose
-`MCP-Protocol-Version` header names any other version gets 400).
-`initialize` hands out an `Mcp-Session-Id`; sessions are optional, and an
-unknown one gets 404. Most calls answer with plain JSON. A long
+The MCP server speaks both eras of the protocol on the one endpoint
+(`McpHandler`, `McpStateless`):
+
+- **2026-07-28** (stateless): no `initialize`, no sessions. Every request
+  carries its version and client capabilities in `_meta`, and mirrors its
+  version, method and tool name into `MCP-Protocol-Version`, `Mcp-Method`
+  and `Mcp-Name` headers, which must match the body (else 400, `-32020`).
+  It serves `server/discover`, `tools/list` and `tools/call`; results carry
+  `resultType` and the server's `serverInfo`, and list results `ttlMs` and
+  `cacheScope`. A version it does not speak gets 400 `-32022` with the
+  supported list; an unknown method 404 `-32601`. Closing a streamed
+  answer cancels the call. This era needs the token: it has no session to
+  pair, and the spec rules out trusting what a client says about itself. A
+  request without the token gets a 400 that carries no modern error code,
+  so a client that speaks both eras falls back to `initialize` and pairs.
+- **2025-11-25 back to 2024-11-05**: JSON-RPC batches only for the versions
+  that have them; a request whose `MCP-Protocol-Version` header names any
+  other version gets 400. `initialize` hands out an `Mcp-Session-Id`;
+  sessions are optional, and an unknown one gets 404.
+
+Claude Code tries 2026-07-28 first (`server/discover`) and falls back on
+its own. Most calls answer with plain JSON. A long
 `sculk_wait_events` switches to a server-sent event stream when the client
 accepts one: it sends `notifications/progress` every 2 s when the call
 carries a `progressToken` (keep-alives otherwise), and stops when the client

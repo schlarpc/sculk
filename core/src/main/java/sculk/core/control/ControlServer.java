@@ -290,13 +290,7 @@ public final class ControlServer {
                     case "POST /scripts/enable" -> json(ex, 200, engine.scripts().setEnabled(query.get("name"),
                             !"false".equals(query.getOrDefault("enabled", "true"))));
                     case "POST /mcp" -> {
-                        String version = ex.getRequestHeaders().getFirst("MCP-Protocol-Version");
-                        String bad = McpHandler.checkVersion(version);
-                        if (bad != null) {
-                            json(ex, 400, Map.of("jsonrpc", "2.0", "error", Map.of("code", -32600, "message", bad)));
-                            return;
-                        }
-                        mcp.post(ex, body(ex), version, !pairing);
+                        mcp.post(ex, body(ex), ex.getRequestHeaders().getFirst("MCP-Protocol-Version"), !pairing);
                     }
                     case "DELETE /mcp" -> mcp.delete(ex);
                     default -> {

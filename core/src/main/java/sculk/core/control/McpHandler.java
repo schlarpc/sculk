@@ -90,6 +90,8 @@ final class McpHandler {
     private final Sculk engine;
     private final EventStore store;
 
+    private final McpStateless stateless = new McpStateless(this);
+
     McpHandler(Sculk engine, EventStore store) {
         this.engine = engine;
         this.store = store;
@@ -258,6 +260,25 @@ final class McpHandler {
      * an initialize, which starts one waiting for the player) gets in.
      */
     void post(HttpExchange ex, String body, String version, boolean hasToken) throws IOException {
+        JsonElement parsedBody = null;
+        try {
+            parsedBody = JsonParser.parseString(body);
+        } catch (JsonParseException e) {
+            // Answered below, in whichever era the headers say.
+        }
+        if (McpStateless.isModern(version, parsedBody != null && parsedBody.isJsonObject() ? parsedBody.getAsJsonObject() : null)) {
+            if (parsedBody == null && hasToken) {
+                ControlServer.json(ex, 400, error(null, -32700, "parse error"));
+                return;
+            }
+            stateless.post(ex, parsedBody, hasToken);
+            return;
+        }
+        String bad = checkVersion(version);
+        if (bad != null) {
+            ControlServer.json(ex, 400, error(null, -32600, bad));
+            return;
+        }
         String sessionId = ex.getRequestHeaders().getFirst("Mcp-Session-Id");
         Session session = hasToken ? anonymous : null;
         if (sessionId != null) {
@@ -519,7 +540,7 @@ final class McpHandler {
     }
 
     /** A JSON-RPC id or progress token as a map key: strings stay strings, whole numbers become longs. */
-    private static Object requestId(JsonElement e) {
+    static Object requestId(JsonElement e) {
         Object v = GSON.fromJson(e, Object.class);
         return v instanceof Double d && d == Math.rint(d) ? (Object) d.longValue() : v;
     }
@@ -562,20 +583,28 @@ final class McpHandler {
         }
     }
 
+    static final Map<String, Object> SERVER_INFO = Map.of("name", "sculk", "version", "0.1.0");
+    static final Map<String, Object> CAPABILITIES = Map.of("tools", Map.of("listChanged", false));
+
     private Map<String, Object> initialize(JsonObject params) {
         String asked = params.has("protocolVersion") ? params.get("protocolVersion").getAsString() : null;
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("protocolVersion", PROTOCOL_VERSIONS.contains(asked) ? asked : PROTOCOL_VERSIONS.get(0));
-        out.put("capabilities", Map.of("tools", Map.of("listChanged", false)));
-        out.put("serverInfo", Map.of("name", "sculk", "version", "0.1.0"));
-        out.put("instructions", "sculk is a packet interception and injection tool running inside a Minecraft "
+        out.put("capabilities", CAPABILITIES);
+        out.put("serverInfo", SERVER_INFO);
+        out.put("instructions", instructions());
+        return out;
+    }
+
+    /** What the server tells the model about itself, in either protocol era. */
+    String instructions() {
+        return "sculk is a packet interception and injection tool running inside a Minecraft "
                 + engine.platform().describe() + " process. Use sculk_events to look at captured traffic, "
                 + "sculk_wait_events to wait for new traffic, and sculk_eval to run JavaScript with the `sculk` "
                 + "scripting API in the live game. Installed scripts (sculk_scripts, sculk_script_read, "
                 + "sculk_script_write, sculk_script_edit, sculk_script_control) persist on disk and run at launch; "
                 + "use them for anything that should outlive the session. "
-                + "Only use it against games you own or are authorised to test.");
-        return out;
+                + "Only use it against games you own or are authorised to test.";
     }
 
     // ---- tools ----
@@ -633,7 +662,7 @@ final class McpHandler {
         return Map.of("type", type, "description", description);
     }
 
-    private static List<Map<String, Object>> tools() {
+    static List<Map<String, Object>> tools() {
         Map<String, Object> filter = prop("string", "Event filter; blank or absent matches everything.");
         Map<String, Object> after = prop("integer", "Only events with an id greater than this.");
         List<Map<String, Object>> out = new ArrayList<>();
@@ -730,7 +759,7 @@ final class McpHandler {
         return out;
     }
 
-    private Map<String, Object> call(JsonObject params, Call ctx) {
+    Map<String, Object> call(JsonObject params, Call ctx) {
         if (!params.has("name")) throw new IllegalArgumentException("missing tool name");
         String name = params.get("name").getAsString();
         JsonObject args = params.has("arguments") && params.get("arguments").isJsonObject()
@@ -971,11 +1000,14 @@ final class McpHandler {
         return v == null ? otherwise : (int) Math.max(0, Math.min(v, Integer.MAX_VALUE));
     }
 
-    private static Map<String, Object> error(Object id, int code, String message) {
+    static Map<String, Object> error(Object id, int code, String message) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("jsonrpc", "2.0");
         out.put("id", id);
-        out.put("error", Map.of("code", code, "message", message));
+        Map<String, Object> error = new LinkedHashMap<>();
+        error.put("code", code);
+        error.put("message", message);
+        out.put("error", error);
         return out;
     }
 }

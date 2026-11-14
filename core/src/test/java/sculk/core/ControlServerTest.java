@@ -3,6 +3,7 @@ package sculk.core;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -580,6 +581,103 @@ class ControlServerTest {
             assertEquals(403, request("POST", "/mcp", init, auth, "Origin: http://evil.example").status());
             assertEquals(403, request("POST", "/mcp", init, auth, "Host: evil.example:" + server().port()).status());
         }
+    }
+
+    // ---- MCP 2026-07-28: stateless, with the token ----
+
+    private static final String MODERN = "2026-07-28";
+    private static final String MODERN_META = "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"" + MODERN + "\","
+            + "\"io.modelcontextprotocol/clientInfo\":{\"name\":\"modern-test\",\"version\":\"1\"},"
+            + "\"io.modelcontextprotocol/clientCapabilities\":{}}";
+
+    private static String modernBody(String method, String paramsWithoutMeta) {
+        String params = paramsWithoutMeta.isEmpty() ? "{" + MODERN_META + "}" : "{" + paramsWithoutMeta + "," + MODERN_META + "}";
+        return "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"" + method + "\",\"params\":" + params + "}";
+    }
+
+    /** A modern request with every header it needs, plus {@code extra}. */
+    private static Response modern(String method, String params, String name, String... extra) throws IOException {
+        List<String> headers = new ArrayList<>(List.of(auth(), "MCP-Protocol-Version: " + MODERN, "Mcp-Method: " + method));
+        if (name != null) headers.add("Mcp-Name: " + name);
+        headers.addAll(List.of(extra));
+        return request("POST", "/mcp", modernBody(method, params), headers.toArray(String[]::new));
+    }
+
+    private static void assertModernError(Response r, int status, int code) {
+        assertEquals(status, r.status(), r.body());
+        assertEquals(code, r.json().getAsJsonObject("error").get("code").getAsInt(), r.body());
+    }
+
+    @Test
+    void mcpModernDiscoverAndTools() throws IOException {
+        Response discover = modern("server/discover", "", null);
+        assertEquals(200, discover.status(), discover.body());
+        assertNull(discover.header("Mcp-Session-Id"), "no sessions in this era");
+        JsonObject d = discover.json().getAsJsonObject("result");
+        assertEquals("complete", d.get("resultType").getAsString());
+        assertEquals(MODERN, d.getAsJsonArray("supportedVersions").get(0).getAsString());
+        assertTrue(d.getAsJsonArray("supportedVersions").toString().contains("2025-11-25"), "legacy versions too");
+        assertTrue(d.getAsJsonObject("capabilities").has("tools"));
+        assertEquals("sculk", d.getAsJsonObject("_meta").getAsJsonObject("io.modelcontextprotocol/serverInfo").get("name").getAsString());
+
+        JsonObject list = modern("tools/list", "", null).json().getAsJsonObject("result");
+        assertEquals("complete", list.get("resultType").getAsString());
+        assertTrue(list.get("ttlMs").getAsLong() > 0);
+        assertEquals("private", list.get("cacheScope").getAsString());
+        assertTrue(list.getAsJsonArray("tools").size() > 5);
+
+        Response call = modern("tools/call", "\"name\":\"sculk_eval\",\"arguments\":{\"code\":\"6 * 7\"}", "sculk_eval",
+                "Mcp-Session-Id: ignored-in-this-era");
+        JsonObject result = call.json().getAsJsonObject("result");
+        assertEquals("complete", result.get("resultType").getAsString());
+        assertFalse(result.get("isError").getAsBoolean());
+        assertEquals("42", toolText(result));
+        assertNull(call.header("Mcp-Session-Id"));
+        Response encoded = modern("tools/call", "\"name\":\"sculk_status\",\"arguments\":{}",
+                "=?base64?" + java.util.Base64.getEncoder().encodeToString("sculk_status".getBytes(StandardCharsets.UTF_8)) + "?=");
+        assertEquals(200, encoded.status(), "Mcp-Name may be base64-encoded: " + encoded.body());
+    }
+
+    @Test
+    void mcpModernRejectsWhatTheSpecRejects() throws IOException {
+        String call = "\"name\":\"sculk_status\",\"arguments\":{}";
+        // Headers that disagree with the body, or are missing.
+        assertModernError(modern("tools/call", call, "sculk_eval"), 400, -32020);
+        assertModernError(modern("tools/call", call, null), 400, -32020);
+        assertModernError(request("POST", "/mcp", modernBody("tools/list", ""), auth(), "MCP-Protocol-Version: " + MODERN), 400, -32020);
+        assertModernError(request("POST", "/mcp", modernBody("tools/list", ""), auth(), "MCP-Protocol-Version: " + MODERN,
+                "Mcp-Method: tools/call"), 400, -32020);
+        assertModernError(request("POST", "/mcp", modernBody("tools/list", ""), auth(), "Mcp-Method: tools/list"), 400, -32020);
+        // A version this server does not speak, named the modern way.
+        String future = modernBody("tools/list", "").replace(MODERN, "2099-01-01");
+        Response unsupported = request("POST", "/mcp", future, auth(), "MCP-Protocol-Version: 2099-01-01", "Mcp-Method: tools/list");
+        assertModernError(unsupported, 400, -32022);
+        JsonObject data = unsupported.json().getAsJsonObject("error").getAsJsonObject("data");
+        assertEquals("2099-01-01", data.get("requested").getAsString());
+        assertEquals(MODERN, data.getAsJsonArray("supported").get(0).getAsString());
+        // Required _meta missing.
+        String noCaps = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"_meta\":{"
+                + "\"io.modelcontextprotocol/protocolVersion\":\"" + MODERN + "\"}}}";
+        assertModernError(request("POST", "/mcp", noCaps, auth(), "MCP-Protocol-Version: " + MODERN, "Mcp-Method: tools/list"), 400, -32602);
+        // Methods this era dropped or sculk does not serve.
+        assertModernError(modern("ping", "", null), 404, -32601);
+        assertModernError(modern("initialize", "", null), 404, -32601);
+        // One message per POST.
+        assertEquals(400, request("POST", "/mcp", "[" + modernBody("tools/list", "") + "]", auth(),
+                "MCP-Protocol-Version: " + MODERN, "Mcp-Method: tools/list").status());
+    }
+
+    @Test
+    void mcpModernWithoutTheTokenSendsTheClientBackToPairing() throws IOException {
+        Response r = request("POST", "/mcp", modernBody("server/discover", ""), "MCP-Protocol-Version: " + MODERN,
+                "Mcp-Method: server/discover");
+        assertEquals(400, r.status(), r.body());
+        int code = r.json().getAsJsonObject("error").get("code").getAsInt();
+        assertFalse(code >= -32099 && code <= -32020, "no modern error code, so a dual-era client falls back: " + code);
+        assertTrue(r.json().getAsJsonObject("error").get("message").getAsString().contains("initialize"));
+        // ...and the fallback works: an initialize without the token waits for the player.
+        String[] p = pair("fallback-" + System.nanoTime());
+        server().mcpRevoke(Integer.parseInt(p[1]));
     }
 
     // ---- MCP pairing: clients without the token wait for the player ----
