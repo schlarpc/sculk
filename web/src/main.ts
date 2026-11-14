@@ -179,7 +179,13 @@ class App {
 
   constructor(private api: Api) {
     this.table = new EventTable(this.wrap, this.rows, {
+      // A refused token gives undefined (a new one is being asked for); other failures throw.
+      source: {
+        page: (filter, from, count, progress, signal) => this.guard(() => this.api.page(filter, from, count, progress, signal)),
+        position: (filter, id, progress, signal) => this.guard(() => this.api.position(filter, id, progress, signal)),
+      },
       guard: (call) => this.guard(() => call(this.api)),
+      progress: (p) => this.showProgress(p),
       row: (e) => this.row(e),
       selected: (e) => this.showDetail(e),
       changed: () => this.updateFoot(),
@@ -346,7 +352,23 @@ class App {
     this.updateFoot();
   }
 
+  private scanning: { done: number; total: number } | null = null;
+
+  /** A filter scan on the server: "filtering… 1.2M of 3.4M" in the foot, until it is done. */
+  private showProgress(p: { done: number; total: number } | null): void {
+    this.scanning = p;
+    this.updateFoot();
+  }
+
   private updateFoot(): void {
+    if (this.scanning) {
+      const { done, total } = this.scanning;
+      const short = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+      this.count.textContent = `filtering… ${short(done)} of ${short(total)}`;
+      this.count.classList.add("scanning");
+      return;
+    }
+    this.count.classList.remove("scanning");
     const n = this.table.count;
     const filtered = this.filter.value.trim() !== "";
     this.count.textContent = `${n.toLocaleString()} ${filtered ? "matching" : "events"}`;

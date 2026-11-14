@@ -38,6 +38,7 @@ stdenvNoCC.mkDerivation {
       ./package.json
       ./package-lock.json
       ./src
+      ./test
       ./static
       ./tools
       ./tsconfig.json
@@ -71,6 +72,17 @@ stdenvNoCC.mkDerivation {
       --legal-comments=none --outfile=dist/app.js
     python3 tools/subset-font.py ${monocraft}/share/fonts/truetype/*Monocraft-no-ligatures.ttc dist
     runHook postBuild
+  '';
+
+  # Unit tests (web/test): bundled by esbuild, run by Node's own test runner.
+  doCheck = true;
+  checkPhase = ''
+    runHook preCheck
+    tsc -p test/tsconfig.json
+    esbuild test/*.test.ts --bundle --platform=node --format=esm --outdir=build-test \
+      --out-extension:.js=.mjs --log-level=warning
+    node --test build-test/*.mjs
+    runHook postCheck
   '';
 
   installPhase = ''

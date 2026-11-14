@@ -458,6 +458,7 @@ property (`-Psculk.control=0`).
 | Layer | Command | What it proves |
 |---|---|---|
 | Unit | `gradle :core:test` | Netty plumbing against a fake game: pairing, drop/replace, all four injection paths, replay, attribution, scripting; control server and MCP over real HTTP, including token, Host and Origin checks; event filters |
+| Web UI | `nix build .#web` (or `npm ci`, then `esbuild` and `node --test` as in `web/default.nix`) | the events table's geometry and its per-filter data (`web/test`): scaling, anchoring as rows are dropped, stale answers after a filter change |
 | Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server, the control server answers `sculkctl.py` and MCP and serves the web UI from the mod |
 | Integration | `scripts/integ.py <target>` | a real server and a real headless client with real mods (below) |
 

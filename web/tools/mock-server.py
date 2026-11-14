@@ -1092,13 +1092,14 @@ def make_handler(store, game, bundle):
                     return self.send(200, "application/x-ndjson", out.encode())
                 if key == "GET /events/page":
                     src = (q.get("filter") or "").strip()
-                    out = store.page(src, compile_filter(src), int(q.get("from") or 0), min(int(q.get("count") or 200), 2000))
-                    return self.send(200, "application/json", out.encode())
+                    pred = compile_filter(src)
+                    return self.scanning(src, lambda: store.page(src, pred, int(q.get("from") or 0), min(int(q.get("count") or 200), 2000)))
                 if key == "GET /events/position":
                     src = (q.get("filter") or "").strip()
                     if not q.get("id"):
                         raise ValueError("id is required")
-                    return self.json(200, store.position(src, compile_filter(src), int(q["id"])))
+                    pred = compile_filter(src)
+                    return self.scanning(src, lambda: json.dumps(store.position(src, pred, int(q["id"]))))
                 if key == "GET /events/stream":
                     return self.stream(compile_filter(q.get("filter")), int(q["after"]) if q.get("after") else None)
                 if key == "GET /frame":
@@ -1136,6 +1137,30 @@ def make_handler(store, game, bundle):
                 return self.json(405 if known else 404, {"error": f"wrong method for {path}" if known else f"no such endpoint {path}"})
             except ValueError as e:  # FilterError included
                 return self.json(400, {"error": str(e)})
+
+        def scanning(self, src, work):
+            """Like ControlServer.scanning: SSE progress then the result, when asked for. A filter
+            the mock has not scanned before that reads a deep field (mod.data, frame.hex) pretends
+            to be slow, so the UI's progress shows."""
+            if "text/event-stream" not in (self.headers.get("Accept") or ""):
+                return self.send(200, "application/json", work().encode())
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            try:
+                if src not in store.match_cache and re.search(r"mod\.data|frame\.hex", src):
+                    total = 3_400_000
+                    for i in range(1, 13):
+                        time.sleep(0.2)
+                        self.wfile.write(f"event: progress\ndata: {{\"done\":{total * i // 12},\"total\":{total}}}\n\n".encode())
+                        self.wfile.flush()
+                self.wfile.write(f"event: result\ndata: {work()}\n\n".encode())
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                print(f"scan of {src!r} stopped: the browser went away", file=sys.stderr)
 
         def static(self, name):
             # The real server's CSP (ControlServer.CSP), so the UI is tried under the same rules.

@@ -368,6 +368,7 @@ button.link:hover { color: var(--glow-hot); background: none; }
 .a-drop .c-summary { color: var(--red); text-decoration: line-through; text-decoration-thickness: 2px; }
 
 .table-foot > span:first-child { white-space: nowrap; }
+#count.scanning { color: var(--glow); }
 .table-foot {
   display: flex;
   justify-content: space-between;

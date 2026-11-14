@@ -35,6 +35,16 @@ export interface Page {
   events: SculkEvent[];
 }
 
+export interface Position {
+  /** The position of the first match at or after the id asked for. */
+  index: number;
+  start: number;
+  total: number;
+}
+
+/** Progress of a scan on the server: events looked at so far, of how many. */
+export type Progress = (done: number, total: number) => void;
+
 export interface Capture {
   firstId: number;
   lastId: number;
@@ -120,8 +130,8 @@ export class ApiError extends Error {
 export class Api {
   constructor(private readonly token: string) {}
 
-  private async request(method: string, path: string, body?: string, signal?: AbortSignal): Promise<Response> {
-    const init: RequestInit = { method, headers: { Authorization: `Bearer ${this.token}` }, cache: "no-store" };
+  private async request(method: string, path: string, body?: string, signal?: AbortSignal, headers: Record<string, string> = {}): Promise<Response> {
+    const init: RequestInit = { method, headers: { Authorization: `Bearer ${this.token}`, ...headers }, cache: "no-store" };
     if (body !== undefined) init.body = body;
     if (signal) init.signal = signal;
     const r = await fetch(path, init);
@@ -154,37 +164,42 @@ export class Api {
     return text.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as SculkEvent);
   }
 
-  /** Live events after {@code after}, as they happen. Ends when {@code signal} aborts or the server goes away. */
-  async *stream(filter: string, after: number, signal: AbortSignal): AsyncGenerator<SculkEvent> {
-    const q = new URLSearchParams({ filter, after: String(after) });
+  /** Live events as they happen (after {@code after}, backlog first, if given). Ends when {@code signal} aborts or the server goes away. */
+  async *stream(filter: string, after: number | undefined, signal: AbortSignal): AsyncGenerator<SculkEvent> {
+    const q = new URLSearchParams({ filter });
+    if (after !== undefined) q.set("after", String(after));
     const r = await this.request("GET", `/events/stream?${q}`, undefined, signal);
-    if (!r.body) return;
-    const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
-    let buffer = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) return;
-      buffer += value;
-      let end: number;
-      while ((end = buffer.indexOf("\n\n")) >= 0) {
-        const block = buffer.slice(0, end);
-        buffer = buffer.slice(end + 2);
-        const data = block
-          .split("\n")
-          .filter((l) => l.startsWith("data: "))
-          .map((l) => l.slice(6))
-          .join("\n");
-        if (data) yield JSON.parse(data) as SculkEvent;
-      }
+    for await (const { data } of sse(r)) {
+      if (data) yield JSON.parse(data) as SculkEvent;
     }
   }
 
-  page(filter: string, from: number, count: number): Promise<Page> {
-    return this.json("GET", `/events/page?${new URLSearchParams({ filter, from: String(from), count: String(count) })}`);
+  /**
+   * A scan endpoint's answer, with its progress on the way when the scan is
+   * long. Aborting {@code signal} also stops the scan on the server.
+   */
+  private async scanning<T>(path: string, progress: Progress | undefined, signal: AbortSignal | undefined): Promise<T> {
+    const r = await this.request("GET", path, undefined, signal, { Accept: "text/event-stream" });
+    if (!(r.headers.get("Content-Type") ?? "").startsWith("text/event-stream")) return (await r.json()) as T;
+    for await (const { event, data } of sse(r)) {
+      if (event === "progress" && progress) {
+        const p = JSON.parse(data) as { done: number; total: number };
+        progress(p.done, p.total);
+      } else if (event === "result") {
+        return JSON.parse(data) as T;
+      }
+    }
+    throw new ApiError(0, "the game stopped answering");
   }
 
-  position(filter: string, id: number): Promise<{ index: number; start: number; total: number }> {
-    return this.json("GET", `/events/position?${new URLSearchParams({ filter, id: String(id) })}`);
+  /** Matches of a filter by position over the whole capture. */
+  page(filter: string, from: number, count: number, progress?: Progress, signal?: AbortSignal): Promise<Page> {
+    return this.scanning(`/events/page?${new URLSearchParams({ filter, from: String(from), count: String(count) })}`, progress, signal);
+  }
+
+  /** The position of the first match of a filter at or after an id. */
+  position(filter: string, id: number, progress?: Progress, signal?: AbortSignal): Promise<Position> {
+    return this.scanning(`/events/position?${new URLSearchParams({ filter, id: String(id) })}`, progress, signal);
   }
 
   async frame(id: number): Promise<Uint8Array | null> {
@@ -244,5 +259,29 @@ export class Api {
 
   enableScript(name: string, enabled: boolean): Promise<ScriptChange> {
     return this.json("POST", `/scripts/enable?${new URLSearchParams({ name, enabled: String(enabled) })}`, "");
+  }
+}
+
+/** Server-sent events from a response, as (event name, data) pairs. */
+async function* sse(r: Response): AsyncGenerator<{ event: string; data: string }> {
+  if (!r.body) return;
+  const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += value;
+    let end: number;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      let event = "message";
+      const data: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data.push(line.slice(6));
+      }
+      if (data.length || event !== "message") yield { event, data: data.join("\n") };
+    }
   }
 }
