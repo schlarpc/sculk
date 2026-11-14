@@ -19,7 +19,7 @@ are up, pick one with --target, a substring of the file's path such as
   sculkctl.py script push FILE [--name NAME] [--run]        install or replace (- reads stdin; needs --name)
   sculkctl.py script run|stop|enable|disable|rm NAME
   sculkctl.py script mv NAME NEW
-  sculkctl.py mcp-config                                    MCP client setup for this server
+  sculkctl.py mcp-config [--token]                          MCP client setup (pairs in game; --token: no pairing)
   sculkctl.py ui [--print]                                  open the web UI, signed in
 
 FILTER is the event filter language, for example
@@ -68,6 +68,7 @@ class Client:
         self.url = info["url"]
         self.token = info["token"]
         self.mcp_url = info.get("mcp", self.url + "/mcp")
+        self.port = info.get("port") or self.url.rsplit(":", 1)[-1]
 
     def request(self, method, path, query=None, body=None, timeout=60):
         url = self.url + path
@@ -237,13 +238,23 @@ def cmd_ui(c, a):
 
 
 def cmd_mcp_config(c, a):
-    config = {"mcpServers": {a.name: {"type": "http", "url": c.mcp_url,
-                                      "headers": {"Authorization": f"Bearer {c.token}"}}}}
+    if a.token:
+        config = {"mcpServers": {a.name: {"type": "http", "url": c.mcp_url,
+                                          "headers": {"Authorization": f"Bearer {c.token}"}}}}
+        print("# .mcp.json (or another MCP client's configuration):")
+        print_json(config)
+        print("\n# or, for Claude Code:")
+        print(f"claude mcp add --transport http {a.name} {c.mcp_url} --header 'Authorization: Bearer {c.token}'")
+        print("\n# The token changes on every launch unless the game runs with -Dsculk.controlToken=...", file=sys.stderr)
+        return
+    # Pairing: no token in the configuration, so it stays valid across launches.
     print("# .mcp.json (or another MCP client's configuration):")
-    print_json(config)
+    print_json({"mcpServers": {a.name: {"type": "http", "url": c.mcp_url}}})
     print("\n# or, for Claude Code:")
-    print(f"claude mcp add --transport http {a.name} {c.mcp_url} --header 'Authorization: Bearer {c.token}'")
-    print("\n# The token changes on every launch unless the game runs with -Dsculk.controlToken=...", file=sys.stderr)
+    print(f"claude mcp add --transport http {a.name} {c.mcp_url}")
+    print("\n# The client connects without the token and waits until you type /sculk mcp accept in game"
+          "\n# (or at the server console). Approval lasts until the game exits. The URL must stay the same,"
+          f"\n# so run the game with a fixed port: -Dsculk.control={c.port} (or -Psculk.control={c.port}).", file=sys.stderr)
 
 
 def main():
@@ -280,6 +291,7 @@ def main():
     s.set_defaults(fn=cmd_ui)
     s = sub.add_parser("mcp-config")
     s.add_argument("--name", default="sculk", help="server name in the client configuration")
+    s.add_argument("--token", action="store_true", help="put this launch's token in the configuration instead of pairing")
     s.set_defaults(fn=cmd_mcp_config)
     a = p.parse_args()
     a.fn(Client(find_control_file(a.file, a.target)), a)

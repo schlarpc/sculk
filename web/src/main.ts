@@ -112,6 +112,10 @@ function summary(e: SculkEvent): string {
       return str(e.platform);
     case "mark":
       return str(e.text);
+    case "mcp_client": {
+      const c = e.client as { number?: number; client?: string } | undefined;
+      return `${str(e.action)} MCP client #${str(c?.number)} ${str(c?.client)}`;
+    }
     default: {
       const { id: _id, kind: _kind, t: _t, ...rest } = e;
       return JSON.stringify(rest);

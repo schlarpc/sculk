@@ -274,7 +274,9 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 
 `-Dsculk.eventLog=path` writes a JSON Lines log of everything sculk sees:
 `start`, `connection`, `disconnect`, `payload_type`, `packet`, `eval`,
-`mark` (`text`, and `by`: `command` for `/sculk mark`), and
+`mark` (`text`, and `by`: `command` for `/sculk mark`), `mcp_client`
+(`action`: requested, accepted or revoked; `client`: `{number, client,
+since, approved}`), and
 for scripts `script` (`sculk.emit`), `script_log` (`sculk.log`),
 `script_error`, `script_run`, `script_stop`, `script_file` (created, saved,
 changed, renamed, enabled, disabled, deleted; `by` is `api` or `disk`) and
@@ -396,11 +398,30 @@ and last appearance grouped by any field, over the whole capture),
 text replacement, like an editor's find and replace; a running script
 restarts) and `sculk_script_control` (run, stop, enable, disable, rename,
 delete). Writes and edits report Rhino's syntax errors. The tool descriptions carry the filter syntax, event fields
-and script API. `scripts/sculkctl.py mcp-config` prints the client
-configuration, including the `Authorization` header. The token changes with
-every launch; `-Dsculk.controlToken=<16+ chars>` fixes it for a static
-client configuration (and then anyone who can read that configuration can
-drive the game).
+and script API.
+
+An MCP client gets in one of two ways:
+
+- **Pairing** (`scripts/sculkctl.py mcp-config`): the client's configuration
+  holds only the URL, so it never changes; run the game with a fixed port
+  (`-Dsculk.control=<port>`). A client that connects without the token gets
+  a session that waits for the player: it can initialize and list tools,
+  but every tool call answers with what to type, `/sculk mcp accept <n>`,
+  for its model to pass on. The player approves it in game (or at a
+  dedicated server's console); `/sculk mcp list` and `revoke <n>` manage
+  approvals, which last until the game exits. After a game restart the
+  client finds its session gone (404) and initializes again, often two or
+  three times within a second (Claude Code does); sessions from a client of
+  the same name share one waiting number, so a single accept covers
+  whichever it keeps. They never join a number already approved. Waiting sessions are kept
+  apart and few (8), so callers without the token cannot push out approved
+  ones, and they cannot send batches, which could carry a tool call past
+  the check. The Host and Origin checks apply as everywhere.
+- **The token** (`mcp-config --token`): the `Authorization` header, as for
+  the HTTP API. The token changes with every launch;
+  `-Dsculk.controlToken=<16+ chars>` fixes it for a static client
+  configuration (and then anyone who can read that configuration can drive
+  the game). `/sculk mcp token` prints it in chat.
 
 Filters are Wireshark-style:
 

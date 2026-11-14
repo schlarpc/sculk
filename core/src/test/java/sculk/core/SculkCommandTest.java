@@ -119,6 +119,68 @@ class SculkCommandTest {
         assertTrue(replies.get(0).startsWith("ok reloaded: "), replies.toString());
     }
 
+    // ---- mcp ----
+
+    /** Initializes an MCP session without the token, as a client that wants to pair would. */
+    private static void pairingClient(String name) throws Exception {
+        var control = FakeGame.sculk().control();
+        var request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(control.url() + "/mcp"))
+                .header("Content-Type", "application/json")
+                .timeout(java.time.Duration.ofSeconds(10))
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                        + "\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"" + name + "\"}}}"))
+                .build();
+        var response = java.net.http.HttpClient.newHttpClient().send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, response.statusCode(), response.body());
+    }
+
+    private static int waitingNumber(String client) {
+        return FakeGame.sculk().control().mcpClients().stream()
+                .filter(c -> client.equals(c.get("client")) && Boolean.FALSE.equals(c.get("approved")))
+                .map(c -> (Integer) c.get("number")).findFirst().orElseThrow();
+    }
+
+    @Test
+    void mcpClientsAreListedAcceptedAndRevokedByNumber() throws Exception {
+        String client = "cmd-client-" + System.nanoTime();
+        pairingClient(client);
+        int n = waitingNumber(client);
+
+        run("sculk mcp list");
+        assertTrue(replies.contains("ok   #" + n + " " + client + ": waiting"), replies.toString());
+        assertTrue(suggest("sculk mcp accept ").contains(String.valueOf(n)));
+
+        assertEquals(1, run("sculk mcp accept " + n));
+        assertEquals("ok approved MCP client #" + n + " " + client + " until the game exits", replies.get(replies.size() - 1));
+        assertFalse(suggest("sculk mcp accept ").contains(String.valueOf(n)), "accept offers only waiting clients");
+        assertTrue(suggest("sculk mcp revoke ").contains(String.valueOf(n)));
+
+        assertEquals(1, run("sculk mcp revoke " + n));
+        assertEquals("ok revoked MCP client #" + n + " " + client, replies.get(replies.size() - 1));
+        assertEquals(0, run("sculk mcp revoke " + n));
+        assertEquals("fail no MCP client #" + n, replies.get(replies.size() - 1));
+    }
+
+    @Test
+    void mcpAcceptWithoutANumberTakesTheOnlyWaitingClient() throws Exception {
+        for (var c : FakeGame.sculk().control().mcpClients()) {
+            if (Boolean.FALSE.equals(c.get("approved"))) FakeGame.sculk().control().mcpRevoke((Integer) c.get("number"));
+        }
+        assertEquals(0, run("sculk mcp accept"));
+        assertEquals("fail no MCP client is waiting", replies.get(0));
+        String client = "cmd-only-" + System.nanoTime();
+        pairingClient(client);
+        int n = waitingNumber(client);
+        assertEquals(1, run("sculk mcp accept"));
+        FakeGame.sculk().control().mcpRevoke(n);
+    }
+
+    @Test
+    void mcpTokenIsPrinted() throws Exception {
+        assertEquals(1, run("sculk mcp token"));
+        assertTrue(replies.get(0).contains(FakeGame.sculk().control().token()), replies.toString());
+    }
+
     // ---- ui ----
 
     @Test

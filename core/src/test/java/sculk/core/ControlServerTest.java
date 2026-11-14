@@ -3,6 +3,7 @@ package sculk.core;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.Gson;
@@ -22,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import sculk.core.control.ControlServer;
@@ -571,9 +573,104 @@ class ControlServerTest {
     @Test
     void mcpSharesTheAccessChecks() throws IOException {
         String init = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
-        assertEquals(401, request("POST", "/mcp", init).status());
-        assertEquals(403, request("POST", "/mcp", init, auth(), "Origin: http://evil.example").status());
-        assertEquals(403, request("POST", "/mcp", init, auth(), "Host: evil.example:" + server().port()).status());
+        String ping = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}";
+        assertEquals(401, request("POST", "/mcp", ping).status(), "no token and no session");
+        assertEquals(401, request("POST", "/mcp", ping, "Authorization: Bearer wrong").status());
+        for (String auth : new String[] {auth(), "X-None: 1"}) {
+            assertEquals(403, request("POST", "/mcp", init, auth, "Origin: http://evil.example").status());
+            assertEquals(403, request("POST", "/mcp", init, auth, "Host: evil.example:" + server().port()).status());
+        }
+    }
+
+    // ---- MCP pairing: clients without the token wait for the player ----
+
+    private static final String TOOL_CALL = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"sculk_status\",\"arguments\":{}}}";
+
+    /** Initializes without the token; returns {session id, pairing number}. */
+    private static String[] pair(String client) throws IOException {
+        Response init = request("POST", "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":"
+                + "{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"" + client + "\",\"version\":\"9\"}}}");
+        assertEquals(200, init.status(), init.body());
+        String instructions = init.json().getAsJsonObject("result").get("instructions").getAsString();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("/sculk mcp accept (\\d+)").matcher(instructions);
+        assertTrue(m.find(), instructions);
+        return new String[] {init.header("Mcp-Session-Id"), m.group(1)};
+    }
+
+    private static Response inSession(String session, String body) throws IOException {
+        return request("POST", "/mcp", body, "Mcp-Session-Id: " + session);
+    }
+
+    @Test
+    void mcpPairingWaitsForThePlayer() throws IOException {
+        String[] p = pair("pair-test");
+        String session = p[0];
+        int number = Integer.parseInt(p[1]);
+
+        assertEquals(200, inSession(session, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}").status(), "tools list while waiting");
+        JsonObject waiting = inSession(session, TOOL_CALL).json().getAsJsonObject("result");
+        assertTrue(waiting.get("isError").getAsBoolean());
+        assertTrue(toolText(waiting).contains("/sculk mcp accept " + number), toolText(waiting));
+        JsonObject batch = inSession(session, "[" + TOOL_CALL + "]").json();
+        assertEquals(-32600, batch.getAsJsonObject("error").get("code").getAsInt(), "no tool calls smuggled in a batch");
+
+        assertTrue(server().mcpClients().stream().anyMatch(c -> c.get("number").equals(number)
+                && "pair-test 9".equals(c.get("client")) && Boolean.FALSE.equals(c.get("approved"))));
+        assertEquals(1, lines(get("/events?filter=" + enc("kind == mcp_client && action == requested && client.number == " + number)).body()).size());
+
+        server().mcpAccept(number);
+        JsonObject approved = inSession(session, TOOL_CALL).json().getAsJsonObject("result");
+        assertFalse(approved.get("isError").getAsBoolean(), approved.toString());
+        assertTrue(toolText(approved).contains("\"platform\""));
+
+        server().mcpRevoke(number);
+        assertEquals(404, inSession(session, TOOL_CALL).status(), "revoked: the client must pair again");
+        assertThrows(IllegalArgumentException.class, () -> server().mcpRevoke(number));
+    }
+
+    @Test
+    void mcpAcceptWithoutANumberNeedsExactlyOneWaiting() throws IOException {
+        for (Map<String, Object> c : server().mcpClients()) {
+            if (Boolean.FALSE.equals(c.get("approved"))) server().mcpRevoke((Integer) c.get("number"));
+        }
+        assertThrows(IllegalArgumentException.class, () -> server().mcpAccept(null), "none waiting");
+        String[] a = pair("only");
+        String[] b = pair("other");
+        assertThrows(IllegalArgumentException.class, () -> server().mcpAccept(null), "two waiting");
+        server().mcpRevoke(Integer.parseInt(b[1]));
+        assertEquals(Integer.parseInt(a[1]), server().mcpAccept(null).get("number"));
+        server().mcpRevoke(Integer.parseInt(a[1]));
+    }
+
+    @Test
+    void aClientsReconnectBurstSharesOneNumber() throws IOException {
+        String name = "burst-" + System.nanoTime();
+        String[] a = pair(name);
+        String[] b = pair(name);
+        assertEquals(a[1], b[1], "a second session from the same client waits under the same number");
+        assertEquals(2, server().mcpClients().stream().filter(c -> c.get("number").equals(Integer.parseInt(a[1])))
+                .findFirst().orElseThrow().get("sessions"));
+        server().mcpAccept(Integer.parseInt(a[1]));
+        for (String session : new String[] {a[0], b[0]}) {
+            assertFalse(inSession(session, TOOL_CALL).json().getAsJsonObject("result").get("isError").getAsBoolean());
+        }
+        String[] later = pair(name);
+        assertFalse(a[1].equals(later[1]), "a session after approval does not inherit it");
+        assertTrue(inSession(later[0], TOOL_CALL).json().getAsJsonObject("result").get("isError").getAsBoolean());
+        server().mcpRevoke(Integer.parseInt(a[1]));
+        assertEquals(404, inSession(b[0], TOOL_CALL).status(), "revoking a number ends all its sessions");
+        server().mcpRevoke(Integer.parseInt(later[1]));
+    }
+
+    @Test
+    void waitingClientsCannotPushOutApprovedOnes() throws IOException {
+        String[] kept = pair("kept");
+        server().mcpAccept(Integer.parseInt(kept[1]));
+        String[] first = pair("flood");
+        for (int i = 0; i < 8; i++) pair("flood");
+        assertEquals(404, inSession(first[0], TOOL_CALL).status(), "the oldest waiting client gave way");
+        assertFalse(inSession(kept[0], TOOL_CALL).json().getAsJsonObject("result").get("isError").getAsBoolean());
+        server().mcpRevoke(Integer.parseInt(kept[1]));
     }
 
     @Test

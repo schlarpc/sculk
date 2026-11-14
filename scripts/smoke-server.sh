@@ -72,6 +72,38 @@ if [ -f "$control" ]; then
     echo 'sculk script stop smoke.js' >&3
     console_saw 'kind == script_stop && script == smoke.js && cause == user' || { echo "FAIL: /sculk script stop"; ok=0; }
     ctl script rm smoke.js > /dev/null || { echo "FAIL: script rm"; ok=0; }
+    # MCP pairing: a client without the token waits until the console accepts it.
+    python3 - "$control" <<'PY' > "$run/smoke.pair" || { echo "FAIL: MCP pairing (waiting)"; ok=0; }
+import json, re, sys, urllib.request
+info = json.load(open(sys.argv[1]))
+def post(body, session=None):
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if session: headers["Mcp-Session-Id"] = session
+    r = urllib.request.urlopen(urllib.request.Request(info["mcp"], json.dumps(body).encode(), headers), timeout=10)
+    return r.headers.get("Mcp-Session-Id"), json.load(r)
+session, init = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
+    "capabilities": {}, "clientInfo": {"name": "smoke-pair", "version": "0"}}})
+number = re.search(r"/sculk mcp accept (\d+)", init["result"]["instructions"]).group(1)
+_, r = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sculk_status", "arguments": {}}}, session)
+assert r["result"]["isError"], r
+print(session, number)
+PY
+    read -r pair_session pair_number < "$run/smoke.pair" || true
+    echo "sculk mcp accept $pair_number" >&3
+    python3 - "$control" "$pair_session" <<'PY' || { echo "FAIL: MCP pairing (accepted at the console)"; ok=0; }
+import json, sys, time, urllib.request
+info, session = json.load(open(sys.argv[1])), sys.argv[2]
+for _ in range(20):
+    req = urllib.request.Request(info["mcp"], json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "sculk_status", "arguments": {}}}).encode(),
+        {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Mcp-Session-Id": session})
+    r = json.load(urllib.request.urlopen(req, timeout=10))
+    if not r["result"]["isError"]:
+        sys.exit(0)
+    time.sleep(0.5)
+sys.exit("still waiting: " + json.dumps(r))
+PY
+    rm -f "$run/smoke.pair"
     python3 - "$control" <<'PY' || { echo "FAIL: control server /mcp"; ok=0; }
 import json, sys, urllib.request
 info = json.load(open(sys.argv[1]))

@@ -45,7 +45,9 @@ import sculk.core.util.Bytes;
  *   <li>every request needs {@code Authorization: Bearer <token>}. The token
  *       is random per launch and written, with the port, to a file only the
  *       user can read ({@code sculk-control.json} in the working directory,
- *       or {@code -Dsculk.controlFile});</li>
+ *       or {@code -Dsculk.controlFile}). The one exception is {@code /mcp},
+ *       where a client without it can pair instead: its tools wait until
+ *       the player approves it in game (see {@link McpHandler});</li>
  *   <li>the {@code Host} header must name the loopback address and this port,
  *       which stops DNS rebinding, and a request with an {@code Origin}
  *       header is refused unless the origin is this server, which stops
@@ -204,6 +206,13 @@ public final class ControlServer {
     /** The web UI, signed in: the page takes the token from the fragment and drops it from the address bar. */
     public String uiUrl() { return url() + "/ui/#token=" + token; }
 
+    /** MCP clients that paired without the token, waiting or approved: {@code {number, client, since, approved}}. */
+    public List<Map<String, Object>> mcpClients() { return mcp.clients(); }
+    /** Approves the waiting MCP client {@code number}, or the only one when null; throws IllegalArgumentException otherwise. */
+    public Map<String, Object> mcpAccept(Integer number) { return mcp.accept(number); }
+    /** Ends a paired MCP client's session; throws IllegalArgumentException if there is none. */
+    public Map<String, Object> mcpRevoke(int number) { return mcp.revoke(number); }
+
     public void stop() {
         for (HttpServer server : servers) server.stop(0);
     }
@@ -242,7 +251,10 @@ public final class ControlServer {
                 serveStatic(ex, path);
                 return;
             }
-            if (refusal == null) refusal = refuseToken(ex);
+            String tokenRefusal = refusal == null ? refuseToken(ex) : null;
+            // Without the token, /mcp still answers: a client can pair (see McpHandler).
+            boolean pairing = tokenRefusal != null && path.equals("/mcp");
+            if (refusal == null && !pairing) refusal = tokenRefusal;
             if (refusal != null) {
                 int status = refusal.startsWith("401") ? 401 : 403;
                 if (status == 401) ex.getResponseHeaders().set("WWW-Authenticate", "Bearer");
@@ -284,7 +296,7 @@ public final class ControlServer {
                             json(ex, 400, Map.of("jsonrpc", "2.0", "error", Map.of("code", -32600, "message", bad)));
                             return;
                         }
-                        mcp.post(ex, body(ex), version);
+                        mcp.post(ex, body(ex), version, !pairing);
                     }
                     case "DELETE /mcp" -> mcp.delete(ex);
                     default -> {

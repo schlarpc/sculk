@@ -1,5 +1,7 @@
 package sculk.core.command;
 
+import static com.mojang.brigadier.arguments.IntegerArgumentType.getInteger;
+import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.StringArgumentType.greedyString;
 
@@ -28,6 +30,9 @@ import sculk.core.script.ScriptManager;
  *   <li>{@code /sculk script list}, {@code run <name>}, {@code stop <name>}
  *       and {@code reload}: the installed scripts, as the web UI's scripts
  *       page drives them;</li>
+ *   <li>{@code /sculk mcp list}, {@code accept [number]}, {@code revoke
+ *       <number>}: MCP clients that connect without the token wait for the
+ *       player to accept them; {@code /sculk mcp token} prints the token;</li>
  *   <li>{@code /sculk ui} (game clients only): opens the web UI in the
  *       browser, signed in. The token goes straight to the browser, never
  *       into chat, where logs, screenshots and streams would keep it.</li>
@@ -83,7 +88,24 @@ public final class SculkCommand {
                                         .executes(ctx -> withScripts(ctx.getSource(), reply,
                                                 s -> stop(ctx.getSource(), s, getString(ctx, "name"), reply)))))
                         .then(LiteralArgumentBuilder.<S>literal("reload")
-                                .executes(ctx -> withScripts(ctx.getSource(), reply, s -> reload(ctx.getSource(), reply)))));
+                                .executes(ctx -> withScripts(ctx.getSource(), reply, s -> reload(ctx.getSource(), reply)))))
+                .then(LiteralArgumentBuilder.<S>literal("mcp")
+                        .then(LiteralArgumentBuilder.<S>literal("list")
+                                .executes(ctx -> withControl(ctx.getSource(), reply, c -> mcpList(ctx.getSource(), c, reply))))
+                        .then(LiteralArgumentBuilder.<S>literal("accept")
+                                .executes(ctx -> withControl(ctx.getSource(), reply, c -> mcpAccept(ctx.getSource(), c, null, reply)))
+                                .then(SculkCommand.<S>clientNumber(false)
+                                        .executes(ctx -> withControl(ctx.getSource(), reply,
+                                                c -> mcpAccept(ctx.getSource(), c, getInteger(ctx, "number"), reply)))))
+                        .then(LiteralArgumentBuilder.<S>literal("revoke")
+                                .then(SculkCommand.<S>clientNumber(true)
+                                        .executes(ctx -> withControl(ctx.getSource(), reply,
+                                                c -> mcpRevoke(ctx.getSource(), c, getInteger(ctx, "number"), reply)))))
+                        .then(LiteralArgumentBuilder.<S>literal("token")
+                                .executes(ctx -> withControl(ctx.getSource(), reply, c -> {
+                                    reply.ok(ctx.getSource(), "control token: " + c.token() + " (for " + c.url() + ")");
+                                    return 1;
+                                }))));
         if (openUrl != null) {
             root.then(LiteralArgumentBuilder.<S>literal("ui").executes(ctx -> ui(ctx.getSource(), reply, openUrl)));
         }
@@ -198,17 +220,72 @@ public final class SculkCommand {
         return Boolean.TRUE.equals(r.get("ok")) ? 1 : 0;
     }
 
-    // ---- ui ----
+    // ---- control server: mcp and ui ----
 
-    private static <S> int ui(S source, Reply<S> reply, Consumer<String> openUrl) {
+    /** Runs {@code action} with the control server, answering its refusals as failures. */
+    private static <S> int withControl(S source, Reply<S> reply, Function<ControlServer, Integer> action) {
         Sculk sculk = Sculk.get();
         ControlServer control = sculk == null ? null : sculk.control();
         if (control == null) {
-            reply.fail(source, "the control server is off; start the game with -Dsculk.control=0");
+            reply.fail(source, "the control server is off; start the game with -Dsculk.control=<port>");
             return 0;
         }
-        openUrl.accept(control.uiUrl());
-        reply.ok(source, "opening the web UI in your browser (" + control.url() + "/ui/)");
+        try {
+            return action.apply(control);
+        } catch (IllegalArgumentException e) {
+            reply.fail(source, e.getMessage());
+            return 0;
+        }
+    }
+
+    /** A paired MCP client's number; completes from the waiting ones, or with {@code all}, every one. */
+    private static <S> RequiredArgumentBuilder<S, Integer> clientNumber(boolean all) {
+        SuggestionProvider<S> suggest = (ctx, builder) -> {
+            Sculk sculk = Sculk.get();
+            if (sculk != null && sculk.control() != null) {
+                for (Map<String, Object> c : sculk.control().mcpClients()) {
+                    String n = String.valueOf(c.get("number"));
+                    if ((all || !Boolean.TRUE.equals(c.get("approved"))) && n.startsWith(builder.getRemaining())) builder.suggest(n);
+                }
+            }
+            return builder.buildFuture();
+        };
+        return RequiredArgumentBuilder.<S, Integer>argument("number", integer(1)).suggests(suggest);
+    }
+
+    private static String describeClient(Map<String, Object> c) {
+        return "#" + c.get("number") + " " + c.get("client");
+    }
+
+    private static <S> int mcpList(S source, ControlServer control, Reply<S> reply) {
+        List<Map<String, Object>> clients = control.mcpClients();
+        if (clients.isEmpty()) {
+            reply.ok(source, "no MCP clients have paired; one that connects to " + control.url() + "/mcp without the token will wait here");
+            return 0;
+        }
+        for (Map<String, Object> c : clients) {
+            Object sessions = c.get("sessions");
+            reply.ok(source, "  " + describeClient(c) + ": " + (Boolean.TRUE.equals(c.get("approved")) ? "approved" : "waiting")
+                    + (sessions instanceof Integer n && n > 1 ? " (" + n + " sessions)" : ""));
+        }
+        return clients.size();
+    }
+
+    private static <S> int mcpAccept(S source, ControlServer control, Integer number, Reply<S> reply) {
+        reply.ok(source, "approved MCP client " + describeClient(control.mcpAccept(number)) + " until the game exits");
         return 1;
+    }
+
+    private static <S> int mcpRevoke(S source, ControlServer control, int number, Reply<S> reply) {
+        reply.ok(source, "revoked MCP client " + describeClient(control.mcpRevoke(number)));
+        return 1;
+    }
+
+    private static <S> int ui(S source, Reply<S> reply, Consumer<String> openUrl) {
+        return withControl(source, reply, control -> {
+            openUrl.accept(control.uiUrl());
+            reply.ok(source, "opening the web UI in your browser (" + control.url() + "/ui/)");
+            return 1;
+        });
     }
 }

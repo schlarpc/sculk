@@ -49,6 +49,8 @@ it.
 | `/sculk script list` | the installed scripts and their state |
 | `/sculk script run <name>`, `stop <name>` | start or stop one (tab completes the names) |
 | `/sculk script reload` | restart all scripts from disk |
+| `/sculk mcp list`, `accept [n]`, `revoke <n>` | approve MCP clients that connect without the token (see below) |
+| `/sculk mcp token` | print the control token in chat |
 | `/sculk ui` | open the web UI in your browser, signed in (game clients only) |
 
 In a game client these are client commands, so they work on any server; a
@@ -82,6 +84,12 @@ scripts/sculkctl.py repl
 scripts/sculkctl.py ui              # the web UI, signed in
 scripts/sculkctl.py mcp-config      # connect an MCP client (e.g. Claude Code) to the live game
 ```
+
+MCP clients pair instead of holding the token: add the server once, with a
+fixed port (`-Psculk.control=25580`), and when the agent first calls a tool
+it asks you to type `/sculk mcp accept <n>` in game. Approval lasts until the
+game exits; after a restart the client reconnects and asks again, with no
+change to its configuration.
 
 `gradle build` also runs `nix build .#web` for the control server's web UI
 (`web/`); pass `-Psculk.webDir=<dir>` to use a prebuilt one instead.

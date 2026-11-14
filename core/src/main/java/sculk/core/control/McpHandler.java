@@ -25,10 +25,17 @@ import sculk.core.util.Bytes;
 /**
  * A Model Context Protocol server over the control server's HTTP listener
  * ({@code POST /mcp}, the Streamable HTTP transport, answering with plain
- * JSON rather than a stream). It shares the control server's token, Host
- * and Origin checks, and gives an agent the same powers as the HTTP API:
- * query and wait for events, read frames, evaluate script code, and read,
- * write, edit, run and manage installed scripts.
+ * JSON rather than a stream). It shares the control server's Host and
+ * Origin checks, and gives an agent the same powers as the HTTP API: query
+ * and wait for events, read frames, evaluate script code, and read, write,
+ * edit, run and manage installed scripts.
+ *
+ * <p>A client gets in either with the control token, or by pairing: it
+ * connects without one, and its session waits until the player approves it
+ * in game ({@code /sculk mcp accept}). A waiting session can initialize and
+ * list tools, but each tool call answers with what to type instead of
+ * running. Approvals last until the game exits; the client's configuration
+ * then needs only a fixed port, and never changes.
  */
 final class McpHandler {
     static final List<String> PROTOCOL_VERSIONS = List.of("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05");
@@ -37,6 +44,8 @@ final class McpHandler {
     /** How often a streamed call reports progress (or, without a progress token, sends a keep-alive). */
     static final long TICK_MILLIS = 2_000;
     private static final int MAX_SESSIONS = 256;
+    /** Waiting sessions are kept apart, and few, so callers without a token cannot push out approved ones. */
+    private static final int MAX_PENDING = 8;
 
     static final String SCRIPT_HELP = """
             Scripts are JavaScript (Rhino, ES6: arrow functions, let/const, template strings, classes; no modules, \
@@ -121,13 +130,45 @@ final class McpHandler {
 
     // ---- the HTTP side: sessions, streamed calls, cancellation ----
 
-    /** One client's session: its calls in flight, by request id, so notifications/cancelled can find them. */
+    /**
+     * One client's session: its calls in flight, by request id, so
+     * notifications/cancelled can find them. A paired session has a short
+     * number for the player to type, and the name the client gave itself.
+     */
     private static final class Session {
         final Map<Object, Call> calls = new java.util.concurrent.ConcurrentHashMap<>();
+        final int number;
+        final String client;
+        final long since = System.currentTimeMillis();
+        volatile boolean approved;
+
+        Session(int number, String client, boolean approved) {
+            this.number = number;
+            this.client = client;
+            this.approved = approved;
+        }
+
+        Map<String, Object> toJson() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("number", number);
+            m.put("client", client);
+            m.put("since", since);
+            m.put("approved", approved);
+            return m;
+        }
     }
 
-    /** Clients that never initialized (or skip sessions) share this one. */
-    private final Session anonymous = new Session();
+    /** Clients with the token that never initialized (or skip sessions) share this one. */
+    private final Session anonymous = new Session(0, "", true);
+    private final java.util.concurrent.atomic.AtomicInteger numbers = new java.util.concurrent.atomic.AtomicInteger();
+    /** Paired sessions waiting for the player, oldest first. */
+    private final Map<String, Session> pending = java.util.Collections.synchronizedMap(
+            new LinkedHashMap<>() {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Session> eldest) {
+                    return size() > MAX_PENDING;
+                }
+            });
     private final Map<String, Session> sessions = java.util.Collections.synchronizedMap(
             new LinkedHashMap<>(16, 0.75f, true) {
                 @Override
@@ -212,13 +253,15 @@ final class McpHandler {
      * Serves POST /mcp. Sessions are optional: initialize hands out an
      * Mcp-Session-Id, and a request naming an unknown one gets 404 (the
      * client must initialize again). tools/call may stream its answer when
-     * the client accepts text/event-stream.
+     * the client accepts text/event-stream. {@code hasToken} says whether the
+     * request carried the control token; without it, only a session (or
+     * an initialize, which starts one waiting for the player) gets in.
      */
-    void post(HttpExchange ex, String body, String version) throws IOException {
+    void post(HttpExchange ex, String body, String version, boolean hasToken) throws IOException {
         String sessionId = ex.getRequestHeaders().getFirst("Mcp-Session-Id");
-        Session session = anonymous;
+        Session session = hasToken ? anonymous : null;
         if (sessionId != null) {
-            session = sessions.get(sessionId);
+            session = session(sessionId);
             if (session == null) {
                 ControlServer.json(ex, 404, error(null, -32001, "unknown or expired session " + sessionId + "; initialize again"));
                 return;
@@ -244,11 +287,42 @@ final class McpHandler {
             return;
         }
         if ("initialize".equals(method) && id != null) {
-            Object response = handle(body, version);
             String newId = newSessionId();
-            sessions.put(newId, new Session());
+            Session created;
+            if (hasToken) {
+                created = new Session(0, clientName(msg), true);
+                sessions.put(newId, created);
+            } else {
+                created = waitFor(newId, clientName(msg));
+            }
+            Object response = handle(body, version);
+            if (!created.approved && response instanceof Map<?, ?> m && m.get("result") instanceof Map<?, ?> r) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> result = (Map<String, Object>) r;
+                result.put("instructions", result.get("instructions") + " " + waiting(created));
+            }
             ex.getResponseHeaders().set("Mcp-Session-Id", newId);
             ControlServer.json(ex, 200, response);
+            return;
+        }
+        if (session == null) {
+            ex.getResponseHeaders().set("WWW-Authenticate", "Bearer");
+            ControlServer.json(ex, 401, error(id, -32001,
+                    "send the control token, or initialize to ask the player to approve this client"));
+            return;
+        }
+        boolean waiting = !hasToken && !session.approved;
+        if (waiting && msg == null) {
+            // A batch could carry a tool call past the check below.
+            ControlServer.json(ex, 200, error(null, -32600, "a client waiting for approval sends one message at a time"));
+            return;
+        }
+        if (waiting && "tools/call".equals(method) && id != null) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("jsonrpc", "2.0");
+            out.put("id", id);
+            out.put("result", text(waiting(session), true));
+            ControlServer.json(ex, 200, out);
             return;
         }
         if ("tools/call".equals(method) && id != null) {
@@ -294,12 +368,148 @@ final class McpHandler {
             return;
         }
         Session session = sessions.remove(sessionId);
+        if (session == null) session = pending.remove(sessionId);
         if (session == null) {
             ControlServer.json(ex, 404, Map.of("error", "unknown or expired session"));
             return;
         }
         session.calls.values().forEach(Call::cancel);
         ex.sendResponseHeaders(204, -1);
+    }
+
+    private Session session(String id) {
+        Session s = sessions.get(id);
+        return s != null ? s : pending.get(id);
+    }
+
+    /** What a waiting client is told, for its model to pass on. */
+    private static String waiting(Session s) {
+        return "This MCP client is waiting for the player's approval, so sculk's tools do not run yet. "
+                + "Ask the user to type `/sculk mcp accept " + s.number + "` in Minecraft (or at the server console), "
+                + "then try again.";
+    }
+
+    /** The name and version the client gave in initialize, cut to something fit for chat. */
+    private static String clientName(JsonObject msg) {
+        String name = "unnamed client";
+        try {
+            JsonObject info = msg.getAsJsonObject("params").getAsJsonObject("clientInfo");
+            name = info.get("name").getAsString();
+            if (info.has("version")) name += " " + info.get("version").getAsString();
+        } catch (RuntimeException e) {
+            // No clientInfo: keep the placeholder.
+        }
+        name = name.replaceAll("\\p{Cntrl}", "").strip();
+        if (name.isEmpty()) name = "unnamed client";
+        return name.length() > 64 ? name.substring(0, 64) + "…" : name;
+    }
+
+    private static Map<String, Object> clientEntry(String action, Session s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("action", action);
+        m.put("client", s.toJson());
+        return m;
+    }
+
+    // ---- pairing, for /sculk mcp ----
+
+    /**
+     * Starts a session that waits for the player. Clients reconnect in
+     * bursts (Claude Code, finding its session gone after a game restart,
+     * initializes two or three times within a second and keeps the last),
+     * so a session joins a waiting one from a client of the same name and
+     * takes its number: accepting that number then approves whichever
+     * session the client kept. Only waiting numbers are shared; a session
+     * never joins one already approved.
+     */
+    private Session waitFor(String sessionId, String client) {
+        Session created;
+        boolean joined;
+        synchronized (pending) {
+            Session same = pending.values().stream().filter(s -> s.client.equals(client)).findFirst().orElse(null);
+            joined = same != null;
+            created = new Session(joined ? same.number : numbers.incrementAndGet(), client, false);
+            pending.put(sessionId, created);
+        }
+        if (!joined) {
+            Sculk.LOG.info("MCP client #{} ({}) is waiting for approval: /sculk mcp accept {}",
+                    created.number, created.client, created.number);
+            engine.log(Sculk.entry("mcp_client", clientEntry("requested", created)));
+        }
+        return created;
+    }
+
+    /** Paired clients, waiting and approved, one entry per number, with how many sessions share it. */
+    List<Map<String, Object>> clients() {
+        Map<Integer, Map<String, Object>> byNumber = new java.util.TreeMap<>();
+        for (Map<String, Session> map : List.of(pending, sessions)) {
+            synchronized (map) {
+                for (Session s : map.values()) {
+                    if (s.number == 0) continue;
+                    Map<String, Object> entry = byNumber.computeIfAbsent(s.number, n -> {
+                        Map<String, Object> m = s.toJson();
+                        m.put("sessions", 0);
+                        return m;
+                    });
+                    entry.put("sessions", (Integer) entry.get("sessions") + 1);
+                }
+            }
+        }
+        return new ArrayList<>(byNumber.values());
+    }
+
+    /**
+     * Approves a waiting client, every session under its number: the one
+     * numbered {@code number}, or, when null, the only one waiting. Returns
+     * its entry; throws IllegalArgumentException, with what to do, when that
+     * is not one client.
+     */
+    Map<String, Object> accept(Integer number) {
+        Map<String, Session> moved = new LinkedHashMap<>();
+        synchronized (pending) {
+            java.util.Set<Integer> waiting = new java.util.TreeSet<>();
+            for (Session s : pending.values()) waiting.add(s.number);
+            if (number == null) {
+                if (waiting.isEmpty()) throw new IllegalArgumentException("no MCP client is waiting");
+                if (waiting.size() > 1) {
+                    throw new IllegalArgumentException(waiting.size() + " clients are waiting; name one: /sculk mcp accept <number>");
+                }
+                number = waiting.iterator().next();
+            }
+            if (!waiting.contains(number)) throw new IllegalArgumentException("no MCP client #" + number + " is waiting");
+            for (var it = pending.entrySet().iterator(); it.hasNext(); ) {
+                var e = it.next();
+                if (e.getValue().number == number) {
+                    moved.put(e.getKey(), e.getValue());
+                    it.remove();
+                }
+            }
+        }
+        Session last = null;
+        for (var e : moved.entrySet()) {
+            e.getValue().approved = true;
+            sessions.put(e.getKey(), e.getValue());
+            last = e.getValue();
+        }
+        Sculk.LOG.info("MCP client #{} ({}) approved", last.number, last.client);
+        engine.log(Sculk.entry("mcp_client", clientEntry("accepted", last)));
+        return last.toJson();
+    }
+
+    /** Ends a paired client's sessions, waiting or approved; it must pair again. Returns its entry. */
+    Map<String, Object> revoke(int number) {
+        List<Session> found = new ArrayList<>();
+        for (Map<String, Session> map : List.of(pending, sessions)) {
+            synchronized (map) {
+                map.values().removeIf(s -> s.number == number && found.add(s));
+            }
+        }
+        if (found.isEmpty()) throw new IllegalArgumentException("no MCP client #" + number);
+        for (Session s : found) s.calls.values().forEach(Call::cancel);
+        Session first = found.get(0);
+        Sculk.LOG.info("MCP client #{} ({}) revoked", first.number, first.client);
+        engine.log(Sculk.entry("mcp_client", clientEntry("revoked", first)));
+        return first.toJson();
     }
 
     private static String newSessionId() {
