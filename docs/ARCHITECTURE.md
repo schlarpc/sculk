@@ -225,12 +225,35 @@ A script may start with a metadata block, like a userscript's:
 Every running script has its own top-level scope (on a shared scope of
 built-ins, Rhino's sharing-scopes pattern) and owns the listeners and timers
 it registers, so one script starts, stops or restarts without touching the
-others (`ScriptManager`). Saving a running script restarts it; disabling,
-deleting or stopping one removes its listeners and timers; enabling a
-startup script starts it. A script that throws while starting is stopped
-at once, so it never runs half-registered. The console (`/eval`, the REPL,
-`sculk_eval`) has a scope of its own; `sculk.scope('x.js')` reaches a
-running script's globals from anywhere.
+others (`ScriptManager`). The console (`/eval`, the REPL, `sculk_eval`)
+has a scope of its own; `sculk.scope('x.js')` reaches a running script's
+globals from anywhere.
+
+What happens to a script is one set of rules (`Lifecycle`, a pure planner;
+`ScriptManager` carries out its plans), whoever changed the file: the web
+UI, sculkctl, MCP, or an editor, `git checkout` and the like. sculk polls
+the script files (every 500 ms; `-Dsculk.watch=false` turns it off,
+`-Dsculk.watchMillis` sets the period) and applies a change once the file
+has held still for one poll.
+
+Each script is **stopped** (with why: `not-started`, `user`, `disabled`,
+`deleted`, `wrong-dist`), **running** a source with a given hash, or
+**failed**: wanted, but its source threw or did not compile.
+
+- A running script runs its file: a new version restarts it. Changes are
+  compared by content, so a file that comes back to the running source
+  changes nothing.
+- A new version that does not compile never stops a working script: the
+  old one keeps running and the new one shows as `rejected`.
+- A failed script is still wanted: the next version of its file is tried.
+- A stopped script stays stopped however its file changes, unless the file
+  becomes runnable (created, enabled, or its `@dist` now matches) and is a
+  startup script, which then starts.
+- Deleting or disabling a running script stops it; renaming one restarts
+  it under its new name (a delete and a create with the same content in
+  one poll is a rename).
+- Run always runs, whatever the mode; a script that throws while starting
+  is stopped at once, so it never runs half-registered.
 
 The `sculk` global is that script's `ScriptApi`:
 
@@ -253,8 +276,12 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 `start`, `connection`, `disconnect`, `payload_type`, `packet`, `eval`, and
 for scripts `script` (`sculk.emit`), `script_log` (`sculk.log`),
 `script_error`, `script_run`, `script_stop`, `script_file` (created, saved,
-renamed, enabled, disabled, deleted) and `script_reload`. Script events
-carry `script`, the script's name (`console` for the console). Every entry has an `id` that
+changed, renamed, enabled, disabled, deleted; `by` is `api` or `disk`) and
+`script_reload`. Script events carry `script`, the script's name (`console`
+for the console); `script_run`, `script_stop` and `script_error` also carry
+`cause` (`file`, `user` or `launch`), and a `script_error` whose `callback`
+is `compile` with `kept` means a change was refused and the old version
+kept running. Every entry has an `id` that
 goes up by one per entry, and `kind` and `t` (epoch millis).
 
 Packet events are layered, like a Wireshark dissection: each layer is an
@@ -331,7 +358,7 @@ GET  /events/stream?filter=&after=      server-sent events, live (backlog first 
 GET  /frame?id=                         a packet event's whole frame, as hex
 POST /eval      body: JavaScript        runs in the console's scope: {"ok":true,"result":...}
 POST /reload                            stops every script, drops all script state; starts the startup scripts again
-GET  /scripts                           installed scripts: metadata, enabled, state, last run, source hash
+GET  /scripts                           installed scripts: metadata, enabled, source hash, status (stopped/running/failed)
 GET  /scripts/source?name=              one script with its source
 POST /scripts/save?name=&base=          body: source; create or replace (base: the hash it was edited from, "" = new; 409 if stale)
 POST /scripts/check     body: source    syntax errors and warnings from Rhino's parser, without running

@@ -51,6 +51,9 @@ import sculk.core.util.Bytes;
  *       {@code <config>/sculk/scripts}). See {@link ScriptManager};</li>
  *   <li>{@code sculk.scripts}: more script files to load at startup,
  *       separated by the platform path separator, before the installed ones;</li>
+ *   <li>{@code sculk.watch}: whether to poll the script files for changes
+ *       made outside sculk and apply them (default true), every
+ *       {@code sculk.watchMillis} (default 500);</li>
  *   <li>{@code sculk.control}: port for the loopback control server (0 picks
  *       a free port); off when unset. See {@link ControlServer};</li>
  *   <li>{@code sculk.controlFile}: where the control server writes its port
@@ -150,6 +153,7 @@ public final class Sculk {
         LOG.info("scripts in {}", sculk.scripts.dir());
         Map<String, Object> started = sculk.scripts.startAll();
         LOG.info("started scripts: {}", started.get("loaded"));
+        if (Boolean.parseBoolean(System.getProperty("sculk.watch", "true"))) sculk.scripts.watch(Long.getLong("sculk.watchMillis", 500));
         if (controlOn) {
             try {
                 Path file = Path.of(System.getProperty("sculk.controlFile", "sculk-control.json"));

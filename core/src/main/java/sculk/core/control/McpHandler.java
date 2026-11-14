@@ -488,9 +488,10 @@ final class McpHandler {
                 "Read a script's source, with line numbers, and its hash (pass it to sculk_script_write as `base`).",
                 Map.of("name", scriptName), List.of("name")));
         out.add(tool("sculk_script_write",
-                "Create or replace a script with the whole source. A new script is enabled; it starts now only if "
-                        + "`run` is true. A script that is running restarts with the new source. Syntax errors are reported "
-                        + "and the file is still written. Prefer sculk_script_edit for small changes.\n\n" + SCRIPT_HELP,
+                "Create or replace a script with the whole source. A new script is enabled, and starts now if it is a "
+                        + "startup script (the default). A script that is running restarts with the new source; if the new "
+                        + "source has a syntax error, the file is still written but the old version keeps running. A script "
+                        + "that failed to start is retried. Prefer sculk_script_edit for small changes.\n\n" + SCRIPT_HELP,
                 Map.of("name", prop("string", "File name ending in .js; letters, digits, spaces and _ . ( ) + , -."),
                         "source", prop("string", "The whole script."),
                         "base", prop("string", "Optional: the hash this was edited from (from sculk_script_read); the write "
@@ -499,7 +500,8 @@ final class McpHandler {
                 List.of("name", "source")));
         out.add(tool("sculk_script_edit",
                 "Edit a script by replacing exact text: `old` must occur exactly once in the source (include enough "
-                        + "context to make it unique), unless `all` is true. A running script restarts with the result.",
+                        + "context to make it unique), unless `all` is true. A running script restarts with the result "
+                        + "(or keeps its old version if the result does not compile).",
                 Map.of("name", scriptName,
                         "old", prop("string", "Exact text to replace, whitespace included."),
                         "new", prop("string", "Replacement text."),
@@ -507,7 +509,7 @@ final class McpHandler {
                 List.of("name", "old", "new")));
         Map<String, Object> action = new LinkedHashMap<>(prop("string",
                 "run: (re)start it from its file now, whatever its run mode, and return the value of its last expression "
-                        + "or its error. stop: remove its listeners and timers. enable / disable: whether it starts at launch "
+                        + "or its error. stop: remove its listeners and timers; it no longer follows its file. enable / disable: whether it starts at launch "
                         + "and on reload (disabling also stops it; enabling starts a startup script). rename: needs `to`. "
                         + "delete: stop it and delete the file."));
         action.put("enum", List.of("run", "stop", "enable", "disable", "rename", "delete"));
@@ -595,7 +597,7 @@ final class McpHandler {
         String source = (String) s.get("source");
         StringBuilder sb = new StringBuilder();
         sb.append(name).append("  hash ").append(s.get("hash")).append("  ").append(Boolean.TRUE.equals(s.get("enabled")) ? "enabled" : "disabled")
-                .append("  run ").append(s.get("run")).append("  state ").append(s.get("state")).append('\n');
+                .append("  run ").append(s.get("run")).append("  ").append(statusLine(s.get("status"))).append('\n');
         String[] lines = source.split("\n", -1);
         int width = String.valueOf(lines.length).length();
         for (int i = 0; i < lines.length; i++) {
@@ -603,6 +605,17 @@ final class McpHandler {
             sb.append(String.format("%" + width + "d\t", i + 1)).append(lines[i]).append('\n');
         }
         return text(sb.toString(), false);
+    }
+
+    /** A script's status in one line: "running", "running (not the file: ...)", "failed: ...", "stopped (user)". */
+    private static String statusLine(Object status) {
+        if (!(status instanceof Map<?, ?> m)) return "";
+        Object state = m.get("state");
+        if ("running".equals(state)) {
+            return m.get("rejected") instanceof Map<?, ?> r ? "running an older version; the file does not compile: " + r.get("error") : "running";
+        }
+        if ("failed".equals(state)) return "failed: " + m.get("error");
+        return "stopped (" + m.get("why") + ")";
     }
 
     private Map<String, Object> scriptWrite(JsonObject args) {

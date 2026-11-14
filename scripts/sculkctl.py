@@ -127,6 +127,8 @@ def show_eval(result):
         print(value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False))
         return True
     print(f"error: {result.get('error')}", file=sys.stderr)
+    if result.get("kept"):
+        print(f"({result['kept']})", file=sys.stderr)
     return False
 
 
@@ -176,12 +178,16 @@ def cmd_script(c, a):
         print(f"# {data['dir']} ({data['dist']})")
         for s in data["scripts"]:
             flags = ("on " if s.get("enabled") else "off") + " " + s.get("run", "?").ljust(7)
-            state = s.get("state", "?")
-            if s.get("state") == "active":
-                state += f" ({s.get('listeners', 0)} listeners, {s.get('timers', 0)} timers)"
-            last = s.get("lastRun")
-            if last and not last.get("ok"):
-                state += f"  last run failed: {last.get('error')}"
+            st = s.get("status") or {}
+            state = st.get("state", "?")
+            if state == "running":
+                state += f" ({st.get('listeners', 0)} listeners, {st.get('timers', 0)} timers)"
+                if st.get("rejected"):
+                    state += f"  older version; the file does not compile: {st['rejected'].get('error')}"
+            elif state == "failed":
+                state += f": {st.get('error')}"
+            elif state == "stopped" and st.get("why") not in (None, "not-started"):
+                state += f" ({st['why']})"
             if s.get("skip"):
                 state += f"  [{s['skip']}]"
             title = f"  {s['title']}" if s.get("title") else ""

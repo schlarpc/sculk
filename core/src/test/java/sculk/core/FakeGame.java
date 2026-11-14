@@ -46,6 +46,8 @@ public final class FakeGame {
         System.setProperty("sculk.eventLog", EVENT_LOG.toString());
         System.setProperty("sculk.scripts", STARTUP_SCRIPT.toString());
         System.setProperty("sculk.scriptDir", SCRIPT_DIR.toString());
+        // Tests poll by hand (ScriptManager.pollOnce), so nothing changes under them.
+        System.setProperty("sculk.watch", "false");
         System.setProperty("sculk.control", "0");
         System.setProperty("sculk.controlFile", CONTROL_FILE.toString());
         Sculk.init(new FakePlatform());

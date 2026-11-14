@@ -10,17 +10,35 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import sculk.core.Sculk;
+import sculk.core.script.Lifecycle.Disk;
+import sculk.core.script.Lifecycle.Failed;
+import sculk.core.script.Lifecycle.Plan;
+import sculk.core.script.Lifecycle.Present;
+import sculk.core.script.Lifecycle.RunState;
+import sculk.core.script.Lifecycle.Running;
+import sculk.core.script.Lifecycle.Start;
+import sculk.core.script.Lifecycle.Stay;
+import sculk.core.script.Lifecycle.Stop;
+import sculk.core.script.Lifecycle.StopReason;
+import sculk.core.script.Lifecycle.Stopped;
 import sculk.core.util.Bytes;
 import sculk.shaded.org.mozilla.javascript.RhinoException;
 import sculk.shaded.org.mozilla.javascript.Scriptable;
@@ -47,8 +65,12 @@ import sculk.shaded.org.mozilla.javascript.Scriptable;
  *
  * <p>Each running script has its own scope and owns its listeners and timers
  * ({@link ScriptApi}), so one script starts, stops and restarts without
- * touching the others. Saving, enabling or renaming a running script
- * restarts it; disabling, deleting or stopping one stops it.
+ * touching the others. What happens to a script when its file changes, or
+ * when it is run, stopped or reloaded, is decided by {@link Lifecycle};
+ * this class reads the files, carries out its plans and logs them. A change
+ * made through this class and one made on disk by anything else go through
+ * the same rules: {@link #watch} polls the files, and every method here that
+ * writes a file reconciles it straight away.
  */
 public final class ScriptManager {
     public static final String DISABLED = ".disabled";
@@ -82,14 +104,37 @@ public final class ScriptManager {
     private ScriptHost host = new ScriptHost();
     private volatile ScriptApi console;
     /**
-     * Running scripts, in start order. Its own lock, not this manager's: a
-     * script callback holds the host's lock and may look up another
-     * script's scope, while the manager holds its own lock to start scripts
-     * in the host.
+     * Each script's state; running ones in start order. Its own lock, not
+     * this manager's: a script callback holds the host's lock and may look
+     * up another script's scope, while the manager holds its own lock to
+     * start scripts in the host. A name missing here is not started.
      */
-    private final Map<String, ScriptApi> running = java.util.Collections.synchronizedMap(new LinkedHashMap<>());
-    /** The outcome of each script's last start: {t, ok, error?}. */
-    private final Map<String, Map<String, Object>> lastRun = new LinkedHashMap<>();
+    private final Map<String, RunState> states = Collections.synchronizedMap(new LinkedHashMap<>());
+    /** Each script's file as last reconciled: what a change is compared against. */
+    private final Map<String, Present> seen = new HashMap<>();
+
+    /** Enough of a file's attributes to notice it changed without reading it. */
+    private record Fingerprint(String real, FileTime modified, long size) {}
+
+    /** Each file's fingerprint when it was last read. */
+    private final Map<String, Fingerprint> settled = new HashMap<>();
+    /** The fingerprints at the previous poll: a file is read once it holds still for one poll. */
+    private Map<String, Fingerprint> lastPoll = Map.of();
+    private ScheduledExecutorService watcher;
+
+    /** Why a script started or stopped, for the timeline. */
+    private enum Cause {
+        /** Its file changed, through this class or on disk. */
+        FILE,
+        /** Someone ran or stopped it. */
+        USER,
+        /** Launch or reload. */
+        LAUNCH;
+
+        String json() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+    }
 
     public ScriptManager(Sculk engine, Path dir, List<Path> extra) {
         this.engine = engine;
@@ -220,6 +265,10 @@ public final class ScriptManager {
         return want.equals(here) ? null : "only for a " + (want.equals("server") ? "dedicated server" : "game client");
     }
 
+    private RunState state(String name) {
+        return states.getOrDefault(name, Lifecycle.NOT_STARTED);
+    }
+
     private Map<String, Object> info(Script s, String source) {
         Map<String, String> meta = metadata(source);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -240,12 +289,32 @@ public final class ScriptManager {
         } catch (IOException ignored) {
             // Gone since the scan.
         }
-        ScriptApi api = running.get(s.name());
-        int listeners = api == null ? 0 : api.listenerCount(), pendingTimers = api == null ? 0 : api.timerCount();
-        out.put("state", api == null ? "stopped" : listeners + pendingTimers > 0 ? "active" : "idle");
-        out.put("listeners", listeners);
-        out.put("timers", pendingTimers);
-        if (lastRun.containsKey(s.name())) out.put("lastRun", lastRun.get(s.name()));
+        out.put("status", status(state(s.name())));
+        return out;
+    }
+
+    /**
+     * A state as JSON: {@code {"state":"running","hash","since","listeners","timers","rejected"?:{"hash","error"}}},
+     * {@code {"state":"failed","hash","error","at"}} or {@code {"state":"stopped","why"}}.
+     */
+    static Map<String, Object> status(RunState s) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (s instanceof Running r) {
+            out.put("state", "running");
+            out.put("hash", r.hash());
+            out.put("since", r.since());
+            out.put("listeners", r.api().listenerCount());
+            out.put("timers", r.api().timerCount());
+            if (r.rejected() != null) out.put("rejected", Map.of("hash", r.rejected().hash(), "error", r.rejected().error()));
+        } else if (s instanceof Failed f) {
+            out.put("state", "failed");
+            out.put("hash", f.hash());
+            out.put("error", f.error());
+            out.put("at", f.at());
+        } else if (s instanceof Stopped st) {
+            out.put("state", "stopped");
+            out.put("why", st.why().json());
+        }
         return out;
     }
 
@@ -270,10 +339,7 @@ public final class ScriptManager {
                 m.put("name", name);
                 m.put("origin", "memory");
                 m.put("enabled", true);
-                ScriptApi api = running.get(name);
-                m.put("state", api.listenerCount() + api.timerCount() > 0 ? "active" : "idle");
-                m.put("listeners", api.listenerCount());
-                m.put("timers", api.timerCount());
+                m.put("status", status(state(name)));
                 out.add(m);
             }
         }
@@ -282,8 +348,8 @@ public final class ScriptManager {
 
     /** Names of the scripts with a live scope, in start order. */
     public List<String> runningNames() {
-        synchronized (running) {
-            return List.copyOf(running.keySet());
+        synchronized (states) {
+            return states.entrySet().stream().filter(e -> e.getValue() instanceof Running).map(Map.Entry::getKey).toList();
         }
     }
 
@@ -298,8 +364,55 @@ public final class ScriptManager {
 
     /** A script's top-level scope, or null if it is not running. */
     Scriptable scopeOf(String name) {
-        ScriptApi api = CONSOLE.equals(name) ? console : running.get(name);
-        return api == null ? null : api.scope();
+        if (CONSOLE.equals(name)) {
+            ScriptApi api = console;
+            return api == null ? null : api.scope();
+        }
+        return states.get(name) instanceof Running r ? r.api().scope() : null;
+    }
+
+    // ---- reading files ----
+
+    /** A script's file now, recording its fingerprint as read. */
+    private Disk observe(String name) {
+        Script s;
+        String source;
+        try {
+            s = find(name);
+            source = read(s.path());
+        } catch (ScriptError e) {
+            if (e.status() != 404) throw e;
+            settled.remove(name);
+            return Lifecycle.ABSENT;
+        }
+        Fingerprint f = fingerprint(s.path());
+        if (f != null) settled.put(name, f);
+        else settled.remove(name);
+        Map<String, String> meta = metadata(source);
+        return new Present(s.path(), s.external(), s.enabled(), source, hash(source),
+                s.external() || runMode(meta).equals("startup"), distMismatch(meta), syntaxError(name, source));
+    }
+
+    private Present observePresent(String name) {
+        if (observe(name) instanceof Present p) return p;
+        throw new ScriptError(404, "no script named " + name);
+    }
+
+    /** The first syntax error in {@code source}, as {@code "message (name:line)"}, or null. */
+    static String syntaxError(String name, String source) {
+        for (ScriptHost.Problem p : ScriptHost.check(name, source)) {
+            if (!p.warning()) return p.message() + " (" + name + ":" + p.line() + ")";
+        }
+        return null;
+    }
+
+    private static Fingerprint fingerprint(Path path) {
+        try {
+            BasicFileAttributes a = Files.readAttributes(path, BasicFileAttributes.class);
+            return new Fingerprint(path.toRealPath().toString(), a.lastModifiedTime(), a.size());
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     // ---- changes ----
@@ -308,8 +421,10 @@ public final class ScriptManager {
      * Creates or replaces a script. With {@code base} null the write is
      * unconditional; with {@code base} empty the script must not exist yet;
      * otherwise {@code base} must be the hash of the current source, or the
-     * write fails with 409 (someone else changed it). A running script
-     * restarts with the new source.
+     * write fails with 409 (someone else changed it). Then the new file goes
+     * through the {@link Lifecycle} rules like any other change: a running
+     * script restarts (or keeps running, if the new source does not
+     * compile), and a new startup script starts.
      */
     public synchronized Map<String, Object> save(String name, String source, String base) {
         if (name == null || name.isBlank()) throw new ScriptError(400, "name is required");
@@ -330,10 +445,11 @@ public final class ScriptManager {
             created = true;
         }
         write(s.path(), source);
-        audit(name, created ? "create" : "save", null);
+        audit(name, created ? "create" : "save", null, "api");
+        Map<String, Object> restart = reconcile(name, observe(name), false);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("created", created);
-        if (running.containsKey(name)) out.put("restart", start(name, source));
+        if (restart != null) out.put("restart", restart);
         out.putAll(info(s, source));
         return out;
     }
@@ -357,14 +473,13 @@ public final class ScriptManager {
 
     public synchronized Map<String, Object> delete(String name) {
         Script s = mutable(name);
-        stopQuietly(name);
         try {
             Files.delete(s.path());
         } catch (IOException e) {
             throw new ScriptError(500, "cannot delete " + s.path() + ": " + e);
         }
-        lastRun.remove(name);
-        audit(name, "delete", null);
+        audit(name, "delete", null, "api");
+        reconcile(name, observe(name), false);
         return Map.of("ok", true, "name", name);
     }
 
@@ -375,29 +490,24 @@ public final class ScriptManager {
         if (name.equals(to)) return info(s, read(s.path()));
         // A case-only rename is fine on case-insensitive file systems; anything else must be new.
         if (exists(to) && !name.equalsIgnoreCase(to)) throw new ScriptError(409, to + " already exists");
-        boolean wasRunning = running.containsKey(name);
-        stopQuietly(name);
         Path target = dir.resolve(to + (s.enabled() ? "" : DISABLED));
         try {
             Files.move(s.path(), target);
         } catch (IOException e) {
             throw new ScriptError(500, "cannot rename " + s.path() + ": " + e);
         }
-        Map<String, Object> last = lastRun.remove(name);
-        if (last != null) lastRun.put(to, last);
-        audit(name, "rename", to);
-        Script moved = new Script(to, target, false, s.enabled());
-        String source = read(target);
+        audit(name, "rename", to, "api");
+        Present moved = observePresent(to);
+        Map<String, Object> restart = moveState(name, to, moved);
         Map<String, Object> out = new LinkedHashMap<>();
-        if (wasRunning) out.put("restart", start(to, source));
-        out.putAll(info(moved, source));
+        if (restart != null) out.put("restart", restart);
+        out.putAll(info(new Script(to, target, false, s.enabled()), moved.source()));
         return out;
     }
 
-    /** Enables or disables a script. Disabling stops it; enabling starts a startup script. */
+    /** Enables or disables a script: the file is renamed, then reconciled (disabling stops it; enabling starts a startup script). */
     public synchronized Map<String, Object> setEnabled(String name, boolean enabled) {
         Script s = mutable(name);
-        Map<String, Object> out = new LinkedHashMap<>();
         if (s.enabled() != enabled) {
             Path target = dir.resolve(name + (enabled ? "" : DISABLED));
             try {
@@ -406,15 +516,13 @@ public final class ScriptManager {
                 throw new ScriptError(500, "cannot " + (enabled ? "enable " : "disable ") + name + ": " + e);
             }
             s = new Script(name, target, false, enabled);
-            audit(name, enabled ? "enable" : "disable", null);
+            audit(name, enabled ? "enable" : "disable", null, "api");
         }
-        String source = read(s.path());
-        if (!enabled) {
-            stopQuietly(name);
-        } else if (!running.containsKey(name) && runMode(metadata(source)).equals("startup") && distMismatch(metadata(source)) == null) {
-            out.put("restart", start(name, source));
-        }
-        out.putAll(info(s, source));
+        Present now = observePresent(name);
+        Map<String, Object> restart = reconcile(name, now, false);
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (restart != null) out.put("restart", restart);
+        out.putAll(info(s, now.source()));
         return out;
     }
 
@@ -424,17 +532,165 @@ public final class ScriptManager {
         return s;
     }
 
+    /**
+     * Brings a script's state in line with its file, now {@code after}.
+     * Returns the start's outcome if it started or a change was refused,
+     * else null. {@code fromDisk}: the change was found by {@link #pollOnce},
+     * so it is logged here (changes made through this class log themselves).
+     */
+    private Map<String, Object> reconcile(String name, Disk after, boolean fromDisk) {
+        Present before = seen.get(name);
+        Disk was = before == null ? Lifecycle.ABSENT : before;
+        if (was.equals(after)) return null;
+        if (after instanceof Present p) seen.put(name, p);
+        else seen.remove(name);
+        if (fromDisk) audit(name, diskAction(was, after), null, "disk");
+        Map<String, Object> out = apply(name, Lifecycle.fileChanged(state(name), was, after, now()), Cause.FILE);
+        if (after instanceof Lifecycle.Absent) states.remove(name);
+        return out;
+    }
+
+    private static String diskAction(Disk before, Disk after) {
+        if (!(before instanceof Present b)) return "create";
+        if (!(after instanceof Present a)) return "delete";
+        if (b.enabled() != a.enabled()) return a.enabled() ? "enable" : "disable";
+        return "change";
+    }
+
+    /** Moves a script's state to its new name and carries out {@link Lifecycle#renamed}. */
+    private Map<String, Object> moveState(String from, String to, Present after) {
+        RunState old = state(from);
+        stopInstance(from, Cause.FILE);
+        states.remove(from);
+        seen.remove(from);
+        settled.remove(from);
+        seen.put(to, after);
+        states.put(to, Lifecycle.NOT_STARTED);
+        return apply(to, Lifecycle.renamed(old, after, now()), Cause.FILE);
+    }
+
+    // ---- watching the files ----
+
+    /** Polls the script files every {@code periodMillis} and reconciles the ones that changed. Idempotent. */
+    public synchronized void watch(long periodMillis) {
+        if (watcher != null) return;
+        watcher = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "sculk-script-watch");
+            t.setDaemon(true);
+            return t;
+        });
+        watcher.scheduleWithFixedDelay(() -> {
+            try {
+                pollOnce();
+            } catch (RuntimeException | LinkageError e) {
+                Sculk.LOG.warn("watching scripts: {}", e.toString());
+            }
+        }, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * One poll: every file whose fingerprint differs from when it was last
+     * read, and has not changed since the previous poll (so an editor has
+     * finished writing it), is read and reconciled. A file that disappears
+     * while another appears with the same content, in one poll, is a rename.
+     * Public for tests, which call it instead of {@link #watch}.
+     */
+    public synchronized void pollOnce() {
+        Map<String, Fingerprint> now = new HashMap<>();
+        for (Script s : scan()) {
+            Fingerprint f = fingerprint(s.path());
+            if (f != null) now.put(s.name(), f);
+        }
+        TreeSet<String> names = new TreeSet<>(now.keySet());
+        names.addAll(settled.keySet());
+        Map<String, Disk> ready = new LinkedHashMap<>();
+        for (String name : names) {
+            Fingerprint f = now.get(name);
+            if (Objects.equals(f, settled.get(name)) || !Objects.equals(f, lastPoll.get(name))) continue;
+            try {
+                ready.put(name, observe(name));
+            } catch (ScriptError e) {
+                Sculk.LOG.warn("cannot read script {}: {}", name, e.getMessage());
+                if (f != null) settled.put(name, f);
+            }
+        }
+        lastPoll = now;
+
+        // Renames first, so the old name is not taken for a deletion.
+        List<String> gone = new ArrayList<>();
+        for (var e : ready.entrySet()) {
+            if (e.getValue() instanceof Lifecycle.Absent && seen.containsKey(e.getKey())) gone.add(e.getKey());
+        }
+        for (var e : List.copyOf(ready.entrySet())) {
+            if (!(e.getValue() instanceof Present p) || seen.containsKey(e.getKey())) continue;
+            String from = gone.stream().filter(g -> seen.get(g).hash().equals(p.hash())).findFirst().orElse(null);
+            if (from == null) continue;
+            gone.remove(from);
+            ready.remove(from);
+            audit(from, "rename", e.getKey(), "disk");
+            moveState(from, e.getKey(), p);
+        }
+        // A renamed script's new name is in seen now, so reconciling it changes nothing.
+        for (var e : ready.entrySet()) reconcile(e.getKey(), e.getValue(), true);
+    }
+
     // ---- running ----
+
+    private static long now() {
+        return System.currentTimeMillis();
+    }
+
+    /**
+     * Carries out a plan. Returns the outcome {@code {"ok":..., "result"|"error":...}}
+     * when it started the script, refused a change, or was asked for by
+     * someone ({@link Cause#USER}); null when nothing worth reporting happened.
+     */
+    private Map<String, Object> apply(String name, Plan plan, Cause cause) {
+        RunState before = state(name);
+        if (plan instanceof Start st) return start(name, st.from().hash(), st.from().source(), cause);
+        if (plan instanceof Stop sp) {
+            stopInstance(name, cause);
+            states.put(name, new Stopped(sp.why()));
+            return null;
+        }
+        RunState next = ((Stay) plan).next();
+        if (before instanceof Running && !(next instanceof Running)) throw new IllegalStateException("a plan to stay cannot stop " + name);
+        states.put(name, next);
+        if (next instanceof Running r && r.rejected() != null) {
+            boolean fresh = !(before instanceof Running b && r.rejected().equals(b.rejected()));
+            if (fresh) logError(name, "compile", cause, r.rejected().error(), true);
+            if (fresh || cause == Cause.USER) return outcome(false, r.rejected().error(), true);
+        } else if (next instanceof Failed f) {
+            boolean fresh = !(before instanceof Failed b && b.hash().equals(f.hash()));
+            if (fresh || cause == Cause.USER) {
+                logError(name, "compile", cause, f.error(), false);
+                return outcome(false, f.error(), false);
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, Object> outcome(boolean ok, String error, boolean kept) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", ok);
+        out.put("error", error);
+        if (kept) out.put("kept", "the previous version is still running");
+        return out;
+    }
 
     /**
      * (Re)starts a script from its file, whatever its run mode, enabled or
-     * not: an explicit run always runs. Returns {@code {"ok":..., "result"|"error":..., state}}.
+     * not: an explicit run always runs. A source that does not compile
+     * leaves a running script running. Returns {@code {"ok":..., "result"|"error":..., info}}.
      */
     public synchronized Map<String, Object> run(String name) {
         Script s = find(name);
-        String source = read(s.path());
-        Map<String, Object> out = start(name, source);
-        out.putAll(info(s, source));
+        Present p = observePresent(name);
+        // The run is from the file as it is now, so that is what the next change is compared to.
+        seen.put(name, p);
+        Map<String, Object> out = apply(name, Lifecycle.run(state(name), p, now()), Cause.USER);
+        out = out == null ? new LinkedHashMap<>() : new LinkedHashMap<>(out);
+        out.putAll(info(s, p.source()));
         return out;
     }
 
@@ -443,69 +699,78 @@ public final class ScriptManager {
      * that name; throws if it fails. For tests and embedders.
      */
     public synchronized void load(String name, String source) {
-        Map<String, Object> r = start(name, source);
+        Map<String, Object> r = start(name, hash(source), source, Cause.USER);
         if (!Boolean.TRUE.equals(r.get("ok"))) throw new IllegalStateException(String.valueOf(r.get("error")));
     }
 
-    /** Stops a running script. */
+    /** Stops a running script, or gives up on one that failed to start. */
     public synchronized Map<String, Object> stop(String name) {
-        if (!running.containsKey(name)) throw new ScriptError(409, name + " is not running");
-        stopQuietly(name);
+        RunState s = state(name);
+        if (!Lifecycle.wanted(s)) throw new ScriptError(409, name + " is not running");
+        apply(name, Lifecycle.stop(s), Cause.USER);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
         out.put("name", name);
-        out.put("state", "stopped");
+        out.put("status", status(state(name)));
         return out;
     }
 
-    private void stopQuietly(String name) {
-        ScriptApi api = running.remove(name);
-        if (api == null) return;
-        api.close();
+    /** Closes the live instance, if any, leaving its state for the caller to set. */
+    private void stopInstance(String name, Cause cause) {
+        if (!(states.get(name) instanceof Running r)) return;
+        r.api().close();
         Map<String, Object> e = Sculk.entry("script_stop", Map.of());
         e.put("script", name);
+        e.put("cause", cause.json());
         engine.log(e);
     }
 
     /** Runs {@code source} as script {@code name} in a fresh scope, stopping any earlier instance first. */
-    private Map<String, Object> start(String name, String source) {
-        stopQuietly(name);
+    private Map<String, Object> start(String name, String hash, String source, Cause cause) {
+        stopInstance(name, cause);
         ScriptApi api = new ScriptApi(engine, this, host, timers, name);
-        running.put(name, api);
+        long t = now();
+        // Re-inserted, so running scripts stay in start order.
+        states.remove(name);
+        states.put(name, new Running(hash, api, t, null));
         Map<String, Object> out = new LinkedHashMap<>();
-
+        String error = null;
         try {
             Object value = api.load(source);
             out.put("ok", true);
             out.put("result", ScriptApi.jsonSafe(value, 6));
             Sculk.LOG.info("started script {}", name);
         } catch (RhinoException e) {
-            fail(name, api, out, ScriptApi.describe(e), e);
+            error = ScriptApi.describe(e);
+            Sculk.LOG.error("script {} failed to start", name, e);
         } catch (RuntimeException | LinkageError e) {
-            fail(name, api, out, e.toString(), e);
+            error = e.toString();
+            Sculk.LOG.error("script {} failed to start", name, e);
         }
-        Map<String, Object> event = Sculk.entry(Boolean.TRUE.equals(out.get("ok")) ? "script_run" : "script_error", Map.of());
-        event.put("script", name);
-        if (out.containsKey("error")) {
-            event.put("callback", "start");
-            event.put("error", out.get("error"));
+        if (error == null) {
+            Map<String, Object> event = Sculk.entry("script_run", Map.of());
+            event.put("script", name);
+            event.put("cause", cause.json());
+            engine.log(event);
+        } else {
+            // A script that throws while starting is stopped: half its listeners would be worse than none.
+            api.close();
+            states.put(name, new Failed(hash, error, t));
+            out.put("ok", false);
+            out.put("error", error);
+            logError(name, "start", cause, error, false);
         }
-        engine.log(event);
-        Map<String, Object> last = new LinkedHashMap<>();
-        last.put("t", System.currentTimeMillis());
-        last.put("ok", out.get("ok"));
-        if (out.containsKey("error")) last.put("error", out.get("error"));
-        lastRun.put(name, last);
         return out;
     }
 
-    /** A script that throws while starting is stopped: half its listeners would be worse than none. */
-    private void fail(String name, ScriptApi api, Map<String, Object> out, String error, Throwable t) {
-        Sculk.LOG.error("script {} failed to start", name, t);
-        api.close();
-        running.remove(name, api);
-        out.put("ok", false);
-        out.put("error", error);
+    private void logError(String name, String callback, Cause cause, String error, boolean kept) {
+        Map<String, Object> event = Sculk.entry("script_error", Map.of());
+        event.put("script", name);
+        event.put("callback", callback);
+        event.put("cause", cause.json());
+        event.put("error", error);
+        if (kept) event.put("kept", true);
+        engine.log(event);
     }
 
     // ---- the console ----
@@ -535,37 +800,36 @@ public final class ScriptManager {
      * scripts in a fresh host. Returns {@code {"ok":bool,"loaded":[...],"skipped":[...],"errors":[{"script":...,"error":...}]}}.
      */
     public synchronized Map<String, Object> reloadAll() {
-        for (String name : runningNames()) stopQuietly(name);
+        for (String name : runningNames()) stopInstance(name, Cause.LAUNCH);
+        states.clear();
         if (console != null) console.close();
         console = null;
         host = new ScriptHost();
         return startAll();
     }
 
-    /** Starts the enabled startup scripts. */
+    /** Reads every script afresh and starts the enabled startup scripts ({@link Lifecycle#launch}). */
     public synchronized Map<String, Object> startAll() {
         List<String> loaded = new ArrayList<>();
         List<Map<String, Object>> skipped = new ArrayList<>();
         List<Map<String, Object>> errors = new ArrayList<>();
+        seen.clear();
+        settled.clear();
         for (Script s : scan()) {
-            if (!s.enabled()) continue;
-            String source;
+            Disk d;
             try {
-                source = read(s.path());
+                d = observe(s.name());
             } catch (ScriptError e) {
                 errors.add(Map.of("script", s.name(), "error", e.getMessage()));
                 continue;
             }
-            Map<String, String> meta = metadata(source);
-            String skip = distMismatch(meta);
-            if (!s.external() && runMode(meta).equals("manual")) continue;
-            if (skip != null) {
-                skipped.add(Map.of("script", s.name(), "reason", skip));
-                continue;
-            }
-            Map<String, Object> r = start(s.name(), source);
-            if (Boolean.TRUE.equals(r.get("ok"))) loaded.add(s.name());
-            else errors.add(Map.of("script", s.name(), "error", r.get("error")));
+            if (!(d instanceof Present p)) continue;
+            seen.put(s.name(), p);
+            apply(s.name(), Lifecycle.launch(p, now()), Cause.LAUNCH);
+            RunState st = state(s.name());
+            if (st instanceof Running) loaded.add(s.name());
+            else if (st instanceof Failed f) errors.add(Map.of("script", s.name(), "error", f.error()));
+            else if (st instanceof Stopped stopped && stopped.why() == StopReason.WRONG_DIST) skipped.add(Map.of("script", s.name(), "reason", p.skip()));
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", errors.isEmpty());
@@ -575,11 +839,12 @@ public final class ScriptManager {
         return result;
     }
 
-    private void audit(String name, String action, String to) {
+    private void audit(String name, String action, String to, String by) {
         Map<String, Object> e = Sculk.entry("script_file", Map.of());
         e.put("script", name);
         e.put("action", action);
         if (to != null) e.put("to", to);
+        e.put("by", by);
         engine.log(e);
     }
 }

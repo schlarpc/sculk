@@ -646,6 +646,10 @@ class ControlServerTest {
         return null;
     }
 
+    private static JsonObject status(JsonObject info) {
+        return info.getAsJsonObject("status");
+    }
+
     private static int heard(String marker) throws IOException {
         return lines(get("/events?filter=" + enc("kind == script && data.heard == " + marker)).body()).size();
     }
@@ -669,16 +673,17 @@ class ControlServerTest {
         assertTrue(saved.get("created").getAsBoolean(), saved.toString());
         assertEquals("Listener", saved.get("title").getAsString());
         assertEquals("startup", saved.get("run").getAsString());
-        assertEquals("stopped", saved.get("state").getAsString());
+        assertEquals("running", status(saved).get("state").getAsString(), "a new startup script starts");
+        assertTrue(saved.getAsJsonObject("restart").get("ok").getAsBoolean(), saved.toString());
         assertTrue(Files.isRegularFile(FakeGame.SCRIPT_DIR.resolve(name)));
         assertEquals(409, post("/scripts/save?name=" + enc(name) + "&base=", source).status(), "base '' means new");
 
         JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
         assertTrue(run.get("ok").getAsBoolean(), run.toString());
         assertEquals(42, run.get("result").getAsInt());
-        assertEquals("active", run.get("state").getAsString());
-        assertEquals(1, run.get("listeners").getAsInt());
-        assertEquals(1, lines(get("/events?filter=" + enc("kind == script_log && script == " + name)).body()).size());
+        assertEquals("running", status(run).get("state").getAsString());
+        assertEquals(1, status(run).get("listeners").getAsInt());
+        assertEquals(2, lines(get("/events?filter=" + enc("kind == script_log && script == " + name)).body()).size(), "created, then run");
 
         // Its globals are its own; the console reaches them only through sculk.scope.
         assertEquals("undefined", post("/eval", "typeof mine").json().get("result").getAsString());
@@ -699,7 +704,7 @@ class ControlServerTest {
         // Disabling stops it and renames the file.
         JsonObject off = post("/scripts/enable?name=" + enc(name) + "&enabled=false", "").json();
         assertFalse(off.get("enabled").getAsBoolean());
-        assertEquals("stopped", off.get("state").getAsString());
+        assertEquals("disabled", status(off).get("why").getAsString());
         assertTrue(Files.isRegularFile(FakeGame.SCRIPT_DIR.resolve(name + ".disabled")));
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|c")));
         assertEquals(2, heard(marker));
@@ -708,13 +713,13 @@ class ControlServerTest {
         // Enabling a startup script starts it.
         JsonObject on = post("/scripts/enable?name=" + enc(name) + "&enabled=true", "").json();
         assertTrue(on.get("enabled").getAsBoolean());
-        assertEquals("active", on.get("state").getAsString());
+        assertEquals("running", status(on).get("state").getAsString());
 
         // Renaming keeps it running under the new name.
         String renamed = marker + "-b.js";
         JsonObject moved = post("/scripts/rename?name=" + enc(name) + "&to=" + enc(renamed), "").json();
         assertEquals(renamed, moved.get("name").getAsString());
-        assertEquals("active", moved.get("state").getAsString());
+        assertEquals("running", status(moved).get("state").getAsString());
         assertEquals(404, get("/scripts/source?name=" + enc(name)).status());
         assertEquals(source + "\n", get("/scripts/source?name=" + enc(renamed)).json().get("source").getAsString());
 
@@ -734,11 +739,11 @@ class ControlServerTest {
         assertEquals(200, post("/scripts/save?name=" + enc(name), source).status());
         JsonObject reload = post("/reload", "").json();
         assertFalse(reload.getAsJsonArray("loaded").toString().contains(name));
-        assertEquals("stopped", scriptInfo(name).get("state").getAsString());
+        assertEquals("not-started", status(scriptInfo(name)).get("why").getAsString(), "a new manual script waits");
         JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
         assertTrue(run.get("ok").getAsBoolean());
         assertTrue(run.get("result").getAsInt() >= 100);
-        assertEquals("idle", run.get("state").getAsString(), "a one-shot leaves nothing registered");
+        assertEquals(0, status(run).get("listeners").getAsInt(), "a one-shot leaves nothing registered");
         post("/scripts/delete?name=" + enc(name), "");
     }
 
@@ -755,14 +760,16 @@ class ControlServerTest {
     @Test
     void failingScriptsAreStoppedAndReported() throws Exception {
         String name = "ctl-fail-" + System.nanoTime() + ".js";
-        post("/scripts/save?name=" + enc(name), "sculk.on('packet', e => {});\nthrow new Error('nope');\n");
+        JsonObject saved = post("/scripts/save?name=" + enc(name), "sculk.on('packet', e => {});\nthrow new Error('nope');\n").json();
+        assertFalse(saved.getAsJsonObject("restart").get("ok").getAsBoolean(), "a new startup script starts, and fails");
         JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
         assertFalse(run.get("ok").getAsBoolean());
         assertTrue(run.get("error").getAsString().contains("nope"), run.toString());
         assertTrue(run.get("error").getAsString().contains(name + ":2"), run.toString());
-        assertEquals("stopped", run.get("state").getAsString(), "no half-started listeners");
-        assertFalse(run.getAsJsonObject("lastRun").get("ok").getAsBoolean());
-        assertEquals(1, lines(get("/events?filter=" + enc("kind == script_error && script == " + name)).body()).size());
+        assertEquals("failed", status(run).get("state").getAsString());
+        assertTrue(status(run).get("error").getAsString().contains("nope"));
+        assertEquals(0, FakeGame.sculk().scripts().runningNames().stream().filter(name::equals).count(), "no half-started listeners");
+        assertEquals(2, lines(get("/events?filter=" + enc("kind == script_error && script == " + name)).body()).size());
         post("/scripts/delete?name=" + enc(name), "");
     }
 
@@ -850,7 +857,7 @@ class ControlServerTest {
         JsonObject w = callTool("sculk_script_write", GSON.toJson(java.util.Map.of(
                 "name", name, "source", "var n = 1;\nsculk.on('connection', c => {});\nn\n", "run", true)));
         assertFalse(w.get("isError").getAsBoolean(), toolText(w));
-        assertTrue(toolText(w).contains("\"state\":\"active\""), toolText(w));
+        assertTrue(toolText(w).contains("\"state\":\"running\""), toolText(w));
 
         JsonObject read = callTool("sculk_script_read", "{\"name\":\"" + name + "\"}");
         assertTrue(toolText(read).contains("1\tvar n = 1;"), toolText(read));
@@ -866,6 +873,8 @@ class ControlServerTest {
         JsonObject broken = callTool("sculk_script_edit", GSON.toJson(java.util.Map.of("name", name, "old", "n = 2;", "new", "n = ;")));
         assertTrue(broken.get("isError").getAsBoolean(), "syntax errors are errors");
         assertTrue(toolText(broken).contains("problems"), toolText(broken));
+        assertTrue(toolText(broken).contains("kept"), toolText(broken));
+        assertEquals(2, post("/eval", "sculk.scope('" + name + "').n").json().get("result").getAsInt(), "the old version keeps running");
 
         assertTrue(toolText(callTool("sculk_scripts", "{}")).contains(name));
         JsonObject off = callTool("sculk_script_control", "{\"name\":\"" + name + "\",\"action\":\"disable\"}");
