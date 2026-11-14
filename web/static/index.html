@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
+  <!-- The control server fills this in per load; the editor's style elements carry it (see the CSP header). -->
+  <meta name="csp-nonce" content="{{CSP_NONCE}}">
   <title>sculk</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preload" href="monocraft.woff2" as="font" type="font/woff2" crossorigin>
@@ -24,11 +26,15 @@
       </svg>
       <h1>sculk</h1>
     </div>
+    <nav class="tabs" aria-label="Pages">
+      <a href="#events" data-page="events">Events</a>
+      <a href="#scripts" data-page="scripts">Scripts</a>
+    </nav>
     <div id="status" class="status">connecting…</div>
-    <button id="reload" type="button" title="Drop all script state and load the startup scripts again">Reload scripts</button>
+    <button id="reload" type="button" title="Stop every script, drop all script state, and start the enabled startup scripts again">Reload scripts</button>
   </header>
 
-  <main class="layout">
+  <main id="page-events" class="layout">
     <section class="panel events" aria-label="Events">
       <form id="filter-form" class="filter" autocomplete="off">
         <label class="visually-hidden" for="filter">Filter</label>
@@ -65,6 +71,61 @@
       </form>
     </section>
   </main>
+
+  <main id="page-scripts" class="layout scripts-layout" hidden>
+    <section class="panel script-list" aria-label="Installed scripts">
+      <div class="sl-head">
+        <h2>Scripts</h2>
+        <button id="script-new" type="button" title="Make a new script in the scripts folder">New</button>
+      </div>
+      <div id="script-dir" class="sl-dir"></div>
+      <ul id="scripts" class="sl-items" role="listbox" aria-label="Scripts"></ul>
+      <div class="sl-foot hint">click to edit · switch: enabled at startup · right-click for more</div>
+    </section>
+
+    <section class="panel script-editor" aria-label="Script editor">
+      <div class="se-bar">
+        <span id="se-name" class="se-name"></span>
+        <span class="se-spacer"></span>
+        <button id="se-save" type="button" title="Save (Ctrl+S). A running script restarts with the new source.">Save</button>
+        <button id="se-run" type="button" title="Save if needed, then (re)start it (Ctrl+Enter), whatever its @run">Run</button>
+        <button id="se-stop" type="button" title="Remove its listeners and timers">Stop</button>
+        <button id="se-more" type="button" title="More: enable, rename, duplicate, delete" aria-label="More actions">⋯</button>
+      </div>
+      <div id="se-info" class="se-info"></div>
+      <div id="se-banner" class="se-banner" role="alert" hidden></div>
+      <div id="se-empty" class="se-empty">
+        <p>Scripts are JavaScript files the game loads from its scripts folder. Pick one on the left, or</p>
+        <p><button id="se-empty-new" type="button">Make a new script</button></p>
+        <p class="hint">Each script has its own scope and owns its listeners and timers, so it starts, stops and restarts on its own.
+          A <code>// ==Sculk==</code> block at the top names it and says when it runs.</p>
+      </div>
+      <div id="se-host" class="se-host" hidden></div>
+      <div class="se-foot hint">Ctrl+S save · Ctrl+Enter save and run · Ctrl+Space complete · Ctrl+F find · F8 next problem</div>
+    </section>
+
+    <section class="panel script-output" aria-label="Script output">
+      <div class="so-bar">
+        <h2>Output</h2>
+        <span id="so-for" class="so-for"></span>
+        <span class="se-spacer"></span>
+        <button id="so-clear" type="button">Clear</button>
+      </div>
+      <div id="so-out" class="so-out" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <dialog id="ask" class="panel login">
+    <form id="ask-form">
+      <h2 id="ask-title"></h2>
+      <label id="ask-label" for="ask-input"></label>
+      <input id="ask-input" spellcheck="false" autocomplete="off">
+      <div class="ask-buttons">
+        <button id="ask-ok" type="submit">OK</button>
+        <button id="ask-cancel" type="button">Cancel</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="login" class="panel login">
     <form id="login-form">

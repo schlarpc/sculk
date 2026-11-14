@@ -1,0 +1,17 @@
+{
+  "name": "sculk-web",
+  "private": true,
+  "description": "Web UI for sculk's control server. Built by Nix (web/default.nix); tsc and esbuild come from nixpkgs.",
+  "license": "MIT",
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.4",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/lint": "^6.9.8",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
+    "@lezer/highlight": "^1.2.5"
+  }
+}

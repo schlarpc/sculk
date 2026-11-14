@@ -53,9 +53,10 @@
               gradle
               pkgs.jdk25
               pkgs.python3 # scripts/*.py
-              # web/: `tsc -p web --watch`, `esbuild --watch` while working on the UI
+              # web/: `npm ci` once, then `tsc -p web --watch`, `esbuild --watch` while working on the UI
               pkgs.typescript
               pkgs.esbuild
+              pkgs.nodejs
             ]
             ++ lib.optionals stdenv.hostPlatform.isLinux [
               # headless clients for integration tests, and screenshots of them

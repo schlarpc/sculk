@@ -1,11 +1,17 @@
 # The control server's web UI: TypeScript type-checked by tsc and bundled by
-# esbuild, plus Monocraft (OFL-1.1) subset to woff2. No npm dependencies, so
-# no lock file and no network access beyond fixed-output fetches.
+# esbuild, plus Monocraft (OFL-1.1) subset to woff2. Runtime libraries
+# (CodeMirror, for the script editor) come from package-lock.json through a
+# fixed-output fetch; tsc and esbuild come from nixpkgs. After changing
+# package.json, run `npm install --package-lock-only` and update npmDepsHash
+# (the build prints the right one).
 #
 #   nix build .#web
 {
   lib,
   stdenvNoCC,
+  fetchNpmDeps,
+  npmHooks,
+  nodejs,
   esbuild,
   typescript,
   python3,
@@ -29,6 +35,8 @@ stdenvNoCC.mkDerivation {
   src = lib.fileset.toSource {
     root = ./.;
     fileset = lib.fileset.unions [
+      ./package.json
+      ./package-lock.json
       ./src
       ./static
       ./tools
@@ -36,7 +44,21 @@ stdenvNoCC.mkDerivation {
     ];
   };
 
+  npmDeps = fetchNpmDeps {
+    name = "sculk-web-npm-deps";
+    src = lib.fileset.toSource {
+      root = ./.;
+      fileset = lib.fileset.unions [
+        ./package.json
+        ./package-lock.json
+      ];
+    };
+    hash = "sha256-Oh3vqxYOSQZ7Z/colEflKeb90cAYjV4CaLNuQCvTqZk=";
+  };
+
   nativeBuildInputs = [
+    nodejs
+    npmHooks.npmConfigHook
     esbuild
     typescript
     fonttools
@@ -56,6 +78,15 @@ stdenvNoCC.mkDerivation {
     mkdir -p $out
     cp -r static/. dist/. $out/
     cp ${monocraftLicense} $out/monocraft-LICENSE.txt
+    # The bundled npm packages' licences (CodeMirror and Lezer: MIT).
+    for d in node_modules/@codemirror/* node_modules/@lezer/* node_modules/*; do
+      for f in "$d"/LICENSE*; do
+        [ -f "$f" ] || continue
+        printf '==== %s ====\n' "''${d#node_modules/}" >> $out/third-party-LICENSES.txt
+        cat "$f" >> $out/third-party-LICENSES.txt
+        printf '\n' >> $out/third-party-LICENSES.txt
+      done
+    done
     runHook postInstall
   '';
 

@@ -33,7 +33,53 @@ export interface EvalResult {
 export interface ReloadResult {
   ok: boolean;
   loaded: string[];
+  skipped?: { script: string; reason: string }[];
   errors: { script: string; error: string }[];
+}
+
+/** One installed script, as GET /scripts lists it (ScriptManager.java). */
+export interface ScriptInfo {
+  name: string;
+  /** dir: installed; property: from -Dsculk.scripts; memory: running with no file. */
+  origin: "dir" | "property" | "memory";
+  path?: string;
+  enabled: boolean;
+  run?: "startup" | "manual";
+  title?: string;
+  description?: string;
+  meta?: Record<string, string>;
+  /** Why it does not start in this process (its @dist), if it does not. */
+  skip?: string;
+  hash?: string;
+  size?: number;
+  modified?: number;
+  state: "active" | "idle" | "stopped";
+  listeners: number;
+  timers: number;
+  lastRun?: { t: number; ok: boolean; error?: string };
+}
+
+export interface ScriptList {
+  dir: string;
+  dist: "client" | "server";
+  scripts: ScriptInfo[];
+}
+
+export interface ScriptSource extends ScriptInfo {
+  source: string;
+}
+
+/** A script's info after a change, with the restart's outcome when it was running. */
+export interface ScriptChange extends ScriptInfo {
+  created?: boolean;
+  restart?: EvalResult;
+}
+
+export interface ScriptRun extends ScriptInfo, EvalResult {}
+
+export interface CheckResult {
+  ok: boolean;
+  problems: { line: number; column: number; message: string; severity: "error" | "warning" }[];
 }
 
 export class AuthError extends Error {
@@ -128,5 +174,44 @@ export class Api {
 
   reload(): Promise<ReloadResult> {
     return this.json("POST", "/reload", "");
+  }
+
+  scripts(): Promise<ScriptList> {
+    return this.json("GET", "/scripts");
+  }
+
+  scriptSource(name: string): Promise<ScriptSource> {
+    return this.json("GET", `/scripts/source?${new URLSearchParams({ name })}`);
+  }
+
+  /** {@code base}: the hash the source was edited from, "" for a new script, undefined to overwrite. */
+  saveScript(name: string, source: string, base?: string): Promise<ScriptChange> {
+    const q = new URLSearchParams({ name });
+    if (base !== undefined) q.set("base", base);
+    return this.json("POST", `/scripts/save?${q}`, source);
+  }
+
+  checkScript(source: string): Promise<CheckResult> {
+    return this.json("POST", "/scripts/check", source);
+  }
+
+  runScript(name: string): Promise<ScriptRun> {
+    return this.json("POST", `/scripts/run?${new URLSearchParams({ name })}`, "");
+  }
+
+  stopScript(name: string): Promise<{ ok: boolean }> {
+    return this.json("POST", `/scripts/stop?${new URLSearchParams({ name })}`, "");
+  }
+
+  deleteScript(name: string): Promise<{ ok: boolean }> {
+    return this.json("POST", `/scripts/delete?${new URLSearchParams({ name })}`, "");
+  }
+
+  renameScript(name: string, to: string): Promise<ScriptChange> {
+    return this.json("POST", `/scripts/rename?${new URLSearchParams({ name, to })}`, "");
+  }
+
+  enableScript(name: string, enabled: boolean): Promise<ScriptChange> {
+    return this.json("POST", `/scripts/enable?${new URLSearchParams({ name, enabled: String(enabled) })}`, "");
   }
 }

@@ -12,7 +12,10 @@ then open the URL it prints. The token is "mock". In the REPL, a few
 expressions answer like the real thing (sculk.connections(),
 sculk.payloadTypes(), sculk.log(...), sculk.emit(...), arithmetic), and
 mock.burst(n), mock.disconnect(), mock.connect(), mock.rate(n),
-mock.pause() and mock.resume() steer the made-up traffic.
+mock.pause() and mock.resume() steer the made-up traffic. Scripts live in
+memory; running one "registers" a listener per sculk.on( in it, logs its
+top-level sculk.log('...') lines, and fails on unbalanced brackets, the
+word SYNTAX, or a throw.
 
 The filter language is a port of core/.../control/EventFilter.java.
 """
@@ -307,7 +310,263 @@ class Store:
 # ---------------------------------------------------------------- the made-up game
 
 PLATFORM = "neoforge 21.1.77 · minecraft 1.21.1 · client"
-SCRIPTS = ["sculk-scripts/autoload/log-waystones.js", "sculk-scripts/autoload/fuzz-backpacks.js"]
+SCRIPT_DIR = "/home/player/.minecraft/config/sculk/scripts"
+SCRIPT_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9 _.()+,-]{0,95}\.js")
+SEED_SCRIPTS = {
+    "log-waystones.js": (True, """// ==Sculk==
+// @name        Log waystones
+// @description Logs every Waystones payload, both ways
+// @run         startup
+// ==/Sculk==
+
+sculk.on('packet', e => {
+  if (e.owner === 'waystones') sculk.log(e.dir + ' ' + e.channel);
+});
+"""),
+    "fuzz-backpacks.js": (True, """// ==Sculk==
+// @name        Fuzz backpacks
+// @description Replays Sophisticated Backpacks payloads with a bumped slot
+// @run         startup
+// ==/Sculk==
+
+sculk.on('packet', e => {
+  if (e.channel !== 'sophisticatedbackpacks:sync_slot' || e.dir !== 'outbound') return;
+  const data = sculk.with(e.mod.data, 'slot', e.mod.data.slot + 1);
+  sculk.schedule(50, () => e.conn.injectPacket('outbound', data));
+});
+"""),
+    "dump-recipes.js": (True, """// ==Sculk==
+// @name        Dump recipes
+// @description One-shot: how many recipe packets came in
+// @run         manual
+// ==/Sculk==
+
+sculk.log('counting');
+42
+"""),
+    "server-only.js": (False, """// ==Sculk==
+// @name        Server only
+// @dist        server
+// ==/Sculk==
+sculk.on('connection', c => sculk.log(c.remote));
+"""),
+}
+
+
+class MockScripts:
+    """A stand-in for ScriptManager.java: scripts in memory, "running" by pattern."""
+
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.files = {name: {"source": src, "enabled": on} for name, (on, src) in SEED_SCRIPTS.items()}
+        self.running = {}
+        self.last = {}
+
+    @staticmethod
+    def meta(source):
+        out, inside = {}, False
+        for line in source.split("\n")[:200]:
+            t = line.strip()
+            if re.fullmatch(r"//\s*==Sculk==", t):
+                inside = True
+            elif re.fullmatch(r"//\s*==/Sculk==", t):
+                break
+            elif inside:
+                m = re.match(r"^\s*//\s*@([A-Za-z][\w-]*)(?:\s+(.*?))?\s*$", line)
+                if m:
+                    out[m.group(1).lower()] = m.group(2) or ""
+            elif t and not t.startswith("//"):
+                break
+        return out
+
+    @staticmethod
+    def hash(source):
+        import hashlib
+        return hashlib.sha256(source.encode()).hexdigest()[:24]
+
+    def error(self, status, message):
+        e = ValueError(message)
+        e.status = status
+        return e
+
+    def get(self, name):
+        if not name:
+            raise self.error(400, "name is required")
+        if name not in self.files:
+            raise self.error(404, f"no script named {name}")
+        return self.files[name]
+
+    def check_name(self, name):
+        if not name or not SCRIPT_NAME.fullmatch(name) or ".." in name:
+            raise self.error(400, f"bad script name '{name}': use letters, digits, spaces and _ . ( ) + , -, ending in .js")
+
+    def info(self, name):
+        f = self.files[name]
+        meta = self.meta(f["source"])
+        r = self.running.get(name)
+        out = {"name": name, "origin": "dir", "path": f"{SCRIPT_DIR}/{name}{'' if f['enabled'] else '.disabled'}",
+               "enabled": f["enabled"], "run": "manual" if meta.get("run", "").strip() == "manual" else "startup",
+               "title": meta.get("name", ""), "description": meta.get("description", ""), "meta": meta,
+               "hash": self.hash(f["source"]), "size": len(f["source"]), "modified": int(time.time() * 1000),
+               "state": "stopped" if r is None else ("active" if r["listeners"] + r["timers"] else "idle"),
+               "listeners": r["listeners"] if r else 0, "timers": r["timers"] if r else 0}
+        if meta.get("dist", "").strip() == "server":
+            out["skip"] = "only for a dedicated server"
+        if name in self.last:
+            out["lastRun"] = self.last[name]
+        return out
+
+    def list(self):
+        with self.lock:
+            return {"dir": SCRIPT_DIR, "dist": "client", "scripts": [self.info(n) for n in sorted(self.files, key=str.lower)]}
+
+    def source(self, name):
+        with self.lock:
+            self.get(name)
+            return {**self.info(name), "source": self.files[name]["source"]}
+
+    def problems(self, source):
+        # Unbalanced brackets, roughly where Rhino would complain; "syntax error" lines on request.
+        out, stack = [], []
+        for i, line in enumerate(source.split("\n"), 1):
+            if "SYNTAX" in line:
+                out.append({"line": i, "column": line.index("SYNTAX") + 1, "message": "syntax error", "severity": "error"})
+            for j, c in enumerate(line):
+                if c in "([{":
+                    stack.append((c, i, j + 1))
+                elif c in ")]}":
+                    if not stack or "([{"[")]}".index(c)] != stack[-1][0]:
+                        out.append({"line": i, "column": j + 1, "message": f"syntax error: unexpected {c}", "severity": "error"})
+                    else:
+                        stack.pop()
+        if stack:
+            c, i, j = stack[-1]
+            out.append({"line": i, "column": j, "message": f"missing closing bracket for {c}", "severity": "error"})
+        return out
+
+    def check(self, source):
+        p = self.problems(source)
+        return {"ok": not any(x["severity"] == "error" for x in p), "problems": p}
+
+    def audit(self, name, action, to=None):
+        self.store.add("script_file", {"script": name, "action": action, **({"to": to} if to else {})})
+
+    def start(self, name):
+        self.stop_quietly(name)
+        src = self.files[name]["source"]
+        p = self.problems(src)
+        if any(x["severity"] == "error" for x in p) or "throw " in src:
+            err = (f"SyntaxError: {p[0]['message']} ({name}#{p[0]['line']})" if p
+                   else f"Error: {src.split('throw ', 1)[1].splitlines()[0]} ({name}:1)")
+            self.store.add("script_error", {"script": name, "callback": "start", "error": err})
+            self.last[name] = {"t": int(time.time() * 1000), "ok": False, "error": err}
+            return {"ok": False, "error": err}
+        self.running[name] = {"listeners": src.count("sculk.on("), "timers": 0}
+        self.store.add("script_run", {"script": name})
+        for m in re.finditer(r"^sculk\.log\('([^']*)'\)", src, re.M):
+            self.store.add("script_log", {"script": name, "message": m.group(1)})
+        self.last[name] = {"t": int(time.time() * 1000), "ok": True}
+        last = [l.strip().rstrip(";") for l in src.splitlines() if l.strip() and not l.strip().startswith("//")]
+        result = None
+        if last and re.fullmatch(r"\d+", last[-1]):
+            result = int(last[-1])
+        return {"ok": True, "result": result}
+
+    def stop_quietly(self, name):
+        if self.running.pop(name, None) is not None:
+            self.store.add("script_stop", {"script": name})
+
+    def save(self, name, source, base):
+        with self.lock:
+            created = name not in self.files
+            if not created:
+                if base is not None:
+                    if base == "":
+                        raise self.error(409, f"{name} already exists")
+                    if base != self.hash(self.files[name]["source"]):
+                        raise self.error(409, f"{name} was changed by someone else")
+                self.files[name]["source"] = source
+            else:
+                if base:
+                    raise self.error(409, f"{name} was deleted by someone else")
+                self.check_name(name)
+                self.files[name] = {"source": source, "enabled": True}
+            self.audit(name, "create" if created else "save")
+            out = {"created": created}
+            if name in self.running:
+                out["restart"] = self.start(name)
+            return {**out, **self.info(name)}
+
+    def run(self, name):
+        with self.lock:
+            self.get(name)
+            r = self.start(name)
+            return {**r, **self.info(name)}
+
+    def stop(self, name):
+        with self.lock:
+            if name not in self.running:
+                raise self.error(409, f"{name} is not running")
+            self.stop_quietly(name)
+            return {"ok": True, "name": name, "state": "stopped"}
+
+    def delete(self, name):
+        with self.lock:
+            self.get(name)
+            self.stop_quietly(name)
+            del self.files[name]
+            self.last.pop(name, None)
+            self.audit(name, "delete")
+            return {"ok": True, "name": name}
+
+    def rename(self, name, to):
+        with self.lock:
+            self.get(name)
+            self.check_name(to)
+            if to in self.files and to.lower() != name.lower():
+                raise self.error(409, f"{to} already exists")
+            was = name in self.running
+            self.stop_quietly(name)
+            self.files[to] = self.files.pop(name)
+            if name in self.last:
+                self.last[to] = self.last.pop(name)
+            self.audit(name, "rename", to)
+            out = {"restart": self.start(to)} if was else {}
+            return {**out, **self.info(to)}
+
+    def enable(self, name, enabled):
+        with self.lock:
+            f = self.get(name)
+            if f["enabled"] != enabled:
+                f["enabled"] = enabled
+                self.audit(name, "enable" if enabled else "disable")
+            out = {}
+            if not enabled:
+                self.stop_quietly(name)
+            elif name not in self.running and self.info(name)["run"] == "startup" and "skip" not in self.info(name):
+                out["restart"] = self.start(name)
+            return {**out, **self.info(name)}
+
+    def reload(self):
+        with self.lock:
+            for n in list(self.running):
+                self.stop_quietly(n)
+            loaded, errors, skipped = [], [], []
+            for n in sorted(self.files, key=str.lower):
+                i = self.info(n)
+                if not i["enabled"] or i["run"] == "manual":
+                    continue
+                if "skip" in i:
+                    skipped.append({"script": n, "reason": i["skip"]})
+                    continue
+                r = self.start(n)
+                (loaded.append(n) if r["ok"] else errors.append({"script": n, "error": r["error"]}))
+            return {"ok": not errors, "loaded": loaded, "skipped": skipped, "errors": errors}
+
+    def running_names(self):
+        with self.lock:
+            return list(self.running)
 
 
 def varint(n):
@@ -491,6 +750,7 @@ class Game:
         self.mods = [m for m in mod_payloads() if m[5] > 0]
         self.lock = threading.Lock()
         self.drops = []  # (dir, field, value) from sculk.on('packet', ...) drop snippets
+        self.scripts = MockScripts(store)
 
     # -- events
 
@@ -498,7 +758,8 @@ class Game:
         self.store.add("start", {"platform": PLATFORM})
         for m in payload_types():
             self.store.add("payload_type", {"mod": m})
-        self.store.add("script", {"data": "log-waystones.js loaded; watching waystones:*"})
+        self.scripts.reload()
+        self.store.add("script_log", {"script": "log-waystones.js", "message": "watching waystones:*"})
         self.connect()
         for _ in range(1500):
             self.tick_one()
@@ -597,15 +858,16 @@ class Game:
         elif x < 0.992:
             mod = next(m for m in self.mods if m[0] == "waystones:waystone_teleport")
             self.payload(cid, mod, injected=True)
-            self.store.add("script", {"data": {"injected": mod[0], "note": "teleport without a known waystone"}})
+            self.store.add("script", {"script": "log-waystones.js",
+                                      "data": {"injected": mod[0], "note": "teleport without a known waystone"}})
         elif x < 0.997:
-            self.store.add("script", {"data": random.choice([
+            self.store.add("script", {"script": "fuzz-backpacks.js", "data": random.choice([
                 "backpack fuzz round %d" % random.randint(1, 400),
                 {"step": "done", "took": random.randint(3, 900)},
                 {"waystone": random.choice(WAYSTONES), "dimension": "minecraft:the_nether"}])})
         else:
             self.store.add("script_error", {
-                "callback": "on(packet)", "packet": "PacketEvent[inbound sophisticatedbackpacks:backpack_contents]",
+                "script": "fuzz-backpacks.js", "callback": "packet", "packet": "PacketEvent[inbound sophisticatedbackpacks:backpack_contents]",
                 "error": "org.mozilla.javascript.EcmaError: TypeError: Cannot read property \"Items\" from undefined (fuzz-backpacks.js#42)"})
 
     def run(self):
@@ -678,7 +940,8 @@ class Game:
                 data = json.loads(arg.replace("'", '"'))
             except ValueError:
                 data = arg
-            self.store.add("script", {"data": data})
+            self.store.add("script_log" if m.group(1) == "log" else "script",
+                           {"script": "console", **({"message": str(data)} if m.group(1) == "log" else {"data": data})})
             return {"ok": True, "result": None}
         if re.fullmatch(r"[\d\s+\-*/%().]+", src):
             try:
@@ -698,9 +961,7 @@ class Game:
 
     def reload(self):
         self.drops.clear()
-        ok = random.random() < 0.8
-        result = {"ok": ok, "loaded": SCRIPTS if ok else SCRIPTS[:1],
-                  "errors": [] if ok else [{"script": SCRIPTS[1], "error": "SyntaxError: missing ; before statement (fuzz-backpacks.js#17)"}]}
+        result = self.scripts.reload()
         self.store.add("script_reload", result)
         return result
 
@@ -709,7 +970,7 @@ class Game:
             conns = [{"id": c, "side": "client", "remote": r, "open": True} for c, r in self.open]
             conns += [{"id": c, "side": "client", "remote": r, "open": False} for c, r in self.closed[-3:]]
         return {"platform": PLATFORM, "pid": 424242, "events": len(self.store.events),
-                "lastEventId": self.store.last_id, "scripts": SCRIPTS, "connections": sorted(conns, key=lambda c: c["id"])}
+                "lastEventId": self.store.last_id, "scripts": self.scripts.running_names(), "connections": sorted(conns, key=lambda c: c["id"])}
 
 
 # ---------------------------------------------------------------- the UI files
@@ -742,6 +1003,9 @@ class Bundle:
                 return f"document.body.innerHTML='<pre style=\"color:#f66;padding:1em;white-space:pre-wrap\"></pre>';document.body.firstChild.textContent={msg};".encode()
             return self.js
 
+
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self' {nonce}; img-src 'self' data:; "
+       "font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 TYPES = {"html": "text/html; charset=utf-8", "css": "text/css; charset=utf-8", "js": "text/javascript; charset=utf-8",
          "svg": "image/svg+xml", "woff2": "font/woff2", "txt": "text/plain; charset=utf-8", "map": "application/json"}
@@ -810,20 +1074,46 @@ def make_handler(store, game, bundle):
                 if key == "POST /reload":
                     time.sleep(0.5)
                     return self.json(200, game.reload())
-                known = path in ("/status", "/events", "/events/stream", "/frame", "/eval", "/reload")
+                sc, name = game.scripts, q.get("name")
+                routes = {
+                    "GET /scripts": lambda: sc.list(),
+                    "GET /scripts/source": lambda: sc.source(name),
+                    "POST /scripts/save": lambda: sc.save(name, body, q.get("base")),
+                    "POST /scripts/check": lambda: sc.check(body),
+                    "POST /scripts/run": lambda: sc.run(name),
+                    "POST /scripts/stop": lambda: sc.stop(name),
+                    "POST /scripts/delete": lambda: sc.delete(name),
+                    "POST /scripts/rename": lambda: sc.rename(name, q.get("to")),
+                    "POST /scripts/enable": lambda: sc.enable(name, q.get("enabled", "true") != "false"),
+                }
+                if key in routes:
+                    try:
+                        return self.json(200, routes[key]())
+                    except ValueError as e:
+                        return self.json(getattr(e, "status", 400), {"error": str(e)})
+                known = path in ("/status", "/events", "/events/stream", "/frame", "/eval", "/reload") or \
+                    any(r.split(" ", 1)[1] == path for r in routes)
                 return self.json(405 if known else 404, {"error": f"wrong method for {path}" if known else f"no such endpoint {path}"})
             except ValueError as e:  # FilterError included
                 return self.json(400, {"error": str(e)})
 
         def static(self, name):
+            # The real server's CSP (ControlServer.CSP), so the UI is tried under the same rules.
+            csp = {"Content-Security-Policy": CSP.format(nonce="").replace("  ", " ")}
             if name == "app.js":
-                return self.send(200, TYPES["js"], bundle.get())
+                return self.send(200, TYPES["js"], bundle.get(), csp)
             if not re.fullmatch(r"[a-zA-Z0-9._-]+", name):
                 return self.send(404, "text/plain", b"not found\n")
             for base in filter(None, (WEB / "static", bundle.fonts)):
                 p = base / name
                 if p.is_file():
-                    return self.send(200, TYPES.get(name.rsplit(".", 1)[-1], "application/octet-stream"), p.read_bytes())
+                    data = p.read_bytes()
+                    if name == "index.html":
+                        import base64, os
+                        nonce = base64.b64encode(os.urandom(18)).decode()
+                        data = data.replace(b"{{CSP_NONCE}}", nonce.encode())
+                        csp = {"Content-Security-Policy": CSP.format(nonce=f"'nonce-{nonce}'")}
+                    return self.send(200, TYPES.get(name.rsplit(".", 1)[-1], "application/octet-stream"), data, csp)
             return self.send(404, "text/plain", b"not found\n")
 
         def stream(self, pred, after):
@@ -874,6 +1164,8 @@ def main():
     args = ap.parse_args()
     if not shutil.which("esbuild"):
         sys.exit("esbuild is not on PATH; run this under `nix develop`")
+    if not (WEB / "node_modules").is_dir():
+        sys.exit("web/node_modules is missing; run `npm ci` in web/ (under `nix develop`) first")
     if args.seed is not None:
         random.seed(args.seed)
 

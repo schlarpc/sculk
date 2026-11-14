@@ -90,7 +90,9 @@ public final class ControlServer {
             "woff2", "font/woff2",
             "map", "application/json; charset=utf-8",
             "txt", "text/plain; charset=utf-8");
-    private static final String CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    /** The page's {@code <style>} elements (the script editor's) carry this nonce; see {@link #serveStatic}. */
+    private static final String NONCE_PLACEHOLDER = "{{CSP_NONCE}}";
+    private static final String CSP = "default-src 'none'; script-src 'self'; style-src 'self' %s; img-src 'self' data:; "
             + "font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
     private final Sculk engine;
@@ -431,7 +433,16 @@ public final class ControlServer {
         headers.set("Content-Type", TYPES.getOrDefault(ext, "application/octet-stream"));
         headers.set("Cache-Control", "no-cache");
         headers.set("X-Content-Type-Options", "nosniff");
-        headers.set("Content-Security-Policy", CSP);
+        // index.html names a fresh nonce for the style elements the editor injects; nothing else may add styles.
+        String nonce = "";
+        if (name.equals("index.html")) {
+            byte[] random = new byte[18];
+            new SecureRandom().nextBytes(random);
+            String value = java.util.Base64.getEncoder().encodeToString(random);
+            nonce = "'nonce-" + value + "'";
+            bytes = new String(bytes, StandardCharsets.UTF_8).replace(NONCE_PLACEHOLDER, value).getBytes(StandardCharsets.UTF_8);
+        }
+        headers.set("Content-Security-Policy", String.format(CSP, nonce).replace("  ", " "));
         headers.set("X-Frame-Options", "DENY");
         headers.set("Referrer-Policy", "no-referrer");
         headers.set("Cross-Origin-Opener-Policy", "same-origin");

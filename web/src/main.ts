@@ -5,6 +5,7 @@ import { conn, field, frame, mod, roundTripBad } from "./event";
 import { inspect } from "./inspector";
 import { menuOpen, onMenuClose, showMenu, type MenuItem } from "./menu";
 import { frameOf } from "./views";
+import { ScriptsPage } from "./scripts";
 
 const MAX_ROWS = 5000;
 /** How many events either side of one "Show in context" loads. */
@@ -95,13 +96,21 @@ function summary(e: SculkEvent): string {
       return `${str(m?.channel)}  ${str(m?.flow)}${m?.registeredVia?.length ? "  via " + m.registeredVia.join(", ") : ""}`;
     }
     case "script":
-      return str(e.data);
+      return `${e.script ? `${str(e.script)}: ` : ""}${str(e.data)}`;
+    case "script_log":
+      return `${str(e.script)}: ${str(e.message)}`;
     case "script_error":
       return `${str(e.script ?? e.callback)}: ${str(e.error)}`;
+    case "script_run":
+      return `started ${str(e.script)}`;
+    case "script_stop":
+      return `stopped ${str(e.script)}`;
+    case "script_file":
+      return `${str(e.action)} ${str(e.script)}${e.to ? ` → ${str(e.to)}` : ""}`;
     case "eval":
       return str(e.source).replace(/\s+/g, " ");
     case "script_reload":
-      return e.ok ? `reloaded ${str(e.loaded)}` : `reload failed: ${str(e.errors)}`;
+      return e.ok ? `reloaded ${(e.loaded as string[] | undefined)?.join(", ") || "no scripts"}` : `reload failed: ${str(e.errors)}`;
     case "start":
       return str(e.platform);
     default: {
@@ -173,8 +182,17 @@ class App {
   private lastId = 0;
   private stream: AbortController | null = null;
   private sensorTimer = 0;
+  private readonly scripts: ScriptsPage;
+  private asking: Promise<void> | null = null;
 
-  constructor(private api: Api) {}
+  constructor(private api: Api) {
+    this.scripts = new ScriptsPage({
+      guard: (call) => this.guard(() => call(this.api)),
+      toast,
+      copy: (text) => void copy(text),
+      time,
+    });
+  }
 
   start(): void {
     this.wireFilter();
@@ -188,6 +206,30 @@ class App {
     void this.applyFilter();
     void this.refreshStatus();
     setInterval(() => void this.refreshStatus(), 5000);
+    window.addEventListener("hashchange", () => this.route());
+    this.route();
+  }
+
+  // ---- pages ----
+
+  /** #scripts or #scripts/<name> shows the script editor; anything else the events. */
+  private route(): void {
+    const hash = location.hash.slice(1);
+    const scripts = hash === "scripts" || hash.startsWith("scripts/");
+    byId("page-events").hidden = scripts;
+    byId("page-scripts").hidden = !scripts;
+    for (const tab of document.querySelectorAll<HTMLAnchorElement>(".tabs a")) {
+      const on = tab.dataset.page === (scripts ? "scripts" : "events");
+      tab.classList.toggle("on", on);
+      if (on) tab.setAttribute("aria-current", "page");
+      else tab.removeAttribute("aria-current");
+    }
+    if (scripts) {
+      const name = hash.startsWith("scripts/") ? decodeURIComponent(hash.slice("scripts/".length)) : undefined;
+      this.scripts.show(name || undefined);
+    } else {
+      this.scripts.hide();
+    }
   }
 
   /** Runs an API call; on a bad token asks for a new one and restarts. */
@@ -197,8 +239,15 @@ class App {
     } catch (e) {
       if (e instanceof AuthError) {
         this.stream?.abort();
-        this.api = new Api(await askForToken("The token was refused. The game makes a new one at every launch."));
-        void this.applyFilter();
+        if (!this.asking) {
+          this.asking = askForToken("The token was refused. The game makes a new one at every launch.").then((token) => {
+            this.api = new Api(token);
+            this.asking = null;
+            void this.applyFilter();
+            this.scripts.reconnect();
+          });
+        }
+        await this.asking;
         return undefined;
       }
       throw e;
@@ -222,7 +271,7 @@ class App {
       this.statusLine.title = [
         `pid ${s.pid}`,
         ...open.map((c) => `#${c.id} ${c.side} ${c.remote}`),
-        ...s.scripts.map((p) => `script ${p}`),
+        ...s.scripts.map((p) => `running ${p}`),
       ].join("\n");
       this.statusLine.classList.remove("st-down");
     } catch {
@@ -702,7 +751,11 @@ class App {
       }
     });
     byId<HTMLButtonElement>("repl-clear").onclick = () => byId("repl-out").replaceChildren();
-    this.replOut("JavaScript in the live script scope. `sculk` is the scripting API. Enter runs, Shift+Enter adds a line, ↑/↓ walk history.", "r-hint");
+    this.replOut(
+      "JavaScript in the console's own scope; sculk.scope('x.js') reaches a running script's globals. `sculk` is the scripting API. " +
+        "Enter runs, Shift+Enter adds a line, ↑/↓ walk history. Scripts to keep belong on the Scripts tab.",
+      "r-hint",
+    );
   }
 
   private replEcho(code: string): void {
@@ -725,7 +778,7 @@ class App {
   }
 
   private async reload(): Promise<void> {
-    if (!confirm("Reload scripts? This drops all script state, listeners and timers, then loads the startup scripts again.")) return;
+    if (!confirm("Reload scripts? This stops every script and drops all script state, the console's too, then starts the enabled startup scripts again.")) return;
     try {
       const r = await this.guard(() => this.api.reload());
       if (!r) return;
@@ -733,6 +786,8 @@ class App {
         r.ok ? `reloaded ${r.loaded.length} script(s): ${r.loaded.join(", ") || "none"}` : r.errors.map((e) => `${e.script}: ${e.error}`).join("\n"),
         r.ok ? "r-ok" : "r-err",
       );
+      toast(r.ok ? `reloaded ${r.loaded.length} script(s)` : `reload: ${r.errors.length} script(s) failed`);
+      void this.scripts.refresh();
     } catch (e) {
       this.replOut((e as Error).message, "r-err");
     }
