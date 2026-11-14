@@ -53,7 +53,21 @@ public final class EventFilter {
             "channel", List.<String[]>of(new String[] {"mod", "channel"}),
             "owner", List.of(new String[] {"mod", "owner"}, new String[] {"packet", "owner"}));
 
+    /**
+     * A field a filter reads: its dotted path, and whether it is only tested
+     * for presence ({@code mod} alone) rather than compared.
+     */
+    public record Ref(String path, boolean presence) {}
+
+    /** A compiled filter and the fields it reads, so a store can tell whether an index can answer it. */
+    public record Compiled(Predicate<Map<String, Object>> predicate, List<Ref> refs) {
+        public boolean matchesAll() {
+            return refs.isEmpty();
+        }
+    }
+
     private final List<String> tokens = new ArrayList<>();
+    private final List<Ref> refs = new ArrayList<>();
     private final List<Boolean> quoted = new ArrayList<>();
     private int pos;
 
@@ -61,18 +75,29 @@ public final class EventFilter {
 
     /** Compiles {@code source}; a blank filter matches everything. Throws IllegalArgumentException on bad syntax. */
     public static Predicate<Map<String, Object>> compile(String source) {
-        if (source == null || source.isBlank()) return ALL;
+        return analyze(source).predicate();
+    }
+
+    /** Compiles {@code source} and lists the fields it reads. Throws IllegalArgumentException on bad syntax. */
+    public static Compiled analyze(String source) {
+        if (source == null || source.isBlank()) return new Compiled(ALL, List.of());
         EventFilter f = new EventFilter();
         f.tokenize(source);
         Predicate<Map<String, Object>> p = f.or();
         if (f.pos < f.tokens.size()) throw new IllegalArgumentException("unexpected '" + f.tokens.get(f.pos) + "'");
-        return e -> {
+        Predicate<Map<String, Object>> safe = e -> {
             try {
                 return p.test(e);
             } catch (RuntimeException ex) {
                 return false;
             }
         };
+        return new Compiled(safe, List.copyOf(f.refs));
+    }
+
+    /** The value of a dotted path in an event, shorthands included, as filters see it. */
+    public static Object value(Map<String, Object> event, String path) {
+        return resolve(event, path.split("\\."));
     }
 
     // ---- lexer ----
@@ -158,7 +183,8 @@ public final class EventFilter {
     private Predicate<Map<String, Object>> comparison() {
         if (pos >= tokens.size()) throw new IllegalArgumentException("expected a field name");
         if (quoted.get(pos)) throw new IllegalArgumentException("expected a field name, not a string");
-        String[] path = tokens.get(pos++).split("\\.");
+        String name = tokens.get(pos++);
+        String[] path = name.split("\\.");
         if (pos < tokens.size() && !quoted.get(pos)) {
             String op = tokens.get(pos);
             BiPredicate<Object, Object> test = switch (op) {
@@ -179,9 +205,11 @@ public final class EventFilter {
                 pos++;
                 Object operand = op.equals("matches") || op.equals("~") ? Pattern.compile(String.valueOf(value)) : value;
                 boolean wholeValue = op.equals("contains") || op.equals("matches") || op.equals("~");
+                refs.add(new Ref(name, false));
                 return e -> any(resolve(e, path), operand, test, wholeValue);
             }
         }
+        refs.add(new Ref(name, true));
         return e -> any(resolve(e, path), null, (a, b) -> a != null && !Boolean.FALSE.equals(a), true);
     }
 
@@ -253,12 +281,23 @@ public final class EventFilter {
     private static Double number(Object o) {
         if (o instanceof Number n) return n.doubleValue();
         if (!(o instanceof String s) || s.isEmpty()) return null;
+        // Every string Double.valueOf accepts has a digit or spells NaN or Infinity. Most compared
+        // strings ("packet", "inbound") are neither, and a thrown exception per event is slow.
+        if (!looksNumeric(s)) return null;
         try {
             if (s.startsWith("0x") || s.startsWith("0X")) return (double) Long.parseLong(s.substring(2), 16);
             return Double.valueOf(s);
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private static boolean looksNumeric(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '0' && c <= '9') return true;
+        }
+        return s.contains("NaN") || s.contains("Infinity");
     }
 
     private static String text(Object o) {

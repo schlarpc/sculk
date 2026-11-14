@@ -437,7 +437,7 @@ class ControlServerTest {
         List<String> tools = new ArrayList<>();
         mcp("tools/list", "{}").getAsJsonObject("result").getAsJsonArray("tools")
                 .forEach(t -> tools.add(t.getAsJsonObject().get("name").getAsString()));
-        assertEquals(List.of("sculk_status", "sculk_events", "sculk_wait_events", "sculk_frame", "sculk_eval", "sculk_reload",
+        assertEquals(List.of("sculk_status", "sculk_events", "sculk_stats", "sculk_wait_events", "sculk_frame", "sculk_eval", "sculk_reload",
                 "sculk_scripts", "sculk_script_read", "sculk_script_write", "sculk_script_edit", "sculk_script_control"), tools);
     }
 
@@ -561,7 +561,7 @@ class ControlServerTest {
             assertTrue(tool.has("title"), name);
             JsonObject a = tool.getAsJsonObject("annotations");
             boolean readOnly = a.get("readOnlyHint").getAsBoolean();
-            boolean shouldBe = Set.of("sculk_status", "sculk_events", "sculk_wait_events", "sculk_frame", "sculk_scripts",
+            boolean shouldBe = Set.of("sculk_status", "sculk_events", "sculk_stats", "sculk_wait_events", "sculk_frame", "sculk_scripts",
                     "sculk_script_read").contains(name);
             assertEquals(shouldBe, readOnly, name);
             if (!readOnly) assertTrue(a.get("destructiveHint").getAsBoolean(), name);

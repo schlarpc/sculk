@@ -393,6 +393,7 @@ final class McpHandler {
             Map.entry("sculk_events", hints("Query events", true, false, true, false)),
             Map.entry("sculk_wait_events", hints("Wait for events", true, false, true, false)),
             Map.entry("sculk_frame", hints("Read a frame", true, false, true, false)),
+            Map.entry("sculk_stats", hints("Summarise events", true, false, true, false)),
             Map.entry("sculk_eval", hints("Run JavaScript in the game", false, true, false, true)),
             Map.entry("sculk_reload", hints("Reload all scripts", false, true, false, true)),
             Map.entry("sculk_scripts", hints("List scripts", true, false, true, false)),
@@ -427,13 +428,32 @@ final class McpHandler {
         Map<String, Object> after = prop("integer", "Only events with an id greater than this.");
         List<Map<String, Object>> out = new ArrayList<>();
         out.add(tool("sculk_status",
-                "Platform, open connections, running scripts and the id of the latest event.",
+                "Platform, open connections, running scripts, the id of the latest event, and what the capture holds "
+                        + "(first and last id, events, memory and disk use).",
                 Map.of(), List.of()));
         out.add(tool("sculk_events",
-                "Query recent events, oldest first, as JSON Lines. Without `after`, returns the last `limit` matches; "
-                        + "with it, the first `limit` matches after that id (page forward with the last id returned). "
-                        + "Frame hex in events may be cut short; use sculk_frame for the whole frame.\n\n" + FILTER_HELP,
-                Map.of("filter", filter, "after", after, "limit", prop("integer", "Maximum events to return (default 50).")),
+                "Query the session's events, oldest first, as JSON Lines. The whole session is captured (up to a disk "
+                        + "cap; sculk_status says what is held), not just recent events. Without `after`, returns the last "
+                        + "`limit` matches (before `before`, if given: page backwards with the first id returned); with "
+                        + "`after`, the first `limit` matches after it (page forward with the last id returned). "
+                        + "Filters on id, t, kind, conn, dir, len, side, type, channel, owner, injected, action, script and "
+                        + "packet.state run on an index and are fast over millions of events; other fields (mod.data..., "
+                        + "frame.hex) read events back from disk, so narrow those with an id range or an indexed clause. "
+                        + "Long scans report progress and can be cancelled. For counts and summaries, sculk_stats is "
+                        + "cheaper than paging. Frame hex in events may be cut short; use sculk_frame for the whole frame.\n\n"
+                        + FILTER_HELP,
+                Map.of("filter", filter, "after", after, "before", prop("integer", "Only events with an id less than this."),
+                        "limit", prop("integer", "Maximum events to return (default 50).")),
+                List.of()));
+        out.add(tool("sculk_stats",
+                "Summarise the events matching a filter, over the whole session or an id range: how many, their frame "
+                        + "bytes, and the first and last of them (id and time t, epoch ms). With `by` (a field, e.g. channel, "
+                        + "owner, type, kind, dir, conn.id, script, or a deeper one like mod.data.slot), one row per distinct "
+                        + "value, biggest first. Use it to see what a session holds before reading events: which mods talk "
+                        + "most, when a channel first appeared, how many drops a script made. Same filter syntax as sculk_events.",
+                Map.of("filter", filter, "by", prop("string", "Field to group by; absent for one row of everything."),
+                        "after", after, "before", prop("integer", "Only events with an id less than this."),
+                        "limit", prop("integer", "Maximum groups to return, biggest first (default 30).")),
                 List.of()));
         out.add(tool("sculk_wait_events",
                 "Wait until at least one event matching the filter with an id greater than `after` exists, then return "
@@ -506,10 +526,10 @@ final class McpHandler {
         try {
             return switch (name) {
                 case "sculk_status" -> text(EventLog.toJson(ControlServer.status(engine, store)), false);
-                case "sculk_events" -> {
-                    Predicate<Map<String, Object>> f = EventFilter.compile(string(args, "filter"));
-                    yield lines(store.query(f, longArg(args, "after"), intArg(args, "limit", 50)));
-                }
+                case "sculk_events" -> lines(store.query(string(args, "filter"), longArg(args, "after"), longArg(args, "before"),
+                        intArg(args, "limit", 50), scanProgress(ctx)));
+                case "sculk_stats" -> text(EventLog.toJson(store.stats(string(args, "filter"), string(args, "by"),
+                        longArg(args, "after"), longArg(args, "before"), intArg(args, "limit", 30), scanProgress(ctx))), false);
                 case "sculk_wait_events" -> waitEvents(args, ctx);
                 case "sculk_frame" -> {
                     Long id = longArg(args, "id");
@@ -539,11 +559,33 @@ final class McpHandler {
             };
         } catch (ScriptManager.ScriptError e) {
             return text("error: " + e.getMessage(), true);
+        } catch (EventStore.Cancelled e) {
+            throw new java.util.concurrent.CancellationException();
         } catch (IllegalArgumentException e) {
             if (e.getMessage() != null && e.getMessage().startsWith("unknown tool")) throw e;
             // Bad filters and arguments are tool errors the model can read and fix.
             return text("error: " + e.getMessage(), true);
         }
+    }
+
+    /** Scan progress for a call: notifications at most every {@link #TICK_MILLIS}, and its cancellation. */
+    private static EventStore.Progress scanProgress(Call ctx) {
+        long start = System.currentTimeMillis();
+        long[] next = {start + TICK_MILLIS};
+        return new EventStore.Progress() {
+            @Override
+            public void tick(long done, long total) {
+                long now = System.currentTimeMillis();
+                if (now < next[0]) return;
+                next[0] = now + TICK_MILLIS;
+                ctx.progress(done, total, "scanned " + done + " of " + total + " events");
+            }
+
+            @Override
+            public boolean cancelled() {
+                return ctx.cancelled();
+            }
+        };
     }
 
     // ---- scripts ----
@@ -647,7 +689,8 @@ final class McpHandler {
         };
         store.subscribe(subscriber);
         try {
-            List<StoredEvent> found = store.query(filter, after, limit);
+            String source = string(args, "filter");
+            List<StoredEvent> found = store.query(source, after, null, limit, scanProgress(ctx));
             long start = System.currentTimeMillis(), deadline = start + timeout, nextTick = start + TICK_MILLIS;
             while (found.isEmpty()) {
                 if (ctx.cancelled()) throw new java.util.concurrent.CancellationException();
@@ -655,7 +698,7 @@ final class McpHandler {
                 if (now >= deadline) break;
                 if (arrived.poll(Math.min(deadline - now, 100), TimeUnit.MILLISECONDS) != null) {
                     Thread.sleep(50); // Let a burst of related events land together.
-                    found = store.query(filter, after, limit);
+                    found = store.query(source, after, null, limit, scanProgress(ctx));
                     break;
                 }
                 if (System.currentTimeMillis() >= nextTick) {

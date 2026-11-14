@@ -56,7 +56,8 @@ import sculk.core.util.Bytes;
  *
  * <pre>
  *   GET  /status
- *   GET  /events?filter=&amp;after=&amp;limit=      JSON Lines; see {@link EventFilter}
+ *   GET  /events?filter=&amp;after=&amp;before=&amp;limit=   JSON Lines over the whole capture; see {@link EventFilter}
+ *   GET  /events/stats?filter=&amp;by=&amp;after=&amp;before=&amp;limit=   counts, bytes, first and last, grouped by a field
  *   GET  /events/stream?filter=&amp;after=      the same as server-sent events, live
  *   GET  /frame?id=                         the whole frame of a packet event
  *   POST /eval      body: JavaScript        {"ok":true,"result":...}, in the console's own scope
@@ -247,6 +248,7 @@ public final class ControlServer {
                     case "GET /status" -> json(ex, 200, status(engine, store));
                     case "GET /events" -> events(ex, query);
                     case "GET /events/stream" -> stream(ex, query);
+                    case "GET /events/stats" -> stats(ex, query);
                     case "GET /frame" -> frame(ex, query);
                     case "POST /eval" -> json(ex, 200, engine.scripts().evalForRepl(body(ex)));
                     case "POST /reload" -> json(ex, 200, engine.reloadScripts());
@@ -271,7 +273,7 @@ public final class ControlServer {
                     }
                     case "DELETE /mcp" -> mcp.delete(ex);
                     default -> {
-                        boolean known = Set.of("/status", "/events", "/events/stream", "/frame", "/eval", "/reload", "/mcp",
+                        boolean known = Set.of("/status", "/events", "/events/stream", "/events/stats", "/frame", "/eval", "/reload", "/mcp",
                                 "/scripts", "/scripts/source", "/scripts/save", "/scripts/check", "/scripts/run", "/scripts/stop",
                                 "/scripts/delete", "/scripts/rename", "/scripts/enable").contains(path);
                         json(ex, known ? 405 : 404, Map.of("error", known ? "wrong method for " + path : "no such endpoint " + path));
@@ -317,6 +319,7 @@ public final class ControlServer {
         out.put("platform", engine.platform().describe());
         out.put("pid", ProcessHandle.current().pid());
         out.put("events", store.size());
+        out.put("capture", store.describe());
         out.put("lastEventId", engine.lastEventId());
         out.put("scripts", engine.scripts().runningNames());
         List<Map<String, Object>> conns = new java.util.ArrayList<>();
@@ -357,12 +360,29 @@ public final class ControlServer {
     }
 
     private void events(HttpExchange ex, Map<String, String> query) throws IOException {
-        Predicate<Map<String, Object>> filter = EventFilter.compile(query.get("filter"));
-        Long after = query.containsKey("after") ? Long.valueOf(query.get("after")) : null;
         int limit = Integer.parseInt(query.getOrDefault("limit", "200"));
         StringBuilder sb = new StringBuilder();
-        for (StoredEvent e : store.query(filter, after, limit)) sb.append(e.json()).append('\n');
+        for (StoredEvent e : store.query(query.get("filter"), longParam(query, "after"), longParam(query, "before"), limit,
+                EventStore.Progress.NONE)) {
+            sb.append(e.json()).append('\n');
+        }
         send(ex, 200, "application/x-ndjson", sb.toString());
+    }
+
+    private void stats(HttpExchange ex, Map<String, String> query) throws IOException {
+        int limit = Integer.parseInt(query.getOrDefault("limit", "50"));
+        json(ex, 200, store.stats(query.get("filter"), query.get("by"), longParam(query, "after"), longParam(query, "before"),
+                limit, EventStore.Progress.NONE));
+    }
+
+    private static Long longParam(Map<String, String> query, String key) {
+        String v = query.get(key);
+        if (v == null || v.isBlank()) return null;
+        try {
+            return Long.valueOf(v.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + " must be an integer");
+        }
     }
 
     private void frame(HttpExchange ex, Map<String, String> query) throws IOException {
@@ -395,9 +415,16 @@ public final class ControlServer {
             OutputStream out = ex.getResponseBody();
             long last = -1;
             if (after != null) {
-                for (StoredEvent e : store.query(filter, after, Integer.MAX_VALUE)) {
-                    out.write(("id: " + e.id() + "\ndata: " + e.json() + "\n\n").getBytes(StandardCharsets.UTF_8));
-                    last = e.id();
+                // The backlog, a page at a time: it may run to millions of events on disk.
+                long from = after;
+                while (true) {
+                    List<StoredEvent> page = store.query(query.get("filter"), from, null, 1000, EventStore.Progress.NONE);
+                    for (StoredEvent e : page) {
+                        out.write(("id: " + e.id() + "\ndata: " + e.json() + "\n\n").getBytes(StandardCharsets.UTF_8));
+                        last = e.id();
+                    }
+                    if (page.size() < 1000) break;
+                    from = last;
                 }
             }
             out.flush();

@@ -295,13 +295,36 @@ Shorthands, in filters and in scripts: `dir` (`frame.dir`), `len`
 
 `-Dsculk.control=PORT` (dev runs: `-Psculk.control=0` for a free port)
 starts one HTTP listener for tools, agents and the web UI: a filterable
-live event log, a REPL, a script editor, and an MCP server. It keeps the most recent
-events in memory with their whole frames (the event log cuts long frames
-short), whether or not `sculk.eventLog` is set.
+live event log, a REPL, a script editor, and an MCP server.
+
+It captures every event of the session with its whole frame (the event log
+cuts long frames short), whether or not `sculk.eventLog` is set, so queries
+reach back to the start of the session, like a capture file that is still
+being written (`EventStore`):
+
+- **Spool.** A writer thread appends events to 64 MiB segment files in a
+  temporary capture directory (`-Dsculk.captureDir`, default the system
+  temp directory). Past the cap (`-Dsculk.captureBytes`, default 2 GiB) the
+  oldest segment is deleted. The directory goes when the game exits, and
+  ones left by a crashed game are cleaned up at the next launch. Captures
+  do not persist across launches. `-Dsculk.captureBytes=0` keeps only the
+  newest events in memory.
+- **Index.** In memory, about 47 bytes per event: id, t, kind, conn.id,
+  conn.side, frame.dir, frame.len, packet.type, packet.owner, packet.state,
+  mod.channel, mod.owner, injected, action and script. A filter that reads
+  only those (shorthands included) runs on the index, at about 2 million
+  events a second; one that reads anything else (`mod.data...`,
+  `frame.hex`) reads events back from disk, at about 400 thousand a
+  second. An event whose shape the index cannot mirror exactly is always
+  read whole, so both give the same answers.
+- **Hot cache.** The newest events (`-Dsculk.controlEvents`, default 50000,
+  and `-Dsculk.controlFrameBytes`, default 128 MiB) stay whole in memory
+  for live tails, and for anything the writer has not reached.
 
 ```
-GET  /status                            platform, connections, running scripts, last event id
-GET  /events?filter=&after=&limit=      JSON Lines; the last `limit` matches, or the first after `after`
+GET  /status                            platform, connections, running scripts, last event id, capture use
+GET  /events?filter=&after=&before=&limit=   JSON Lines; the last `limit` matches (before `before`), or the first after `after`
+GET  /events/stats?filter=&by=&after=&before=&limit=   count, frame bytes, first and last match, grouped by a field
 GET  /events/stream?filter=&after=      server-sent events, live (backlog first with `after`)
 GET  /frame?id=                         a packet event's whole frame, as hex
 POST /eval      body: JavaScript        runs in the console's scope: {"ok":true,"result":...}
@@ -333,8 +356,10 @@ carries a `progressToken` (keep-alives otherwise), and stops when the client
 sends `notifications/cancelled` or goes away. Each tool carries a title and
 read-only, destructive, idempotent and open-world hints. It offers the same
 powers as tools: `sculk_status`,
-`sculk_events`, `sculk_wait_events` (long-polls up to 60 s for new matches,
-since tool calls cannot stream), `sculk_frame`, `sculk_eval`,
+`sculk_events` (paging forward or back through the whole capture), `sculk_wait_events` (long-polls up to 5 minutes for new matches,
+since tool calls cannot stream), `sculk_stats` (counts, bytes and first
+and last appearance grouped by any field, over the whole capture),
+`sculk_frame`, `sculk_eval`,
 `sculk_reload`, and for installed scripts `sculk_scripts`,
 `sculk_script_read` (with line numbers and hash), `sculk_script_write`
 (whole source; optional `base` hash and `run`), `sculk_script_edit` (exact

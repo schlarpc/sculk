@@ -58,9 +58,15 @@ import sculk.core.util.Bytes;
  *   <li>{@code sculk.controlToken}: a fixed bearer token (16 characters or
  *       more) instead of a random one per launch, for static MCP client
  *       configurations;</li>
+ *   <li>{@code sculk.captureBytes}: the control server captures every event,
+ *       with its whole frame, to a temporary directory deleted on exit, up to
+ *       this size (default 2 GiB; 0 keeps recent events in memory only). See
+ *       {@link EventStore};</li>
+ *   <li>{@code sculk.captureDir}: where to make that directory (default the
+ *       system temporary directory);</li>
  *   <li>{@code sculk.controlEvents}, {@code sculk.controlFrameBytes}: how many
- *       events, and how many bytes of whole frames, the control server keeps
- *       in memory (defaults 100000 and 256 MiB).</li>
+ *       of the newest events, and how many bytes of their frames, are also
+ *       kept whole in memory (defaults 50000 and 128 MiB).</li>
  * </ul>
  */
 public final class Sculk {
@@ -110,11 +116,22 @@ public final class Sculk {
         }
         String controlPort = System.getProperty("sculk.control");
         boolean controlOn = controlPort != null && !controlPort.isBlank();
-        EventStore store = controlOn
-                ? new EventStore(
-                        Integer.getInteger("sculk.controlEvents", 100_000),
-                        Long.getLong("sculk.controlFrameBytes", 256L << 20))
-                : null;
+        EventStore store = null;
+        if (controlOn) {
+            long captureBytes = Long.getLong("sculk.captureBytes", 2L << 30);
+            java.nio.file.Path captureDir = null;
+            if (captureBytes > 0) {
+                try {
+                    captureDir = EventStore.newCaptureDir(Path.of(System.getProperty("sculk.captureDir", System.getProperty("java.io.tmpdir"))));
+                } catch (IOException e) {
+                    LOG.error("cannot make a capture directory; keeping recent events in memory only", e);
+                }
+            }
+            store = new EventStore(
+                    Integer.getInteger("sculk.controlEvents", 50_000),
+                    Long.getLong("sculk.controlFrameBytes", 128L << 20),
+                    captureDir, captureBytes);
+        }
         Sculk sculk = new Sculk(platform, log, store);
         instance = sculk;
         LOG.info("sculk core initialised on {}", platform.describe());
