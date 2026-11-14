@@ -123,8 +123,17 @@ public final class ScriptManager {
         throw new ScriptError(404, "no script named " + name);
     }
 
+    /** Windows device names, which stay devices with any extension. */
+    private static final Pattern RESERVED = Pattern.compile("(?i)(con|prn|aux|nul|com[0-9]|lpt[0-9])(\\..*)?");
+
+    /**
+     * Names are file names in {@link #dir} and nothing else: no separators,
+     * no "..", no leading dot, no drive or stream colons, no device names.
+     * Every path this class touches is {@code dir.resolve(name)} of a name
+     * that passed this check, or a path from {@code sculk.scripts}.
+     */
     private static void checkName(String name) {
-        if (name == null || !NAME.matcher(name).matches() || name.contains("..")) {
+        if (name == null || !NAME.matcher(name).matches() || name.contains("..") || RESERVED.matcher(name).matches()) {
             throw new ScriptError(400, "bad script name '" + name + "': use letters, digits, spaces and _ . ( ) + , -, ending in .js");
         }
     }
@@ -331,6 +340,8 @@ public final class ScriptManager {
 
     private void write(Path path, String source) {
         try {
+            // A script that is a symlink (to a checkout, say) is written through, not replaced by a file.
+            if (Files.isSymbolicLink(path)) path = path.toRealPath();
             Files.createDirectories(path.toAbsolutePath().getParent());
             Path tmp = path.resolveSibling("." + path.getFileName() + ".tmp");
             Files.writeString(tmp, source);

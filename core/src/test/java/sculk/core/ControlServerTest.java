@@ -622,12 +622,46 @@ class ControlServerTest {
         assertEquals(400, post("/scripts/save?name=" + enc("no-extension"), "1").status());
         assertEquals(400, post("/scripts/save?name=" + enc(".hidden.js"), "1").status());
         assertEquals(400, post("/scripts/save", "1").status());
+        for (String bad : List.of("../x.js", "..\\x.js", "a/b.js", "/tmp/x.js", "C:x.js", "x.js:stream", "x.js\0.js",
+                "x\n.js", "CON.js", "nul.js", "..js", "x..js", "", " x.js")) {
+            assertEquals(400, post("/scripts/save?name=" + enc(bad), "1").status(), bad);
+        }
+        // Encoded traversal is decoded first, then refused.
+        assertEquals(400, post("/scripts/save?name=%2e%2e%2fx.js", "1").status());
+        assertFalse(Files.exists(FakeGame.SCRIPT_DIR.getParent().resolve("x.js")));
         assertEquals(404, get("/scripts/source?name=nope.js").status());
         assertEquals(404, post("/scripts/run?name=nope.js", "").status());
         // sculk.scripts files are listed but managed elsewhere.
         String startup = FakeGame.STARTUP_SCRIPT.toString();
         assertEquals("property", scriptInfo(startup).get("origin").getAsString());
         assertEquals(400, post("/scripts/delete?name=" + enc(startup), "").status());
+    }
+
+    @Test
+    void renameRefusesTraversalAndSymlinksAreWrittenThrough() throws Exception {
+        String name = "ctl-paths-" + System.nanoTime() + ".js";
+        assertEquals(200, post("/scripts/save?name=" + enc(name), "1").status());
+        for (String bad : List.of("../x.js", "a/b.js", "/tmp/x.js", "C:x.js", "CON.js")) {
+            assertEquals(400, post("/scripts/rename?name=" + enc(name) + "&to=" + enc(bad), "").status(), bad);
+        }
+        assertTrue(Files.exists(FakeGame.SCRIPT_DIR.resolve(name)));
+        post("/scripts/delete?name=" + enc(name), "");
+
+        // A script symlinked to a file elsewhere: saving updates that file and keeps the link.
+        java.nio.file.Path outside = Files.createTempFile("sculk-linked", ".js");
+        String linked = "ctl-link-" + System.nanoTime() + ".js";
+        java.nio.file.Path link = FakeGame.SCRIPT_DIR.resolve(linked);
+        try {
+            Files.createSymbolicLink(link, outside);
+        } catch (UnsupportedOperationException | IOException e) {
+            return; // No symlinks here (Windows without the privilege).
+        }
+        assertEquals(200, post("/scripts/save?name=" + enc(linked), "2").status());
+        assertTrue(Files.isSymbolicLink(link));
+        assertEquals("2", Files.readString(outside));
+        post("/scripts/delete?name=" + enc(linked), "");
+        assertTrue(Files.exists(outside), "deleting removes the link, not its target");
+        Files.delete(outside);
     }
 
     @Test
