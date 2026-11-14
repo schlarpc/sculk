@@ -20,13 +20,15 @@ class SculkCommandTest {
     private static final String MANUAL = "// ==Sculk==\n// @run manual\n// ==/Sculk==\n";
 
     private final List<String> replies = new ArrayList<>();
+    private final List<sculk.core.platform.ChatLine> lines = new ArrayList<>();
     private final List<String> opened = new ArrayList<>();
 
     private CommandDispatcher<String> dispatcher(boolean allowed, boolean client) {
         CommandDispatcher<String> d = new CommandDispatcher<>();
-        d.register(SculkCommand.tree(s -> allowed,
-                SculkCommand.Reply.<String>of((s, m) -> replies.add("ok " + m), (s, m) -> replies.add("fail " + m)),
-                client ? opened::add : null));
+        d.register(SculkCommand.tree(s -> allowed, (s, line, error) -> {
+            replies.add((error ? "fail " : "ok ") + line.plain());
+            lines.add(line);
+        }, client ? opened::add : null));
         return d;
     }
 
@@ -54,7 +56,11 @@ class SculkCommandTest {
         Sculk sculk = FakeGame.sculk();
         assertEquals(1, run("sculk mark opened the  backpack"));
         long id = sculk.lastEventId();
-        assertEquals(List.of("ok marked #" + id + ": opened the  backpack"), replies);
+        assertEquals(List.of("ok marked #" + id + ": opened the  backpack [show]"), replies);
+        var show = lines.get(0).parts().get(lines.get(0).parts().size() - 1);
+        assertEquals("/sculk ui " + id, show.command(), "show opens the web UI at the mark");
+        dispatcher(true, false).execute("sculk mark on a server", "console");
+        assertEquals("ok marked #" + sculk.lastEventId() + ": on a server", replies.get(1), "no browser, no show button");
         StoredEvent e = sculk.control().store().get(id);
         assertEquals("mark", e.fields().get("kind"));
         assertEquals("opened the  backpack", e.fields().get("text"));
@@ -180,8 +186,16 @@ class SculkCommandTest {
         String client = "cmd-chat-" + System.nanoTime();
         pairingClient(client);
         int n = waitingNumber(client);
-        assertTrue(FakeGame.FakePlatform.CHAT.contains("MCP client #" + n + " (" + client + ") wants access: type /sculk mcp accept " + n),
-                FakeGame.FakePlatform.CHAT.toString());
+        var line = FakeGame.FakePlatform.CHAT_LINES.stream()
+                .filter(l -> l.plain().startsWith("MCP client #" + n + " (" + client + ") wants access: /sculk mcp accept " + n))
+                .findFirst().orElseThrow(() -> new AssertionError(FakeGame.FakePlatform.CHAT.toString()));
+        var button = line.parts().stream().filter(sculk.core.platform.ChatLine.Part::button).findFirst().orElseThrow();
+        assertEquals("accept", button.text());
+        assertEquals("/sculk mcp accept " + n, button.command());
+        // Clicking it runs that command, as the player would.
+        assertEquals(1, run(button.command().substring(1)));
+        assertTrue(FakeGame.sculk().control().mcpClients().stream()
+                .anyMatch(c -> c.get("number").equals(n) && Boolean.TRUE.equals(c.get("approved"))));
         FakeGame.sculk().control().mcpRevoke(n);
     }
 
@@ -211,6 +225,12 @@ class SculkCommandTest {
         assertEquals(1, run("sculk ui"));
         assertEquals(List.of(FakeGame.sculk().control().url() + "/ui/#token=" + token), opened);
         assertFalse(String.join("\n", replies).contains(token));
+    }
+
+    @Test
+    void uiOpensAtAnEvent() throws Exception {
+        assertEquals(1, run("sculk ui 42"));
+        assertEquals(List.of(FakeGame.sculk().control().uiUrl() + "&event=42"), opened);
     }
 
     @Test

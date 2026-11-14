@@ -163,6 +163,21 @@ point (`NetworkRegistry.register`, `PayloadTypeRegistryImpl.register`,
 `IndexedMessageCodec.addCodecIndex`). It records the registration and the
 call stack in `PayloadRegistry`.
 
+Two more methods face the player rather than the wire:
+
+- `registerCommands()` registers `/sculk` (`SculkCommand`, generic over the
+  command source): a client command in a game client, for operators on a
+  dedicated server.
+- `chat(ChatLine)` shows a line only the player sees: the local chat in a
+  game client, the console on a dedicated server. A `ChatLine` is text with
+  buttons, each running a `/sculk` command when clicked (green, in
+  brackets); each platform's `Chat` class builds the game's component
+  (26.3: `ClickEvent.RunCommand` records; earlier: `ClickEvent` with an
+  action). A click reaches the client command on Fabric (Fabric API hooks
+  `sendUnattendedCommand`) and NeoForge (`sendUnsignedCommand`); Forge
+  1.20.1 sends clicks straight to the server, so a client mixin there hands
+  `sculk` commands to `ClientCommandHandler` first.
+
 ### Attribution
 
 `Attribution` reports two things per payload channel:

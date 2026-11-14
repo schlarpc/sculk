@@ -455,8 +455,9 @@ final class McpHandler {
         }
         if (!joined) {
             engine.log(Sculk.entry("mcp_client", clientEntry("requested", created)));
-            engine.chat("MCP client #" + created.number + " (" + created.client + ") wants access: type /sculk mcp accept "
-                    + created.number, null);
+            String accept = "/sculk mcp accept " + created.number;
+            engine.chat(sculk.core.platform.ChatLine.of("MCP client #" + created.number + " (" + created.client
+                    + ") wants access: " + accept + " ").button("accept", accept, "Let this client use sculk until the game exits"), null);
         }
         return created;
     }

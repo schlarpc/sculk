@@ -11,7 +11,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.ModContainer;
-import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.ProtocolInfo;
 import net.minecraft.network.chat.Component;
@@ -21,6 +20,7 @@ import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
 import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import sculk.core.Sculk;
+import sculk.core.platform.ChatLine;
 import sculk.core.platform.PacketInfo;
 import sculk.core.platform.Platform;
 
@@ -49,22 +49,20 @@ final class FabricPlatform implements Platform {
     }
 
     @Override
-    public void chat(String text) {
-        if (dedicatedServer()) Platform.super.chat(text);
-        else ClientChat.show(text);
+    public void chat(ChatLine line) {
+        if (dedicatedServer()) Platform.super.chat(line);
+        else ClientChat.show(line);
     }
 
     /** Separate so that a dedicated server never loads client classes. */
     private static final class ClientChat {
-        static void show(String text) {
+        static void show(ChatLine chatLine) {
             Minecraft mc = Minecraft.getInstance();
             if (mc == null) {
-                Sculk.LOG.info("[chat] {}", text); // The game window is not up yet.
+                Sculk.LOG.info("[chat] {}", chatLine.plain()); // The game window is not up yet.
                 return;
             }
-            Component line = Component.literal("[sculk] ")
-                    .withStyle(ChatFormatting.DARK_AQUA)
-                    .append(Component.literal(text).withStyle(ChatFormatting.WHITE));
+            Component line = Chat.tagged(chatLine);
             // Chat belongs to the render thread; a local line, never sent to the server.
             mc.execute(() -> mc.gui.hud.getChat().addClientSystemMessage(line));
         }

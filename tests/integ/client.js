@@ -14,6 +14,27 @@ let finished = false;
 
 const isMove = e => e.dir === 'outbound' && e.packet.state === 'play' && /move_player_pos$|MovePlayerPacket\$Pos$/.test(e.type);
 
+// Does what a click on one of sculk's chat buttons does: the game's
+// RUN_COMMAND handling calls the connection's unattended (26.3) or unsigned
+// (1.20.1, 1.21.1) command method. A client command must catch it there, or
+// it goes to the server, which has no /sculk. integ.py checks for the mark.
+function clickSculkButton() {
+  try {
+    const mc = Packages.net.minecraft.client.Minecraft.getInstance();
+    mc.execute(() => {
+      try {
+        const conn = mc.player.connection;
+        if (typeof conn.sendUnattendedCommand === 'function') conn.sendUnattendedCommand('sculk mark clicked', null);
+        else conn.sendUnsignedCommand('sculk mark clicked');
+      } catch (err) {
+        sculk.emit({ step: 'click_failed', error: String(err) });
+      }
+    });
+  } catch (err) {
+    sculk.emit({ step: 'click_failed', error: String(err) });
+  }
+}
+
 function finish(delayMillis) {
   if (finished) return;
   finished = true;
@@ -25,6 +46,7 @@ sculk.on('packet', e => {
     joined = true;
     sculk.emit({ step: 'client_joined' });
     sculk.chat('integ chat check'); // integ.py looks for it in the client's own chat log
+    sculk.schedule(2000, clickSculkButton);
     sculk.schedule(90000, () => {
       if (scheduled) return;
       sculk.emit({ step: 'client_inject_skipped', reason: 'no move packet within 90s of joining' });

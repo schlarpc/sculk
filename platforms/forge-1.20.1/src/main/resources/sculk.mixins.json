@@ -12,5 +12,8 @@
     "PacketDecoderMixin",
     "PacketEncoderMixin"
   ],
+  "client": [
+    "ClientPacketListenerMixin"
+  ],
   "injectors": { "defaultRequire": 1 }
 }

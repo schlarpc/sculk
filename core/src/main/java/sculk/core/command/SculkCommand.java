@@ -2,6 +2,8 @@ package sculk.core.command;
 
 import static com.mojang.brigadier.arguments.IntegerArgumentType.getInteger;
 import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
+import static com.mojang.brigadier.arguments.LongArgumentType.getLong;
+import static com.mojang.brigadier.arguments.LongArgumentType.longArg;
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.StringArgumentType.greedyString;
 
@@ -12,12 +14,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import sculk.core.Sculk;
 import sculk.core.control.ControlServer;
+import sculk.core.platform.ChatLine;
 import sculk.core.script.ScriptManager;
 
 /**
@@ -33,7 +35,8 @@ import sculk.core.script.ScriptManager;
  *   <li>{@code /sculk mcp list}, {@code accept [number]}, {@code revoke
  *       <number>}: MCP clients that connect without the token wait for the
  *       player to accept them; {@code /sculk mcp token} prints the token;</li>
- *   <li>{@code /sculk ui} (game clients only): opens the web UI in the
+ *   <li>{@code /sculk ui [event]} (game clients only): opens the web UI, at
+ *       that event if given (a mark's reply offers it as a button), in the
  *       browser, signed in. The token goes straight to the browser, never
  *       into chat, where logs, screenshots and streams would keep it.</li>
  * </ul>
@@ -42,24 +45,17 @@ public final class SculkCommand {
     /** The permission level a dedicated server requires: 2, the game's own level for cheat commands. */
     public static final int OPERATOR_LEVEL = 2;
 
-    /** How a platform answers the player who ran the command. */
+    /** How a platform answers the player who ran the command: a line, as feedback or as an error. */
+    @FunctionalInterface
     public interface Reply<S> {
-        void ok(S source, String message);
+        void send(S source, ChatLine line, boolean error);
 
-        void fail(S source, String message);
+        default void ok(S source, String message) {
+            send(source, ChatLine.of(message), false);
+        }
 
-        static <S> Reply<S> of(BiConsumer<S, String> ok, BiConsumer<S, String> fail) {
-            return new Reply<>() {
-                @Override
-                public void ok(S source, String message) {
-                    ok.accept(source, message);
-                }
-
-                @Override
-                public void fail(S source, String message) {
-                    fail.accept(source, message);
-                }
-            };
+        default void fail(S source, String message) {
+            send(source, ChatLine.of(message), true);
         }
     }
 
@@ -75,7 +71,7 @@ public final class SculkCommand {
         LiteralArgumentBuilder<S> root = LiteralArgumentBuilder.<S>literal("sculk").requires(requires)
                 .then(LiteralArgumentBuilder.<S>literal("mark")
                         .then(RequiredArgumentBuilder.<S, String>argument("description", greedyString())
-                                .executes(ctx -> mark(ctx.getSource(), getString(ctx, "description"), reply))))
+                                .executes(ctx -> mark(ctx.getSource(), getString(ctx, "description"), reply, openUrl != null))))
                 .then(LiteralArgumentBuilder.<S>literal("script")
                         .then(LiteralArgumentBuilder.<S>literal("list")
                                 .executes(ctx -> withScripts(ctx.getSource(), reply, s -> list(ctx.getSource(), s, reply))))
@@ -107,14 +103,18 @@ public final class SculkCommand {
                                     return 1;
                                 }))));
         if (openUrl != null) {
-            root.then(LiteralArgumentBuilder.<S>literal("ui").executes(ctx -> ui(ctx.getSource(), reply, openUrl)));
+            root.then(LiteralArgumentBuilder.<S>literal("ui")
+                    .executes(ctx -> ui(ctx.getSource(), reply, openUrl, null))
+                    .then(RequiredArgumentBuilder.<S, Long>argument("event", longArg(1))
+                            .executes(ctx -> ui(ctx.getSource(), reply, openUrl, getLong(ctx, "event")))));
         }
         return root;
     }
 
     // ---- mark ----
 
-    private static <S> int mark(S source, String description, Reply<S> reply) {
+    /** {@code canShow}: the player has a browser, so the reply can offer to show the mark in the web UI. */
+    private static <S> int mark(S source, String description, Reply<S> reply, boolean canShow) {
         Sculk sculk = Sculk.get();
         if (sculk == null) {
             reply.fail(source, "sculk is not running");
@@ -125,7 +125,9 @@ public final class SculkCommand {
             reply.fail(source, "sculk is not recording events (set sculk.eventLog or sculk.control); the mark is only in the game log");
             return 0;
         }
-        reply.ok(source, "marked #" + id + ": " + description);
+        ChatLine line = ChatLine.of("marked #" + id + ": " + description);
+        if (canShow && sculk.control() != null) line = line.text(" ").button("show", "/sculk ui " + id, "Open the web UI at this event");
+        reply.send(source, line, false);
         return 1;
     }
 
@@ -281,9 +283,10 @@ public final class SculkCommand {
         return 1;
     }
 
-    private static <S> int ui(S source, Reply<S> reply, Consumer<String> openUrl) {
+    /** Opens the web UI, at event {@code id} when it is not null. */
+    private static <S> int ui(S source, Reply<S> reply, Consumer<String> openUrl, Long id) {
         return withControl(source, reply, control -> {
-            openUrl.accept(control.uiUrl());
+            openUrl.accept(id == null ? control.uiUrl() : control.uiUrl(id));
             reply.ok(source, "opening the web UI in your browser (" + control.url() + "/ui/)");
             return 1;
         });

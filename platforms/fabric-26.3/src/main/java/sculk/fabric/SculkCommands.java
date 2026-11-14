@@ -17,9 +17,11 @@ final class SculkCommands {
     static void register(boolean dedicatedServer) {
         if (dedicatedServer) {
             // 26.3 checks permissions by name; LEVEL_GAMEMASTERS is SculkCommand.OPERATOR_LEVEL.
-            SculkCommand.Reply<CommandSourceStack> reply = SculkCommand.Reply.of(
-                    (s, m) -> s.sendSuccess(() -> Component.literal(m), false),
-                    (s, m) -> s.sendFailure(Component.literal(m)));
+            SculkCommand.Reply<CommandSourceStack> reply = (s, line, error) -> {
+                Component c = Chat.render(line);
+                if (error) s.sendFailure(c);
+                else s.sendSuccess(() -> c, false);
+            };
             CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> dispatcher.register(
                     SculkCommand.tree(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS), reply, null)));
         } else {
@@ -30,9 +32,10 @@ final class SculkCommands {
     /** Separate so that a dedicated server never loads client classes. */
     private static final class Client {
         static void register() {
-            SculkCommand.Reply<FabricClientCommandSource> reply = SculkCommand.Reply.of(
-                    (s, m) -> s.sendFeedback(Component.literal(m)),
-                    (s, m) -> s.sendError(Component.literal(m)));
+            SculkCommand.Reply<FabricClientCommandSource> reply = (s, line, error) -> {
+                if (error) s.sendError(Chat.render(line));
+                else s.sendFeedback(Chat.render(line));
+            };
             ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(
                     SculkCommand.tree(s -> true, reply, url -> Blaze3D.openUri(URI.create(url)))));
         }

@@ -45,13 +45,15 @@ public interface Platform {
     default void registerCommands() {}
 
     /**
-     * Shows {@code text} to the person at this game, and no one else: in a
+     * Shows {@code line} to the person at this game, and no one else: in a
      * game client, a line in the local chat that never goes to the server;
-     * in a dedicated server, whose person is at the console, the console.
+     * in a dedicated server, whose person is at the console, the console
+     * (as {@link ChatLine#plain}). Its buttons run their commands as the
+     * player would.
      * Callable from any thread. See {@code Sculk.chat}.
      */
-    default void chat(String text) {
-        org.slf4j.LoggerFactory.getLogger("sculk").info("[chat] {}", text);
+    default void chat(ChatLine line) {
+        org.slf4j.LoggerFactory.getLogger("sculk").info("[chat] {}", line.plain());
     }
 
     /** Describes a packet object seen at (or destined for) {@code codec}. */

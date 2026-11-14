@@ -13,9 +13,11 @@ import sculk.core.command.SculkCommand;
  * events. Client and server commands share one source type here.
  */
 final class SculkCommands {
-    private static final SculkCommand.Reply<CommandSourceStack> REPLY = SculkCommand.Reply.of(
-            (s, m) -> s.sendSuccess(() -> Component.literal(m), false),
-            (s, m) -> s.sendFailure(Component.literal(m)));
+    private static final SculkCommand.Reply<CommandSourceStack> REPLY = (s, line, error) -> {
+        Component c = Chat.render(line);
+        if (error) s.sendFailure(c);
+        else s.sendSuccess(() -> c, false);
+    };
 
     private SculkCommands() {}
 

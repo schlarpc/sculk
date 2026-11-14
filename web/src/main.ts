@@ -23,9 +23,14 @@ const PRESETS: [string, string][] = [
 
 // ---- token ----
 
+/** An event to open at, from a link such as /sculk mark's "show": #token=...&event=42. */
+let linkedEvent: number | undefined;
+
 function readToken(): string | null {
   const hash = new URLSearchParams(location.hash.slice(1));
   const fromHash = hash.get("token");
+  const event = Number(hash.get("event"));
+  if (Number.isInteger(event) && event > 0) linkedEvent = event;
   if (fromHash) {
     try {
       sessionStorage.setItem(TOKEN_KEY, fromHash);
@@ -36,6 +41,7 @@ function readToken(): string | null {
     history.replaceState(null, "", location.pathname + location.search);
     return fromHash;
   }
+  if (linkedEvent !== undefined) history.replaceState(null, "", location.pathname + location.search);
   try {
     return sessionStorage.getItem(TOKEN_KEY);
   } catch {
@@ -217,7 +223,8 @@ class App {
     onMenuClose(() => this.table.hold(false));
     byId<HTMLButtonElement>("reload").onclick = () => void this.reload();
     this.filter.value = store.get("sculk.filter") ?? "";
-    void this.applyFilter();
+    if (linkedEvent !== undefined) void this.showInContext(linkedEvent);
+    else void this.applyFilter();
     void this.refreshStatus();
     setInterval(() => void this.refreshStatus(), 5000);
     window.addEventListener("hashchange", () => this.route());

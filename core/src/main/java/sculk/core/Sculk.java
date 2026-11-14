@@ -29,6 +29,7 @@ import sculk.core.packet.PacketLayer;
 import sculk.core.payload.Attribution;
 import sculk.core.payload.PayloadRegistration;
 import sculk.core.payload.PayloadRegistry;
+import sculk.core.platform.ChatLine;
 import sculk.core.platform.PacketInfo;
 import sculk.core.platform.PayloadCodec;
 import sculk.core.platform.Platform;
@@ -302,14 +303,19 @@ public final class Sculk {
      * said it, or null when sculk itself did.
      */
     public void chat(String text, String script) {
+        chat(ChatLine.of(text), script);
+    }
+
+    /** {@link #chat(String, String)} with buttons; the event's {@code text} is {@link ChatLine#plain}. */
+    public void chat(ChatLine line, String script) {
         try {
-            platform.chat(text);
+            platform.chat(line);
         } catch (RuntimeException | LinkageError e) {
-            LOG.warn("cannot show in chat: {}", text, e);
+            LOG.warn("cannot show in chat: {}", line.plain(), e);
         }
         Map<String, Object> e = new LinkedHashMap<>();
         if (script != null) e.put("script", script);
-        e.put("text", text);
+        e.put("text", line.plain());
         log(entry("chat", e));
     }
 

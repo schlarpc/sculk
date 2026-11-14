@@ -104,10 +104,15 @@ public final class FakeGame {
     }
 
     static final class FakePlatform implements Platform {
-        /** What {@link #chat} showed the player, oldest first. */
+        /** What {@link #chat} showed the player, oldest first: plain text, and the lines themselves. */
         static final java.util.List<String> CHAT = new java.util.concurrent.CopyOnWriteArrayList<>();
+        static final java.util.List<sculk.core.platform.ChatLine> CHAT_LINES = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-        @Override public void chat(String text) { CHAT.add(text); }
+        @Override
+        public void chat(sculk.core.platform.ChatLine line) {
+            CHAT_LINES.add(line);
+            CHAT.add(line.plain());
+        }
         @Override public String loader() { return "fake"; }
         @Override public String minecraftVersion() { return "0"; }
 

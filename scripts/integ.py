@@ -179,6 +179,10 @@ def check(server, client, outs=None, stress=False):
         # sculk.chat: a local line in the client's chat, which the game logs as it shows it.
         shown = [line for line in outs[1].splitlines() if "[CHAT]" in line and "[sculk] integ chat check" in line]
         r.check("sculk.chat showed a line in the client's chat", bool(shown))
+    # A clicked chat button reaches sculk's client command, not the server.
+    r.check("a clicked /sculk button ran on the client",
+            any(e["kind"] == "mark" and e.get("text") == "clicked" for e in client),
+            json.dumps(script(client, "click_failed")[:1]))
 
     # Registry and attribution.
     types = [e["mod"] for e in server if e["kind"] == "payload_type"]

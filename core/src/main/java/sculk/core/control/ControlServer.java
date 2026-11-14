@@ -205,6 +205,8 @@ public final class ControlServer {
     public String url() { return "http://127.0.0.1:" + port; }
     /** The web UI, signed in: the page takes the token from the fragment and drops it from the address bar. */
     public String uiUrl() { return url() + "/ui/#token=" + token; }
+    /** The web UI, signed in, showing event {@code id} among all events. */
+    public String uiUrl(long id) { return uiUrl() + "&event=" + id; }
 
     /** MCP clients that paired without the token, waiting or approved: {@code {number, client, since, approved}}. */
     public List<Map<String, Object>> mcpClients() { return mcp.clients(); }
