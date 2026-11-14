@@ -136,6 +136,29 @@ class ControlServerTest {
         assertEquals(200, request("POST", "/eval", "1", auth(), "Origin: http://[::1]:" + server().port()).status());
     }
 
+    /** Every API endpoint, so a new one that skips the checks fails here. */
+    private static final List<String> ENDPOINTS = List.of(
+            "GET /status", "GET /events", "GET /frame?id=1", "POST /eval", "POST /reload", "POST /mcp",
+            "GET /scripts", "GET /scripts/source?name=x.js", "POST /scripts/save?name=x.js", "POST /scripts/check",
+            "POST /scripts/run?name=x.js", "POST /scripts/stop?name=x.js", "POST /scripts/delete?name=x.js",
+            "POST /scripts/rename?name=x.js&to=y.js", "POST /scripts/enable?name=x.js&enabled=false");
+
+    @Test
+    void everyEndpointNeedsTokenHostAndOrigin() throws IOException {
+        String port = String.valueOf(server().port());
+        for (String endpoint : ENDPOINTS) {
+            String[] mp = endpoint.split(" ", 2);
+            String body = mp[0].equals("POST") ? "1" : null;
+            assertEquals(401, request(mp[0], mp[1], body).status(), endpoint + " without a token");
+            assertEquals(401, request(mp[0], mp[1], body, "Authorization: Bearer wrong").status(), endpoint + " with a wrong token");
+            assertEquals(403, request(mp[0], mp[1], body, auth(), "Host: evil.example:" + port).status(), endpoint + " rebound");
+            assertEquals(403, request(mp[0], mp[1], body, auth(), "Origin: http://evil.example").status(), endpoint + " cross-site");
+            assertEquals(403, request(mp[0], mp[1], body, auth(), "Origin: null").status(), endpoint + " from an opaque origin");
+            assertEquals(403, request(mp[0], mp[1], body, auth(), "Origin: http://localhost:1").status(), endpoint + " from another local port");
+        }
+        assertFalse(Files.exists(FakeGame.SCRIPT_DIR.resolve("x.js")), "nothing refused was written");
+    }
+
     @Test
     void refusesCrossOriginRequests() throws IOException {
         assertEquals(403, request("POST", "/eval", "1", auth(), "Origin: http://evil.example").status());
