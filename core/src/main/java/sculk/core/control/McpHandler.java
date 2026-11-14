@@ -16,6 +16,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import sculk.core.Sculk;
 import sculk.core.log.EventLog;
+import sculk.core.script.ScriptManager;
 import sculk.core.util.Bytes;
 
 /**
@@ -23,12 +24,32 @@ import sculk.core.util.Bytes;
  * ({@code POST /mcp}, the Streamable HTTP transport, answering with plain
  * JSON rather than a stream). It shares the control server's token, Host
  * and Origin checks, and gives an agent the same powers as the HTTP API:
- * query and wait for events, read frames, evaluate script code, reload.
+ * query and wait for events, read frames, evaluate script code, and read,
+ * write, edit, run and manage installed scripts.
  */
 final class McpHandler {
     static final List<String> PROTOCOL_VERSIONS = List.of("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05");
     private static final Gson GSON = new Gson();
     private static final int MAX_WAIT_MILLIS = 60_000;
+
+    static final String SCRIPT_HELP = """
+            Scripts are JavaScript (Rhino, ES6: arrow functions, let/const, template strings, classes; no modules, \
+            no async/await) files in the game's script directory. Each running script has its own top-level scope \
+            and owns the listeners and timers it registers, so stopping or restarting one leaves the others alone. \
+            A script can begin with a metadata block:
+            // ==Sculk==
+            // @name        Short title
+            // @description What it does
+            // @run         startup   (startup: runs at launch and on reload, when enabled; manual: only when run)
+            // @dist        client    (optional; client or server: only in a game client, or only in a dedicated server)
+            // ==/Sculk==
+            The `sculk` global offers: on('packet'|'connection', fn), connections(), connection(id), payloadTypes(), \
+            emit(obj) (a `script` event), log(msg) (a `script_log` event), schedule(ms, fn), tree(obj), \
+            with(record, field, value), hex(bytes), unhex(str), copy(bytes), scope(name) (another running script's \
+            globals), name, dist. Connections offer inject(dir, bytes), injectPacket(dir, obj), replay(event). \
+            Packet events have the same fields and shorthands as logged events (e.mod.channel, e.frame.dir, e.owner), \
+            plus e.frame.bytes, e.packet.object, e.mod.data as live objects and e.conn as the live connection, and \
+            offer drop(), replaceFrame(bytes), replacePacket(obj).""";
 
     private static final String FILTER_HELP = """
             Filter syntax (Wireshark-style; blank matches everything): \
@@ -39,7 +60,9 @@ final class McpHandler {
             Operators: == != < <= > >= contains matches (~ is matches, a regex found anywhere). \
             A field alone means present and not false, so `mod` alone means "is a custom payload". \
             Combine with && || ! or and/or/not and parentheses. \
-            Event kinds: start, connection, disconnect, payload_type, packet, script, script_error, script_reload, eval. \
+            Event kinds: start, connection, disconnect, payload_type, packet, eval, script (sculk.emit), \
+            script_log (sculk.log), script_error, script_run, script_stop, script_file (saved, renamed, ...), script_reload; \
+            script events carry `script` (the script's name, or "console"). \
             Packet events are layered: id, kind, t, injected, action (pass/drop/replace); \
             conn {id, side (client/server), remote}; frame {seq, dir (inbound/outbound), len, hex, spans: \
             [{field, off, len}] saying which bytes hold packet.id, packet.body, mod.channel, mod.data}; \
@@ -101,7 +124,10 @@ final class McpHandler {
         out.put("instructions", "sculk is a packet interception and injection tool running inside a Minecraft "
                 + engine.platform().describe() + " process. Use sculk_events to look at captured traffic, "
                 + "sculk_wait_events to wait for new traffic, and sculk_eval to run JavaScript with the `sculk` "
-                + "scripting API in the live game. Only use it against games you own or are authorised to test.");
+                + "scripting API in the live game. Installed scripts (sculk_scripts, sculk_script_read, "
+                + "sculk_script_write, sculk_script_edit, sculk_script_control) persist on disk and run at launch; "
+                + "use them for anything that should outlive the session. "
+                + "Only use it against games you own or are authorised to test.");
         return out;
     }
 
@@ -128,7 +154,7 @@ final class McpHandler {
         Map<String, Object> after = prop("integer", "Only events with an id greater than this.");
         List<Map<String, Object>> out = new ArrayList<>();
         out.add(tool("sculk_status",
-                "Platform, open connections, startup scripts and the id of the latest event.",
+                "Platform, open connections, running scripts and the id of the latest event.",
                 Map.of(), List.of()));
         out.add(tool("sculk_events",
                 "Query recent events, oldest first, as JSON Lines. Without `after`, returns the last `limit` matches; "
@@ -148,18 +174,53 @@ final class McpHandler {
                 "The whole frame (packet id and body, uncompressed and unencrypted) of a packet event, as hex.",
                 Map.of("id", prop("integer", "Event id.")), List.of("id")));
         out.add(tool("sculk_eval",
-                "Evaluate JavaScript (Rhino, ES6) in the live script scope of the game process, where startup scripts "
-                        + "ran. The `sculk` global offers: on('packet'|'connection', fn), connections(), connection(id), payloadTypes(), "
-                        + "emit(obj), log(msg), schedule(ms, fn), tree(obj), with(record, field, value), hex(bytes), "
-                        + "unhex(str), copy(bytes). Connections offer inject(dir, bytes), injectPacket(dir, obj), "
-                        + "replay(event). Packet events have the same fields and shorthands as logged events (e.mod.channel, "
-                        + "e.frame.dir, e.owner), plus e.frame.bytes, e.packet.object, e.mod.data as live objects and "
-                        + "e.conn as the live connection, and offer drop(), replaceFrame(bytes), replacePacket(obj). "
-                        + "Globals persist between calls until sculk_reload. Returns the value of the last expression.",
+                "Evaluate JavaScript in the game process, in the console's own scope (not a script's: use "
+                        + "sculk.scope('name.js') to reach a running script's globals). Globals and listeners made here persist "
+                        + "between calls until sculk_reload. For anything to keep, write a script instead (sculk_script_write). "
+                        + "Returns the value of the last expression.\n\n" + SCRIPT_HELP,
                 Map.of("code", prop("string", "JavaScript source.")), List.of("code")));
         out.add(tool("sculk_reload",
-                "Drop all script state (globals, listeners, timers) and load the startup scripts again from disk.",
+                "Stop every script and drop all script state (globals, listeners, timers, the console's too), then start "
+                        + "the enabled startup scripts again from disk.",
                 Map.of(), List.of()));
+        Map<String, Object> scriptName = prop("string", "Script name as sculk_scripts lists it, e.g. drop-sync.js.");
+        out.add(tool("sculk_scripts",
+                "List installed scripts: name, enabled, run mode (startup/manual), title and description from the "
+                        + "metadata block, state (active: has listeners or timers; idle: ran, nothing registered; stopped), "
+                        + "the last run's outcome, and the source hash. Also the script directory and whether this process "
+                        + "is a game client or a dedicated server.",
+                Map.of(), List.of()));
+        out.add(tool("sculk_script_read",
+                "Read a script's source, with line numbers, and its hash (pass it to sculk_script_write as `base`).",
+                Map.of("name", scriptName), List.of("name")));
+        out.add(tool("sculk_script_write",
+                "Create or replace a script with the whole source. A new script is enabled; it starts now only if "
+                        + "`run` is true. A script that is running restarts with the new source. Syntax errors are reported "
+                        + "and the file is still written. Prefer sculk_script_edit for small changes.\n\n" + SCRIPT_HELP,
+                Map.of("name", prop("string", "File name ending in .js; letters, digits, spaces and _ . ( ) + , -."),
+                        "source", prop("string", "The whole script."),
+                        "base", prop("string", "Optional: the hash this was edited from (from sculk_script_read); the write "
+                                + "fails if the script changed since. Pass an empty string to require that the script is new."),
+                        "run", prop("boolean", "Also (re)start it now, even if it is a manual script.")),
+                List.of("name", "source")));
+        out.add(tool("sculk_script_edit",
+                "Edit a script by replacing exact text: `old` must occur exactly once in the source (include enough "
+                        + "context to make it unique), unless `all` is true. A running script restarts with the result.",
+                Map.of("name", scriptName,
+                        "old", prop("string", "Exact text to replace, whitespace included."),
+                        "new", prop("string", "Replacement text."),
+                        "all", prop("boolean", "Replace every occurrence.")),
+                List.of("name", "old", "new")));
+        Map<String, Object> action = new LinkedHashMap<>(prop("string",
+                "run: (re)start it from its file now, whatever its run mode, and return the value of its last expression "
+                        + "or its error. stop: remove its listeners and timers. enable / disable: whether it starts at launch "
+                        + "and on reload (disabling also stops it; enabling starts a startup script). rename: needs `to`. "
+                        + "delete: stop it and delete the file."));
+        action.put("enum", List.of("run", "stop", "enable", "disable", "rename", "delete"));
+        out.add(tool("sculk_script_control",
+                "Run, stop, enable, disable, rename or delete an installed script.",
+                Map.of("name", scriptName, "action", action, "to", prop("string", "New name, for rename.")),
+                List.of("name", "action")));
         return out;
     }
 
@@ -195,13 +256,109 @@ final class McpHandler {
                     Map<String, Object> r = engine.reloadScripts();
                     yield text(EventLog.toJson(r), !Boolean.TRUE.equals(r.get("ok")));
                 }
+                case "sculk_scripts" -> text(EventLog.toJson(ControlServer.scriptList(engine)), false);
+                case "sculk_script_read" -> scriptRead(required(args, "name"));
+                case "sculk_script_write" -> scriptWrite(args);
+                case "sculk_script_edit" -> scriptEdit(args);
+                case "sculk_script_control" -> scriptControl(args);
                 default -> throw new IllegalArgumentException("unknown tool " + name);
             };
+        } catch (ScriptManager.ScriptError e) {
+            return text("error: " + e.getMessage(), true);
         } catch (IllegalArgumentException e) {
             if (e.getMessage() != null && e.getMessage().startsWith("unknown tool")) throw e;
             // Bad filters and arguments are tool errors the model can read and fix.
             return text("error: " + e.getMessage(), true);
         }
+    }
+
+    // ---- scripts ----
+
+    private Map<String, Object> scriptRead(String name) {
+        Map<String, Object> s = engine.scripts().source(name);
+        String source = (String) s.get("source");
+        StringBuilder sb = new StringBuilder();
+        sb.append(name).append("  hash ").append(s.get("hash")).append("  ").append(Boolean.TRUE.equals(s.get("enabled")) ? "enabled" : "disabled")
+                .append("  run ").append(s.get("run")).append("  state ").append(s.get("state")).append('\n');
+        String[] lines = source.split("\n", -1);
+        int width = String.valueOf(lines.length).length();
+        for (int i = 0; i < lines.length; i++) {
+            if (i == lines.length - 1 && lines[i].isEmpty()) break;
+            sb.append(String.format("%" + width + "d\t", i + 1)).append(lines[i]).append('\n');
+        }
+        return text(sb.toString(), false);
+    }
+
+    private Map<String, Object> scriptWrite(JsonObject args) {
+        String name = required(args, "name");
+        String source = args.has("source") && !args.get("source").isJsonNull() ? args.get("source").getAsString() : null;
+        if (source == null) throw new IllegalArgumentException("source is required");
+        Map<String, Object> r = engine.scripts().save(name, source, string(args, "base"));
+        boolean run = args.has("run") && args.get("run").getAsBoolean();
+        if (run && !r.containsKey("restart")) r = engine.scripts().run(name);
+        return afterChange(r, source);
+    }
+
+    private Map<String, Object> scriptEdit(JsonObject args) {
+        String name = required(args, "name");
+        String old = string(args, "old"), replacement = string(args, "new");
+        if (old == null || old.isEmpty()) throw new IllegalArgumentException("old is required and must not be empty");
+        if (replacement == null) throw new IllegalArgumentException("new is required");
+        boolean all = args.has("all") && args.get("all").getAsBoolean();
+        Map<String, Object> current = engine.scripts().source(name);
+        String source = (String) current.get("source");
+        int first = source.indexOf(old);
+        if (first < 0) return text("error: `old` does not occur in " + name + "; read it again with sculk_script_read", true);
+        int count = 0;
+        for (int i = first; i >= 0; i = source.indexOf(old, i + old.length())) count++;
+        if (count > 1 && !all) {
+            return text("error: `old` occurs " + count + " times in " + name + "; add context to make it unique, or pass all=true", true);
+        }
+        String updated = all ? source.replace(old, replacement)
+                : source.substring(0, first) + replacement + source.substring(first + old.length());
+        Map<String, Object> r = engine.scripts().save(name, updated, (String) current.get("hash"));
+        r.put("replaced", all ? count : 1);
+        return afterChange(r, updated);
+    }
+
+    /** The save result, with syntax problems and the restart outcome; an error if either failed. */
+    private static Map<String, Object> afterChange(Map<String, Object> r, String source) {
+        Map<String, Object> out = new LinkedHashMap<>(r);
+        out.remove("meta");
+        Map<String, Object> check = ControlServer.check(source);
+        if (!((List<?>) check.get("problems")).isEmpty()) out.put("problems", check.get("problems"));
+        Object restart = out.get("restart");
+        boolean failed = !Boolean.TRUE.equals(check.get("ok"))
+                || (restart instanceof Map<?, ?> m && !Boolean.TRUE.equals(m.get("ok")))
+                || (out.containsKey("ok") && !Boolean.TRUE.equals(out.get("ok")));
+        return text(EventLog.toJson(out), failed);
+    }
+
+    private Map<String, Object> scriptControl(JsonObject args) {
+        String name = required(args, "name");
+        String action = required(args, "action");
+        var scripts = engine.scripts();
+        Map<String, Object> r = switch (action) {
+            case "run" -> scripts.run(name);
+            case "stop" -> scripts.stop(name);
+            case "enable" -> scripts.setEnabled(name, true);
+            case "disable" -> scripts.setEnabled(name, false);
+            case "rename" -> scripts.rename(name, required(args, "to"));
+            case "delete" -> scripts.delete(name);
+            default -> throw new IllegalArgumentException("unknown action " + action + " (run, stop, enable, disable, rename, delete)");
+        };
+        Map<String, Object> out = new LinkedHashMap<>(r);
+        out.remove("meta");
+        Object restart = out.get("restart");
+        boolean failed = (out.containsKey("ok") && !Boolean.TRUE.equals(out.get("ok")))
+                || (restart instanceof Map<?, ?> m && !Boolean.TRUE.equals(m.get("ok")));
+        return text(EventLog.toJson(out), failed);
+    }
+
+    private static String required(JsonObject args, String key) {
+        String v = string(args, key);
+        if (v == null || v.isBlank()) throw new IllegalArgumentException(key + " is required");
+        return v;
     }
 
     private Map<String, Object> waitEvents(JsonObject args) {

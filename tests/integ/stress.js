@@ -4,7 +4,6 @@
 // side sends on every mod channel, so the other side receives each one twice.
 // This drives injection through every mod codec in the run; a mod that cannot
 // take a duplicate shows up as a disconnect or an error in the logs.
-// Startup scripts share one global scope (server.js has its own `replayed`), so keep to a function.
 (function () {
   const replayed = {};
 

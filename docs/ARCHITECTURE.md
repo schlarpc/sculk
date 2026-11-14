@@ -204,9 +204,35 @@ anything that hashes or signs payload bytes.
 
 ## Scripting
 
-Scripts are JavaScript (Rhino, ES6 mode) loaded at startup from
-`-Dsculk.scripts` (dev runs: `-Psculk.scripts=...`). The `sculk` global is
-`ScriptApi`:
+Scripts are JavaScript (Rhino, ES6 mode). Installed scripts are the `.js`
+files in `<config>/sculk/scripts/` (or `-Dsculk.scriptDir`), so a modpack
+can ship them in its `config/` folder. `x.js.disabled` is script `x.js`,
+disabled, the way launchers disable mod jars. Files named in
+`-Dsculk.scripts` (dev runs: `-Psculk.scripts=...`) are scripts too, started
+first; they are managed where they live, not from the UI.
+
+A script may start with a metadata block, like a userscript's:
+
+```js
+// ==Sculk==
+// @name        Drop exhaustion sync
+// @description Stops AppleSkin's exhaustion packets reaching the client
+// @run         startup    (startup: run at launch and on reload; manual: only when asked)
+// @dist        client     (optional: client = a game client and its integrated server; server = a dedicated server)
+// ==/Sculk==
+```
+
+Every running script has its own top-level scope (on a shared scope of
+built-ins, Rhino's sharing-scopes pattern) and owns the listeners and timers
+it registers, so one script starts, stops or restarts without touching the
+others (`ScriptManager`). Saving a running script restarts it; disabling,
+deleting or stopping one removes its listeners and timers; enabling a
+startup script starts it. A script that throws while starting is stopped
+at once, so it never runs half-registered. The console (`/eval`, the REPL,
+`sculk_eval`) has a scope of its own; `sculk.scope('x.js')` reaches a
+running script's globals from anywhere.
+
+The `sculk` global is that script's `ScriptApi`:
 
 ```js
 sculk.on('packet', e => {
@@ -218,13 +244,17 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 // c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event); sculk.connection(id) finds one
 // sculk.emit(obj), sculk.schedule(ms, fn), sculk.payloadTypes(), sculk.tree(obj),
 // sculk.with(record, 'field', value), sculk.copy(bytes), sculk.hex(bytes), sculk.unhex(str)
+// sculk.log(msg) (a script_log event), sculk.scope(name), sculk.name, sculk.dist ('client' or 'server')
 ```
 
 ### Events
 
 `-Dsculk.eventLog=path` writes a JSON Lines log of everything sculk sees:
-`start`, `connection`, `disconnect`, `payload_type`, `packet`, `script`,
-`script_error`, `script_reload` and `eval`. Every entry has an `id` that
+`start`, `connection`, `disconnect`, `payload_type`, `packet`, `eval`, and
+for scripts `script` (`sculk.emit`), `script_log` (`sculk.log`),
+`script_error`, `script_run`, `script_stop`, `script_file` (created, saved,
+renamed, enabled, disabled, deleted) and `script_reload`. Script events
+carry `script`, the script's name (`console` for the console). Every entry has an `id` that
 goes up by one per entry, and `kind` and `t` (epoch millis).
 
 Packet events are layered, like a Wireshark dissection: each layer is an
@@ -265,28 +295,41 @@ Shorthands, in filters and in scripts: `dir` (`frame.dir`), `len`
 
 `-Dsculk.control=PORT` (dev runs: `-Psculk.control=0` for a free port)
 starts one HTTP listener for tools, agents and the web UI: a filterable
-live event log, a REPL into the script scope, and an MCP server. It keeps the most recent
+live event log, a REPL, a script editor, and an MCP server. It keeps the most recent
 events in memory with their whole frames (the event log cuts long frames
 short), whether or not `sculk.eventLog` is set.
 
 ```
-GET  /status                            platform, connections, startup scripts, last event id
+GET  /status                            platform, connections, running scripts, last event id
 GET  /events?filter=&after=&limit=      JSON Lines; the last `limit` matches, or the first after `after`
 GET  /events/stream?filter=&after=      server-sent events, live (backlog first with `after`)
 GET  /frame?id=                         a packet event's whole frame, as hex
-POST /eval      body: JavaScript        runs in the live script scope: {"ok":true,"result":...}
-POST /reload                            drops script globals, listeners and timers; loads startup scripts again
+POST /eval      body: JavaScript        runs in the console's scope: {"ok":true,"result":...}
+POST /reload                            stops every script, drops all script state; starts the startup scripts again
+GET  /scripts                           installed scripts: metadata, enabled, state, last run, source hash
+GET  /scripts/source?name=              one script with its source
+POST /scripts/save?name=&base=          body: source; create or replace (base: the hash it was edited from, "" = new; 409 if stale)
+POST /scripts/check     body: source    syntax errors and warnings from Rhino's parser, without running
+POST /scripts/run|stop|delete?name=     run: (re)start from the file, any run mode; returns its result or error
+POST /scripts/rename?name=&to=
+POST /scripts/enable?name=&enabled=     disabling renames to .disabled and stops it
 POST /mcp       body: JSON-RPC          Model Context Protocol, Streamable HTTP transport (JSON responses)
 GET  /ui/...                            the web UI (no token needed for its static files)
 ```
 
 `scripts/sculkctl.py` wraps it (`status`, `events`, `tail`, `frame`, `eval`,
-`repl`, `reload`) and finds the server through its control file.
+`repl`, `reload`, `script ls|cat|push|run|stop|enable|disable|rm|mv`) and
+finds the server through its control file.
 
 The MCP server offers the same powers as tools: `sculk_status`,
 `sculk_events`, `sculk_wait_events` (long-polls up to 60 s for new matches,
-since tool calls cannot stream), `sculk_frame`, `sculk_eval` and
-`sculk_reload`. The tool descriptions carry the filter syntax, event fields
+since tool calls cannot stream), `sculk_frame`, `sculk_eval`,
+`sculk_reload`, and for installed scripts `sculk_scripts`,
+`sculk_script_read` (with line numbers and hash), `sculk_script_write`
+(whole source; optional `base` hash and `run`), `sculk_script_edit` (exact
+text replacement, like an editor's find and replace; a running script
+restarts) and `sculk_script_control` (run, stop, enable, disable, rename,
+delete). Writes and edits report Rhino's syntax errors. The tool descriptions carry the filter syntax, event fields
 and script API. `scripts/sculkctl.py mcp-config` prints the client
 configuration, including the `Authorization` header. The token changes with
 every launch; `-Dsculk.controlToken=<16+ chars>` fixes it for a static

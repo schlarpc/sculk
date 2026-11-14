@@ -14,6 +14,11 @@ are up, pick one with --target, a substring of the file's path such as
   sculkctl.py eval CODE | -                                 - reads stdin
   sculkctl.py repl
   sculkctl.py reload
+  sculkctl.py script ls                                     installed scripts and their state
+  sculkctl.py script cat NAME
+  sculkctl.py script push FILE [--name NAME] [--run]        install or replace (- reads stdin; needs --name)
+  sculkctl.py script run|stop|enable|disable|rm NAME
+  sculkctl.py script mv NAME NEW
   sculkctl.py mcp-config                                    MCP client setup for this server
   sculkctl.py ui [--print]                                  open the web UI, signed in
 
@@ -159,6 +164,60 @@ def cmd_reload(c, a):
     sys.exit(0 if result.get("ok") else 1)
 
 
+def cmd_script(c, a):
+    op, args = a.op, a.args
+    need = {"ls": 0, "cat": 1, "push": 1, "run": 1, "stop": 1, "enable": 1, "disable": 1, "rm": 1, "mv": 2}
+    if op not in need:
+        sys.exit(f"sculkctl: unknown script command {op} ({', '.join(need)})")
+    if len(args) != need[op]:
+        sys.exit(f"sculkctl: script {op} takes {need[op]} argument(s)")
+    if op == "ls":
+        data = c.json("GET", "/scripts")
+        print(f"# {data['dir']} ({data['dist']})")
+        for s in data["scripts"]:
+            flags = ("on " if s.get("enabled") else "off") + " " + s.get("run", "?").ljust(7)
+            state = s.get("state", "?")
+            if s.get("state") == "active":
+                state += f" ({s.get('listeners', 0)} listeners, {s.get('timers', 0)} timers)"
+            last = s.get("lastRun")
+            if last and not last.get("ok"):
+                state += f"  last run failed: {last.get('error')}"
+            if s.get("skip"):
+                state += f"  [{s['skip']}]"
+            title = f"  {s['title']}" if s.get("title") else ""
+            print(f"{flags}  {s['name']}{title}  -  {state}")
+        return
+    if op == "cat":
+        sys.stdout.write(c.json("GET", "/scripts/source", {"name": args[0]})["source"])
+        return
+    if op == "push":
+        if args[0] == "-":
+            if not a.name:
+                sys.exit("sculkctl: script push - needs --name")
+            source, name = sys.stdin.read(), a.name
+        else:
+            path = Path(args[0])
+            source, name = path.read_text(), a.name or path.name
+        result = c.json("POST", "/scripts/save", {"name": name}, body=source)
+        print(f"{'created' if result.get('created') else 'saved'} {name}")
+        restart = result.get("restart")
+        if a.run and not restart:
+            restart = c.json("POST", "/scripts/run", {"name": name}, body="")
+        if restart:
+            sys.exit(0 if show_eval(restart) else 1)
+        return
+    if op == "mv":
+        print_json(c.json("POST", "/scripts/rename", {"name": args[0], "to": args[1]}, body=""))
+        return
+    path, query = {"run": ("/scripts/run", {}), "stop": ("/scripts/stop", {}), "rm": ("/scripts/delete", {}),
+                   "enable": ("/scripts/enable", {"enabled": "true"}),
+                   "disable": ("/scripts/enable", {"enabled": "false"})}[op]
+    result = c.json("POST", path, {"name": args[0], **query}, body="")
+    if op == "run":
+        sys.exit(0 if show_eval(result) else 1)
+    print_json({k: v for k, v in result.items() if k != "meta"})
+
+
 def cmd_ui(c, a):
     # The token travels in the fragment, which browsers never send to the
     # server; the page moves it to session storage and strips it from the URL.
@@ -204,6 +263,12 @@ def main():
     s.set_defaults(fn=cmd_eval)
     sub.add_parser("repl").set_defaults(fn=cmd_repl)
     sub.add_parser("reload").set_defaults(fn=cmd_reload)
+    s = sub.add_parser("script", help="manage installed scripts: ls, cat, push, run, stop, enable, disable, rm, mv")
+    s.add_argument("op")
+    s.add_argument("args", nargs="*")
+    s.add_argument("--name", help="push: install under this name")
+    s.add_argument("--run", action="store_true", help="push: also (re)start it")
+    s.set_defaults(fn=cmd_script)
     s = sub.add_parser("ui")
     s.add_argument("--print", action="store_true", help="print the URL instead of opening a browser")
     s.set_defaults(fn=cmd_ui)

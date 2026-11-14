@@ -4,8 +4,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import sculk.core.Sculk;
@@ -19,7 +22,9 @@ import sculk.shaded.org.mozilla.javascript.RhinoException;
 import sculk.shaded.org.mozilla.javascript.Scriptable;
 
 /**
- * The {@code sculk} global that scripts see.
+ * The {@code sculk} global that one script sees. Every script (and the
+ * console) has its own instance and scope, and owns the listeners and timers
+ * it registers, so {@link #close()} stops exactly that script.
  *
  * <pre>{@code
  * sculk.on('packet', e => {
@@ -36,27 +41,44 @@ import sculk.shaded.org.mozilla.javascript.Scriptable;
  */
 public final class ScriptApi implements AutoCloseable {
     private final Sculk engine;
-    private final List<Consumer<PacketEvent>> packetListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
-    private final List<Consumer<SculkConnection>> connectionListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final ScriptManager manager;
+    private final ScriptHost host;
+    private final String name;
+    private final Scriptable scope;
+    private final ScheduledExecutorService timers;
+    private final List<Consumer<PacketEvent>> packetListeners = new CopyOnWriteArrayList<>();
+    private final List<Consumer<SculkConnection>> connectionListeners = new CopyOnWriteArrayList<>();
+    private final Set<ScheduledFuture<?>> pending = ConcurrentHashMap.newKeySet();
     private volatile boolean closed;
-    private final ScriptHost host = new ScriptHost();
-    private final ScheduledExecutorService timers = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "sculk-script-timer");
-        t.setDaemon(true);
-        return t;
-    });
 
-    public ScriptApi(Sculk engine) {
+    ScriptApi(Sculk engine, ScriptManager manager, ScriptHost host, ScheduledExecutorService timers, String name) {
         this.engine = engine;
-        host.bind("sculk", this);
+        this.manager = manager;
+        this.host = host;
+        this.timers = timers;
+        this.name = name;
+        this.scope = host.newScope();
+        host.bind(scope, "sculk", this);
     }
 
-    public void load(String name, String source) {
-        host.eval(name, source);
+    /** Runs {@code source} in this script's scope. */
+    Object load(String source) {
+        return host.eval(scope, name, source);
     }
 
-    public Object eval(String source) {
-        return host.eval("eval", source);
+    Scriptable scope() {
+        return scope;
+    }
+
+    /** Listeners this script has registered and not removed. */
+    int listenerCount() {
+        return packetListeners.size() + connectionListeners.size();
+    }
+
+    /** Timers this script has scheduled that have not run yet. */
+    int timerCount() {
+        pending.removeIf(ScheduledFuture::isDone);
+        return pending.size();
     }
 
     /**
@@ -65,18 +87,15 @@ public final class ScriptApi implements AutoCloseable {
      * {@code {"ok":false,"error":"..."}}. Java objects in the result are
      * shown as {@link ObjectModel} trees.
      */
-    public Map<String, Object> evalForRepl(String source) {
+    Map<String, Object> evalForRepl(String source) {
         Map<String, Object> out = new LinkedHashMap<>();
-        Map<String, Object> audit = Sculk.entry("eval", Map.of());
-        audit.put("source", source.length() > 4096 ? source.substring(0, 4096) + "..." : source);
-        engine.log(audit);
         try {
-            Object value = host.eval("repl", source);
+            Object value = load(source);
             out.put("ok", true);
             out.put("result", jsonSafe(value, 6));
         } catch (RhinoException e) {
             out.put("ok", false);
-            out.put("error", e.details() + " (" + e.sourceName() + ":" + e.lineNumber() + ")");
+            out.put("error", describe(e));
         } catch (RuntimeException | LinkageError e) {
             out.put("ok", false);
             out.put("error", e.toString());
@@ -84,7 +103,11 @@ public final class ScriptApi implements AutoCloseable {
         return out;
     }
 
-    /** Stops this API: its listeners are removed and its pending timers cancelled. */
+    static String describe(RhinoException e) {
+        return e.details() + " (" + e.sourceName() + ":" + e.lineNumber() + ")";
+    }
+
+    /** Stops this script: its listeners are removed and its pending timers cancelled. */
     @Override
     public void close() {
         closed = true;
@@ -92,13 +115,14 @@ public final class ScriptApi implements AutoCloseable {
         for (Consumer<SculkConnection> l : connectionListeners) engine.removeConnectionListener(l);
         packetListeners.clear();
         connectionListeners.clear();
-        timers.shutdownNow();
+        for (ScheduledFuture<?> f : pending) f.cancel(false);
+        pending.clear();
     }
 
     // ---- script-visible API ----
 
     public void on(String event, Function fn) {
-        if (closed) throw new IllegalStateException("script API was reloaded");
+        if (closed) throw new IllegalStateException("script " + name + " was stopped");
         switch (event) {
             case "packet" -> {
                 Consumer<PacketEvent> l = e -> invoke("packet", fn, e);
@@ -115,18 +139,43 @@ public final class ScriptApi implements AutoCloseable {
     }
 
     public void schedule(double delayMillis, Function fn) {
-        timers.schedule(() -> invoke("timer", fn), (long) delayMillis, TimeUnit.MILLISECONDS);
+        if (closed) throw new IllegalStateException("script " + name + " was stopped");
+        pending.removeIf(ScheduledFuture::isDone);
+        pending.add(timers.schedule(() -> invoke("timer", fn), (long) delayMillis, TimeUnit.MILLISECONDS));
     }
 
+    /** Writes {@code message} to the game log and the event log as {@code {"kind":"script_log", "script":..., "message":...}}. */
     public void log(Object message) {
-        Sculk.LOG.info("[script] {}", message);
+        Object value = ScriptHost.toJava(message);
+        String text = value instanceof String s ? s : EventLog.toJson(jsonSafe(value, 4));
+        Sculk.LOG.info("[{}] {}", name, text);
+        Map<String, Object> e = Sculk.entry("script_log", Map.of());
+        e.put("script", name);
+        e.put("message", text);
+        engine.log(e);
     }
 
-    /** Writes {@code data} (a JS object) to the event log as {@code {"kind":"script", ...}}. */
+    /** Writes {@code data} (a JS object) to the event log as {@code {"kind":"script", "script":..., "data":...}}. */
     public void emit(Object data) {
         Map<String, Object> e = Sculk.entry("script", Map.of());
+        e.put("script", name);
         e.put("data", plain(ScriptHost.toJava(data)));
         engine.log(e);
+    }
+
+    /** This script's name, as the script list shows it. */
+    public String getName() {
+        return name;
+    }
+
+    /** "client" in a game client (and its integrated server), "server" in a dedicated server. */
+    public String getDist() {
+        return engine.platform().dedicatedServer() ? "server" : "client";
+    }
+
+    /** Another script's top-level scope, to read or call its globals; null if it is not loaded. */
+    public Object scope(String script) {
+        return manager.scopeOf(script);
     }
 
     public List<SculkConnection> connections() {
@@ -174,10 +223,11 @@ public final class ScriptApi implements AutoCloseable {
         try {
             host.call(fn, args);
         } catch (RuntimeException e) {
-            Sculk.LOG.error("script {} callback failed", what, e);
+            Sculk.LOG.error("script {}: {} callback failed", name, what, e);
             Map<String, Object> entry = Sculk.entry("script_error", Map.of());
+            entry.put("script", name);
             entry.put("callback", what);
-            entry.put("error", e.toString());
+            entry.put("error", e instanceof RhinoException re ? describe(re) : e.toString());
             if (args.length > 0 && args[0] instanceof PacketEvent pe) entry.put("packet", pe.toString());
             engine.log(entry);
         }

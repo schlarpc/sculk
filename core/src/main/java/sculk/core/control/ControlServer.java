@@ -29,11 +29,13 @@ import java.util.function.Predicate;
 import sculk.core.Sculk;
 import sculk.core.log.EventLog;
 import sculk.core.net.SculkConnection;
+import sculk.core.script.ScriptHost;
+import sculk.core.script.ScriptManager;
 import sculk.core.util.Bytes;
 
 /**
  * The administrative HTTP server: query and tail the event log, evaluate
- * script code in the live script scope, reload scripts.
+ * script code, manage installed scripts.
  *
  * <p>Whoever can call this server can run code in the game process and inject
  * packets, so it is off unless {@code -Dsculk.control=<port>} is set, and:
@@ -57,8 +59,15 @@ import sculk.core.util.Bytes;
  *   GET  /events?filter=&amp;after=&amp;limit=      JSON Lines; see {@link EventFilter}
  *   GET  /events/stream?filter=&amp;after=      the same as server-sent events, live
  *   GET  /frame?id=                         the whole frame of a packet event
- *   POST /eval      body: JavaScript        {"ok":true,"result":...}
- *   POST /reload                            drops all script state, loads the startup scripts again
+ *   POST /eval      body: JavaScript        {"ok":true,"result":...}, in the console's own scope
+ *   POST /reload                            drops all script state, starts the startup scripts again
+ *   GET  /scripts                           {"dir":..., "dist":..., "scripts":[...]}: installed scripts and their state
+ *   GET  /scripts/source?name=              one script with its source and hash
+ *   POST /scripts/save?name=&amp;base=  body: source   create or replace; base is the hash it was edited from ("" = new)
+ *   POST /scripts/check  body: source       syntax errors and warnings, without running it
+ *   POST /scripts/{run,stop,delete}?name=
+ *   POST /scripts/rename?name=&amp;to=
+ *   POST /scripts/enable?name=&amp;enabled=true|false
  *   POST /mcp       body: JSON-RPC          Model Context Protocol (Streamable HTTP); see {@link McpHandler}
  *   GET  /ui/...                            the web UI (static files from sculk/web/ on the classpath)
  * </pre>
@@ -238,18 +247,35 @@ public final class ControlServer {
                     case "GET /frame" -> frame(ex, query);
                     case "POST /eval" -> json(ex, 200, engine.scripts().evalForRepl(body(ex)));
                     case "POST /reload" -> json(ex, 200, engine.reloadScripts());
+                    case "GET /scripts" -> json(ex, 200, scriptList(engine));
+                    case "GET /scripts/source" -> json(ex, 200, engine.scripts().source(query.get("name")));
+                    case "POST /scripts/save" -> json(ex, 200, engine.scripts().save(query.get("name"), body(ex), query.get("base")));
+                    case "POST /scripts/check" -> json(ex, 200, check(body(ex)));
+                    case "POST /scripts/run" -> json(ex, 200, engine.scripts().run(query.get("name")));
+                    case "POST /scripts/stop" -> json(ex, 200, engine.scripts().stop(query.get("name")));
+                    case "POST /scripts/delete" -> json(ex, 200, engine.scripts().delete(query.get("name")));
+                    case "POST /scripts/rename" -> json(ex, 200, engine.scripts().rename(query.get("name"), query.get("to")));
+                    case "POST /scripts/enable" -> json(ex, 200, engine.scripts().setEnabled(query.get("name"),
+                            !"false".equals(query.getOrDefault("enabled", "true"))));
                     case "POST /mcp" -> {
                         Map<String, Object> response = mcp.handle(body(ex));
                         if (response == null) ex.sendResponseHeaders(202, -1);
                         else json(ex, 200, response);
                     }
                     default -> {
-                        boolean known = Set.of("/status", "/events", "/events/stream", "/frame", "/eval", "/reload", "/mcp").contains(path);
+                        boolean known = Set.of("/status", "/events", "/events/stream", "/frame", "/eval", "/reload", "/mcp",
+                                "/scripts", "/scripts/source", "/scripts/save", "/scripts/check", "/scripts/run", "/scripts/stop",
+                                "/scripts/delete", "/scripts/rename", "/scripts/enable").contains(path);
                         json(ex, known ? 405 : 404, Map.of("error", known ? "wrong method for " + path : "no such endpoint " + path));
                     }
                 }
+            } catch (ScriptManager.ScriptError e) {
+                json(ex, e.status(), Map.of("error", String.valueOf(e.getMessage())));
             } catch (IllegalArgumentException e) {
                 json(ex, 400, Map.of("error", String.valueOf(e.getMessage())));
+            } catch (RuntimeException e) {
+                Sculk.LOG.warn("control request {} {} failed", method, path, e);
+                json(ex, 500, Map.of("error", e.toString()));
             }
         } catch (IOException e) {
             // The caller went away.
@@ -284,7 +310,7 @@ public final class ControlServer {
         out.put("pid", ProcessHandle.current().pid());
         out.put("events", store.size());
         out.put("lastEventId", engine.lastEventId());
-        out.put("scripts", engine.scriptPaths());
+        out.put("scripts", engine.scripts().runningNames());
         List<Map<String, Object>> conns = new java.util.ArrayList<>();
         for (SculkConnection c : engine.connections()) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -295,6 +321,30 @@ public final class ControlServer {
             conns.add(m);
         }
         out.put("connections", conns);
+        return out;
+    }
+
+    static Map<String, Object> scriptList(Sculk engine) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("dir", engine.scripts().dir().toString());
+        out.put("dist", engine.platform().dedicatedServer() ? "server" : "client");
+        out.put("scripts", engine.scripts().list());
+        return out;
+    }
+
+    static Map<String, Object> check(String source) {
+        List<Map<String, Object>> problems = new java.util.ArrayList<>();
+        for (ScriptHost.Problem p : ScriptHost.check("check", source)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("line", p.line());
+            m.put("column", p.column());
+            m.put("message", p.message());
+            m.put("severity", p.warning() ? "warning" : "error");
+            problems.add(m);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", problems.stream().noneMatch(m -> "error".equals(m.get("severity"))));
+        out.put("problems", problems);
         return out;
     }
 

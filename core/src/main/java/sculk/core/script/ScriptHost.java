@@ -1,23 +1,31 @@
 package sculk.core.script;
 
+import java.util.ArrayList;
+import java.util.List;
+import sculk.shaded.org.mozilla.javascript.CompilerEnvirons;
 import sculk.shaded.org.mozilla.javascript.Context;
+import sculk.shaded.org.mozilla.javascript.ErrorReporter;
+import sculk.shaded.org.mozilla.javascript.EvaluatorException;
 import sculk.shaded.org.mozilla.javascript.Function;
+import sculk.shaded.org.mozilla.javascript.Parser;
 import sculk.shaded.org.mozilla.javascript.RhinoException;
 import sculk.shaded.org.mozilla.javascript.Scriptable;
 import sculk.shaded.org.mozilla.javascript.ScriptableObject;
 
 /**
- * Embeds Rhino. One global scope per host. Rhino scopes are not thread-safe
- * and hooks fire on Netty threads, so every entry point is synchronized.
- * Scripts see only the core API, never raw Minecraft classes, so one script
- * runs on every platform.
+ * Embeds Rhino. The standard objects live in one shared scope; each script
+ * gets its own scope on top of it ({@link #newScope()}), so scripts see the
+ * same built-ins but not each other's top-level variables. Rhino scopes are
+ * not thread-safe and hooks fire on Netty threads, so every entry point is
+ * synchronized on the host. Scripts see only the core API, never raw
+ * Minecraft classes, so one script runs on every platform.
  */
 public final class ScriptHost {
-    private final ScriptableObject scope;
+    private final ScriptableObject shared;
 
     public ScriptHost() {
         try (Context cx = enter()) {
-            scope = cx.initStandardObjects();
+            shared = cx.initStandardObjects();
         }
     }
 
@@ -30,28 +38,75 @@ public final class ScriptHost {
         return cx;
     }
 
-    /** Exposes a Java object to scripts as a global. */
-    public synchronized void bind(String name, Object value) {
+    /** A new top-level scope whose prototype holds the standard objects: Rhino's "sharing scopes" pattern. */
+    public synchronized Scriptable newScope() {
+        try (Context cx = enter()) {
+            Scriptable scope = cx.newObject(shared);
+            scope.setPrototype(shared);
+            scope.setParentScope(null);
+            return scope;
+        }
+    }
+
+    /** Exposes a Java object to scripts in {@code scope} as a global. */
+    public synchronized void bind(Scriptable scope, String name, Object value) {
         try (Context cx = enter()) {
             ScriptableObject.putProperty(scope, name, Context.javaToJS(value, scope, cx));
         }
     }
 
-    /** Evaluates {@code source} and returns the result converted to a Java object. */
-    public synchronized Object eval(String sourceName, String source) {
+    /** Evaluates {@code source} in {@code scope} and returns the result converted to a Java object. */
+    public synchronized Object eval(Scriptable scope, String sourceName, String source) {
         try (Context cx = enter()) {
-            Object result = cx.evaluateString(scope, source, sourceName, 1, null);
-            return toJava(result);
+            return toJava(cx.evaluateString(scope, source, sourceName, 1, null));
         }
     }
 
     /** Calls a script function with Java arguments. */
     public synchronized Object call(Function fn, Object... args) {
         try (Context cx = enter()) {
+            Scriptable scope = ScriptableObject.getTopLevelScope(fn);
             Object[] jsArgs = new Object[args.length];
             for (int i = 0; i < args.length; i++) jsArgs[i] = Context.javaToJS(args[i], scope, cx);
             return toJava(fn.call(cx, scope, scope, jsArgs));
         }
+    }
+
+    /** One problem {@link #check} found. Lines and columns count from 1. */
+    public record Problem(int line, int column, String message, boolean warning) {}
+
+    /** Parses {@code source} without running it and returns its syntax errors and warnings. */
+    public static List<Problem> check(String sourceName, String source) {
+        List<Problem> out = new ArrayList<>();
+        ErrorReporter reporter = new ErrorReporter() {
+            @Override
+            public void warning(String message, String name, int line, String lineSource, int offset) {
+                out.add(new Problem(line, offset + 1, message, true));
+            }
+
+            @Override
+            public void error(String message, String name, int line, String lineSource, int offset) {
+                out.add(new Problem(line, offset + 1, message, false));
+            }
+
+            @Override
+            public EvaluatorException runtimeError(String message, String name, int line, String lineSource, int offset) {
+                return new EvaluatorException(message, name, line, lineSource, offset);
+            }
+        };
+        try (Context cx = enter()) {
+            CompilerEnvirons env = new CompilerEnvirons();
+            env.initFromContext(cx);
+            env.setRecoverFromErrors(true);
+            env.setIdeMode(true);
+            env.setReservedKeywordAsIdentifier(true);
+            new Parser(env, reporter).parse(source, sourceName, 1);
+        } catch (EvaluatorException e) {
+            if (out.isEmpty()) out.add(new Problem(e.lineNumber(), Math.max(1, e.columnNumber() + 1), e.details(), false));
+        } catch (RuntimeException e) {
+            out.add(new Problem(1, 1, String.valueOf(e.getMessage()), false));
+        }
+        return out;
     }
 
     /** Converts script values to plain Java: JS objects and arrays become Maps and Lists (Rhino implements both). */
@@ -69,13 +124,14 @@ public final class ScriptHost {
      */
     public static String selfTest() {
         ScriptHost host = new ScriptHost();
-        Object regexp = host.eval("selftest", "/s(c)ulk/.exec('sculk')[1]");
+        Scriptable scope = host.newScope();
+        Object regexp = host.eval(scope, "selftest", "/s(c)ulk/.exec('sculk')[1]");
         if (!"c".equals(regexp)) {
             throw new IllegalStateException("Rhino RegExp self-test returned " + regexp);
         }
         String message;
         try {
-            host.eval("selftest", "(");
+            host.eval(scope, "selftest", "(");
             throw new IllegalStateException("Rhino accepted invalid syntax");
         } catch (RhinoException e) {
             message = e.details();

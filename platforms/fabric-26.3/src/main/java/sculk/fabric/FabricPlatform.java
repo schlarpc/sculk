@@ -30,6 +30,16 @@ final class FabricPlatform implements Platform {
     private final Map<Class<?>, String> modByClass = new ConcurrentHashMap<>();
 
     @Override
+    public java.nio.file.Path configDir() {
+        return FabricLoader.getInstance().getConfigDir();
+    }
+
+    @Override
+    public boolean dedicatedServer() {
+        return FabricLoader.getInstance().getEnvironmentType() == net.fabricmc.api.EnvType.SERVER;
+    }
+
+    @Override
     public String loader() {
         return "fabric";
     }

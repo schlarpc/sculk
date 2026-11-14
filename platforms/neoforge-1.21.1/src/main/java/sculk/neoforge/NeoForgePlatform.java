@@ -29,6 +29,16 @@ final class NeoForgePlatform implements Platform {
     private volatile Map<String, String> modByModule;
 
     @Override
+    public java.nio.file.Path configDir() {
+        return net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get();
+    }
+
+    @Override
+    public boolean dedicatedServer() {
+        return FMLLoader.getDist().isDedicatedServer();
+    }
+
+    @Override
     public String loader() {
         return "neoforge";
     }

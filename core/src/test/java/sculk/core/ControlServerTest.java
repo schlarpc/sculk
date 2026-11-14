@@ -261,7 +261,7 @@ class ControlServerTest {
     void evalReportsErrors() throws IOException {
         JsonObject r = post("/eval", "(").json();
         assertFalse(r.get("ok").getAsBoolean());
-        assertTrue(r.get("error").getAsString().contains("repl"), r.toString());
+        assertTrue(r.get("error").getAsString().contains("console"), r.toString());
 
         r = post("/eval", "throw new Error('kaput')").json();
         assertFalse(r.get("ok").getAsBoolean());
@@ -289,7 +289,8 @@ class ControlServerTest {
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|a")));
         String heard = "kind == script && data.heard == " + marker;
         assertEquals(1, lines(get("/events?filter=" + enc(heard)).body()).size());
-        long runsBefore = post("/eval", "startupRuns").json().get("result").getAsLong();
+        String runs = "sculk.scope('" + FakeGame.STARTUP_SCRIPT.toString().replace("\\", "\\\\") + "').startupRuns";
+        long runsBefore = post("/eval", runs).json().get("result").getAsLong();
         assertTrue(runsBefore >= 1);
 
         JsonObject r = post("/reload", "").json();
@@ -297,7 +298,7 @@ class ControlServerTest {
         assertEquals(FakeGame.STARTUP_SCRIPT.toString(), r.getAsJsonArray("loaded").get(0).getAsString());
 
         assertEquals("undefined", post("/eval", "typeof leftover").json().get("result").getAsString());
-        assertEquals(1, post("/eval", "startupRuns").json().get("result").getAsLong(), "startup scripts ran in a fresh scope");
+        assertEquals(1, post("/eval", runs).json().get("result").getAsLong(), "startup scripts ran in a fresh scope");
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|b")));
         assertEquals(1, lines(get("/events?filter=" + enc(heard)).body()).size(), "the old listener is gone");
         assertEquals(1, lines(get("/events?filter=kind==script_reload&limit=1").body()).size());
@@ -404,7 +405,8 @@ class ControlServerTest {
         List<String> tools = new ArrayList<>();
         mcp("tools/list", "{}").getAsJsonObject("result").getAsJsonArray("tools")
                 .forEach(t -> tools.add(t.getAsJsonObject().get("name").getAsString()));
-        assertEquals(List.of("sculk_status", "sculk_events", "sculk_wait_events", "sculk_frame", "sculk_eval", "sculk_reload"), tools);
+        assertEquals(List.of("sculk_status", "sculk_events", "sculk_wait_events", "sculk_frame", "sculk_eval", "sculk_reload",
+                "sculk_scripts", "sculk_script_read", "sculk_script_write", "sculk_script_edit", "sculk_script_control"), tools);
     }
 
     @Test
@@ -484,6 +486,187 @@ class ControlServerTest {
     }
 
     // ---- helpers ----
+
+    // ---- installed scripts ----
+
+    private static JsonObject scriptInfo(String name) throws IOException {
+        for (var e : get("/scripts").json().getAsJsonArray("scripts")) {
+            if (e.getAsJsonObject().get("name").getAsString().equals(name)) return e.getAsJsonObject();
+        }
+        return null;
+    }
+
+    private static int heard(String marker) throws IOException {
+        return lines(get("/events?filter=" + enc("kind == script && data.heard == " + marker)).body()).size();
+    }
+
+    @Test
+    void installedScriptLifecycle() throws Exception {
+        String marker = "ctl-script-" + System.nanoTime();
+        String name = marker + ".js";
+        String source = """
+                // ==Sculk==
+                // @name        Listener
+                // @description hears %s
+                // ==/Sculk==
+                var mine = 41;
+                sculk.on('packet', e => { if (e.channel && e.channel.indexOf('%s') >= 0) sculk.emit({ heard: '%s' }); });
+                sculk.log('started ' + sculk.name);
+                mine + 1
+                """.formatted(marker, marker, marker);
+
+        JsonObject saved = post("/scripts/save?name=" + enc(name) + "&base=", source).json();
+        assertTrue(saved.get("created").getAsBoolean(), saved.toString());
+        assertEquals("Listener", saved.get("title").getAsString());
+        assertEquals("startup", saved.get("run").getAsString());
+        assertEquals("stopped", saved.get("state").getAsString());
+        assertTrue(Files.isRegularFile(FakeGame.SCRIPT_DIR.resolve(name)));
+        assertEquals(409, post("/scripts/save?name=" + enc(name) + "&base=", source).status(), "base '' means new");
+
+        JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
+        assertTrue(run.get("ok").getAsBoolean(), run.toString());
+        assertEquals(42, run.get("result").getAsInt());
+        assertEquals("active", run.get("state").getAsString());
+        assertEquals(1, run.get("listeners").getAsInt());
+        assertEquals(1, lines(get("/events?filter=" + enc("kind == script_log && script == " + name)).body()).size());
+
+        // Its globals are its own; the console reaches them only through sculk.scope.
+        assertEquals("undefined", post("/eval", "typeof mine").json().get("result").getAsString());
+        assertEquals(41, post("/eval", "sculk.scope('" + name + "').mine").json().get("result").getAsInt());
+
+        EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
+        ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|a")));
+        assertEquals(1, heard(marker));
+
+        // Saving a running script restarts it, from the hash it was edited from.
+        String hash = saved.get("hash").getAsString();
+        assertEquals(409, post("/scripts/save?name=" + enc(name) + "&base=nothash", source).status());
+        JsonObject resaved = post("/scripts/save?name=" + enc(name) + "&base=" + hash, source + "\n").json();
+        assertTrue(resaved.getAsJsonObject("restart").get("ok").getAsBoolean(), resaved.toString());
+        ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|b")));
+        assertEquals(2, heard(marker), "one listener after the restart, not two");
+
+        // Disabling stops it and renames the file.
+        JsonObject off = post("/scripts/enable?name=" + enc(name) + "&enabled=false", "").json();
+        assertFalse(off.get("enabled").getAsBoolean());
+        assertEquals("stopped", off.get("state").getAsString());
+        assertTrue(Files.isRegularFile(FakeGame.SCRIPT_DIR.resolve(name + ".disabled")));
+        ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|c")));
+        assertEquals(2, heard(marker));
+        assertFalse(post("/reload", "").json().getAsJsonArray("loaded").toString().contains(name), "reload skips it");
+
+        // Enabling a startup script starts it.
+        JsonObject on = post("/scripts/enable?name=" + enc(name) + "&enabled=true", "").json();
+        assertTrue(on.get("enabled").getAsBoolean());
+        assertEquals("active", on.get("state").getAsString());
+
+        // Renaming keeps it running under the new name.
+        String renamed = marker + "-b.js";
+        JsonObject moved = post("/scripts/rename?name=" + enc(name) + "&to=" + enc(renamed), "").json();
+        assertEquals(renamed, moved.get("name").getAsString());
+        assertEquals("active", moved.get("state").getAsString());
+        assertEquals(404, get("/scripts/source?name=" + enc(name)).status());
+        assertEquals(source + "\n", get("/scripts/source?name=" + enc(renamed)).json().get("source").getAsString());
+
+        assertTrue(post("/scripts/stop?name=" + enc(renamed), "").json().get("ok").getAsBoolean());
+        assertEquals(409, post("/scripts/stop?name=" + enc(renamed), "").status());
+        assertTrue(post("/scripts/delete?name=" + enc(renamed), "").json().get("ok").getAsBoolean());
+        assertEquals(null, scriptInfo(renamed));
+        assertFalse(Files.exists(FakeGame.SCRIPT_DIR.resolve(renamed)));
+        assertEquals(6, lines(get("/events?filter=" + enc("kind == script_file && script matches \"^" + marker + "\"")).body()).size(),
+                "create, save, disable, enable, rename, delete");
+    }
+
+    @Test
+    void manualScriptsRunOnlyWhenAsked() throws Exception {
+        String name = "ctl-manual-" + System.nanoTime() + ".js";
+        String source = "// ==Sculk==\n// @run manual\n// ==/Sculk==\nsculk.connections().length + 100\n";
+        assertEquals(200, post("/scripts/save?name=" + enc(name), source).status());
+        JsonObject reload = post("/reload", "").json();
+        assertFalse(reload.getAsJsonArray("loaded").toString().contains(name));
+        assertEquals("stopped", scriptInfo(name).get("state").getAsString());
+        JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
+        assertTrue(run.get("ok").getAsBoolean());
+        assertTrue(run.get("result").getAsInt() >= 100);
+        assertEquals("idle", run.get("state").getAsString(), "a one-shot leaves nothing registered");
+        post("/scripts/delete?name=" + enc(name), "");
+    }
+
+    @Test
+    void scriptsForTheOtherDistAreSkipped() throws Exception {
+        String name = "ctl-dist-" + System.nanoTime() + ".js";
+        assertEquals(200, post("/scripts/save?name=" + enc(name), "// ==Sculk==\n// @dist server\n// ==/Sculk==\n1\n").status());
+        assertEquals("only for a dedicated server", scriptInfo(name).get("skip").getAsString());
+        JsonObject reload = post("/reload", "").json();
+        assertTrue(reload.getAsJsonArray("skipped").toString().contains(name), reload.toString());
+        post("/scripts/delete?name=" + enc(name), "");
+    }
+
+    @Test
+    void failingScriptsAreStoppedAndReported() throws Exception {
+        String name = "ctl-fail-" + System.nanoTime() + ".js";
+        post("/scripts/save?name=" + enc(name), "sculk.on('packet', e => {});\nthrow new Error('nope');\n");
+        JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
+        assertFalse(run.get("ok").getAsBoolean());
+        assertTrue(run.get("error").getAsString().contains("nope"), run.toString());
+        assertTrue(run.get("error").getAsString().contains(name + ":2"), run.toString());
+        assertEquals("stopped", run.get("state").getAsString(), "no half-started listeners");
+        assertFalse(run.getAsJsonObject("lastRun").get("ok").getAsBoolean());
+        assertEquals(1, lines(get("/events?filter=" + enc("kind == script_error && script == " + name)).body()).size());
+        post("/scripts/delete?name=" + enc(name), "");
+    }
+
+    @Test
+    void scriptNamesAndMissingScripts() throws IOException {
+        assertEquals(400, post("/scripts/save?name=" + enc("../evil.js"), "1").status());
+        assertEquals(400, post("/scripts/save?name=" + enc("no-extension"), "1").status());
+        assertEquals(400, post("/scripts/save?name=" + enc(".hidden.js"), "1").status());
+        assertEquals(400, post("/scripts/save", "1").status());
+        assertEquals(404, get("/scripts/source?name=nope.js").status());
+        assertEquals(404, post("/scripts/run?name=nope.js", "").status());
+        // sculk.scripts files are listed but managed elsewhere.
+        String startup = FakeGame.STARTUP_SCRIPT.toString();
+        assertEquals("property", scriptInfo(startup).get("origin").getAsString());
+        assertEquals(400, post("/scripts/delete?name=" + enc(startup), "").status());
+    }
+
+    @Test
+    void checkFindsSyntaxErrors() throws IOException {
+        JsonObject bad = post("/scripts/check", "let a = 1;\nlet b = ;\n").json();
+        assertFalse(bad.get("ok").getAsBoolean());
+        assertEquals(2, bad.getAsJsonArray("problems").get(0).getAsJsonObject().get("line").getAsInt());
+        assertTrue(post("/scripts/check", "sculk.on('packet', e => e.drop());").json().get("ok").getAsBoolean());
+    }
+
+    @Test
+    void mcpManagesScripts() throws IOException {
+        String name = "mcp-" + System.nanoTime() + ".js";
+        JsonObject w = callTool("sculk_script_write", GSON.toJson(java.util.Map.of(
+                "name", name, "source", "var n = 1;\nsculk.on('connection', c => {});\nn\n", "run", true)));
+        assertFalse(w.get("isError").getAsBoolean(), toolText(w));
+        assertTrue(toolText(w).contains("\"state\":\"active\""), toolText(w));
+
+        JsonObject read = callTool("sculk_script_read", "{\"name\":\"" + name + "\"}");
+        assertTrue(toolText(read).contains("1\tvar n = 1;"), toolText(read));
+
+        JsonObject edit = callTool("sculk_script_edit", GSON.toJson(java.util.Map.of("name", name, "old", "n = 1", "new", "n = 2")));
+        assertFalse(edit.get("isError").getAsBoolean(), toolText(edit));
+        assertEquals(2, post("/eval", "sculk.scope('" + name + "').n").json().get("result").getAsInt(), "restarted with the edit");
+        assertTrue(callTool("sculk_script_edit", GSON.toJson(java.util.Map.of("name", name, "old", "absent", "new", "x")))
+                .get("isError").getAsBoolean());
+        assertTrue(callTool("sculk_script_edit", GSON.toJson(java.util.Map.of("name", name, "old", "n", "new", "m")))
+                .get("isError").getAsBoolean(), "ambiguous");
+
+        JsonObject broken = callTool("sculk_script_edit", GSON.toJson(java.util.Map.of("name", name, "old", "n = 2;", "new", "n = ;")));
+        assertTrue(broken.get("isError").getAsBoolean(), "syntax errors are errors");
+        assertTrue(toolText(broken).contains("problems"), toolText(broken));
+
+        assertTrue(toolText(callTool("sculk_scripts", "{}")).contains(name));
+        JsonObject off = callTool("sculk_script_control", "{\"name\":\"" + name + "\",\"action\":\"disable\"}");
+        assertTrue(toolText(off).contains("\"enabled\":false"), toolText(off));
+        assertFalse(callTool("sculk_script_control", "{\"name\":\"" + name + "\",\"action\":\"delete\"}").get("isError").getAsBoolean());
+        assertTrue(callTool("sculk_script_read", "{\"name\":\"" + name + "\"}").get("isError").getAsBoolean());
+    }
 
     private static List<JsonObject> lines(String body) {
         List<JsonObject> out = new ArrayList<>();

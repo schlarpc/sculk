@@ -1,5 +1,6 @@
 package sculk.core.platform;
 
+import java.nio.file.Path;
 import java.util.Set;
 
 /**
@@ -22,6 +23,16 @@ public interface Platform {
 
     default String describe() {
         return loader() + " " + minecraftVersion();
+    }
+
+    /** The game's config directory; sculk keeps its scripts under {@code sculk/scripts} in it. */
+    default Path configDir() {
+        return Path.of("config");
+    }
+
+    /** True in a dedicated server; false in a game client, including its integrated server. */
+    default boolean dedicatedServer() {
+        return false;
     }
 
     /** Describes a packet object seen at (or destined for) {@code codec}. */

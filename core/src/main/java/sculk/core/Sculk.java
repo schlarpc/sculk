@@ -2,7 +2,6 @@ package sculk.core;
 
 import java.io.IOException;
 import java.io.File;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,7 +33,7 @@ import sculk.core.platform.PacketInfo;
 import sculk.core.platform.PayloadCodec;
 import sculk.core.platform.Platform;
 import sculk.core.platform.Side;
-import sculk.core.script.ScriptApi;
+import sculk.core.script.ScriptManager;
 import sculk.core.script.ScriptHost;
 import sculk.core.util.Bytes;
 
@@ -48,8 +47,10 @@ import sculk.core.util.Bytes;
  * <p>System properties:
  * <ul>
  *   <li>{@code sculk.eventLog}: path of a JSON Lines event log to write;</li>
- *   <li>{@code sculk.scripts}: script files to load at startup, separated by
- *       the platform path separator.</li>
+ *   <li>{@code sculk.scriptDir}: the directory of installed scripts (default
+ *       {@code <config>/sculk/scripts}). See {@link ScriptManager};</li>
+ *   <li>{@code sculk.scripts}: more script files to load at startup,
+ *       separated by the platform path separator, before the installed ones;</li>
  *   <li>{@code sculk.control}: port for the loopback control server (0 picks
  *       a free port); off when unset. See {@link ControlServer};</li>
  *   <li>{@code sculk.controlFile}: where the control server writes its port
@@ -83,8 +84,7 @@ public final class Sculk {
     /** Guards event ids so that ids, the log file and the store share one order. */
     private final Object logLock = new Object();
     private long lastEventId;
-    private final List<String> scriptPaths = new ArrayList<>();
-    private ScriptApi scripts;
+    private ScriptManager scripts;
     private ControlServer control;
 
     private Sculk(Platform platform, EventLog eventLog, EventStore eventStore) {
@@ -120,13 +120,19 @@ public final class Sculk {
         LOG.info("sculk core initialised on {}", platform.describe());
         LOG.info("scripting: {}", ScriptHost.selfTest());
         sculk.log(entry("start", Map.of("platform", platform.describe())));
+        List<Path> extra = new ArrayList<>();
         String paths = System.getProperty("sculk.scripts");
         if (paths != null) {
             for (String p : paths.split(File.pathSeparator)) {
-                if (!p.isBlank()) sculk.scriptPaths.add(p.trim());
+                if (!p.isBlank()) extra.add(Path.of(p.trim()));
             }
         }
-        sculk.loadStartupScripts();
+        String dir = System.getProperty("sculk.scriptDir");
+        Path scriptDir = dir != null && !dir.isBlank() ? Path.of(dir.trim()) : platform.configDir().resolve("sculk").resolve("scripts");
+        sculk.scripts = new ScriptManager(sculk, scriptDir, extra);
+        LOG.info("scripts in {}", sculk.scripts.dir());
+        Map<String, Object> started = sculk.scripts.startAll();
+        LOG.info("started scripts: {}", started.get("loaded"));
         if (controlOn) {
             try {
                 Path file = Path.of(System.getProperty("sculk.controlFile", "sculk-control.json"));
@@ -354,53 +360,18 @@ public final class Sculk {
 
     // ---- scripting ----
 
-    public synchronized ScriptApi scripts() {
-        if (scripts == null) scripts = new ScriptApi(this);
+    public ScriptManager scripts() {
         return scripts;
     }
 
-    /** The startup scripts ({@code sculk.scripts}), in load order. */
-    public List<String> scriptPaths() {
-        return List.copyOf(scriptPaths);
-    }
-
     /**
-     * Drops all script state (globals, listeners, pending timers) and loads
-     * the startup scripts again from disk. Returns
-     * {@code {"ok":bool,"loaded":[...],"errors":[{"script":...,"error":...}]}}.
+     * Drops all script state (globals, listeners, pending timers) and starts
+     * the enabled startup scripts again from disk. Returns
+     * {@code {"ok":bool,"loaded":[...],"skipped":[...],"errors":[{"script":...,"error":...}]}}.
      */
     public Map<String, Object> reloadScripts() {
-        ScriptApi old;
-        synchronized (this) {
-            old = scripts;
-            scripts = null;
-        }
-        if (old != null) old.close();
-        Map<String, Object> result = loadStartupScripts();
+        Map<String, Object> result = scripts.reloadAll();
         log(entry("script_reload", result));
-        return result;
-    }
-
-    private Map<String, Object> loadStartupScripts() {
-        List<String> loaded = new ArrayList<>();
-        List<Map<String, Object>> errors = new ArrayList<>();
-        ScriptApi api = scripts();
-        for (String p : scriptPaths) {
-            Path path = Path.of(p);
-            try {
-                api.load(path.toString(), Files.readString(path));
-                LOG.info("loaded script {}", path);
-                loaded.add(path.toString());
-            } catch (IOException | RuntimeException e) {
-                LOG.error("failed to load script {}", path, e);
-                log(entry("script_error", Map.of("script", path.toString(), "error", e.toString())));
-                errors.add(Map.of("script", path.toString(), "error", e.toString()));
-            }
-        }
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("ok", errors.isEmpty());
-        result.put("loaded", loaded);
-        result.put("errors", errors);
         return result;
     }
 }
