@@ -656,9 +656,10 @@ button.link:hover { color: var(--glow-hot); background: none; }
 .sl-item.selected { background: rgba(20, 166, 178, 0.24); border-color: var(--glow-low); }
 .sl-item:focus-visible { outline: 2px solid var(--glow); outline-offset: -2px; }
 .sl-dot { flex: none; width: 8px; height: 8px; background: var(--sculk-500); box-shadow: 1px 1px 0 #000; }
-.st-active .sl-dot { background: var(--glow); box-shadow: 0 0 6px rgba(43, 228, 239, 0.9); }
+.st-running .sl-dot { background: var(--glow); box-shadow: 0 0 6px rgba(43, 228, 239, 0.9); }
 .st-idle .sl-dot { background: var(--glow-low); }
-.sl-item.failed .sl-dot { background: var(--red); box-shadow: 0 0 6px rgba(255, 85, 85, 0.7); }
+.st-stale .sl-dot { background: var(--gold); box-shadow: 0 0 6px rgba(255, 170, 0, 0.7); }
+.st-failed .sl-dot { background: var(--red); box-shadow: 0 0 6px rgba(255, 85, 85, 0.7); }
 .sl-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sl-name, .sl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sl-name { color: var(--text); }
@@ -699,7 +700,9 @@ button.link:hover { color: var(--glow-hot); background: none; }
 .se-info { display: flex; flex-wrap: wrap; gap: 2px 8px; min-height: 1.45em; font-size: 12px; color: var(--text-dim); }
 .se-info > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .si-sep { color: var(--text-faint); }
-.si-state.st-active { color: var(--glow); }
+.si-state.st-running { color: var(--glow); }
+.si-state.st-stale { color: var(--gold); }
+.si-state.st-failed { color: var(--red); }
 .si-off, .si-warn { color: var(--gold); }
 .si-err { color: var(--red); max-width: 100%; }
 .si-desc { color: var(--bone-dim); }

@@ -391,8 +391,8 @@ class MockScripts:
         self.store = store
         self.lock = threading.Lock()
         self.files = {name: {"source": src, "enabled": on} for name, (on, src) in SEED_SCRIPTS.items()}
-        self.running = {}
-        self.last = {}
+        # name -> status, as ScriptManager reports it: running, failed or stopped.
+        self.status = {}
 
     @staticmethod
     def meta(source):
@@ -435,17 +435,13 @@ class MockScripts:
     def info(self, name):
         f = self.files[name]
         meta = self.meta(f["source"])
-        r = self.running.get(name)
         out = {"name": name, "origin": "dir", "path": f"{SCRIPT_DIR}/{name}{'' if f['enabled'] else '.disabled'}",
                "enabled": f["enabled"], "run": "manual" if meta.get("run", "").strip() == "manual" else "startup",
                "title": meta.get("name", ""), "description": meta.get("description", ""), "meta": meta,
                "hash": self.hash(f["source"]), "size": len(f["source"]), "modified": int(time.time() * 1000),
-               "state": "stopped" if r is None else ("active" if r["listeners"] + r["timers"] else "idle"),
-               "listeners": r["listeners"] if r else 0, "timers": r["timers"] if r else 0}
+               "status": self.status.get(name, {"state": "stopped", "why": "not-started"})}
         if meta.get("dist", "").strip() == "server":
             out["skip"] = "only for a dedicated server"
-        if name in self.last:
-            out["lastRun"] = self.last[name]
         return out
 
     def list(self):
@@ -481,32 +477,51 @@ class MockScripts:
         return {"ok": not any(x["severity"] == "error" for x in p), "problems": p}
 
     def audit(self, name, action, to=None):
-        self.store.add("script_file", {"script": name, "action": action, **({"to": to} if to else {})})
+        self.store.add("script_file", {"script": name, "action": action, "by": "api", **({"to": to} if to else {})})
 
-    def start(self, name):
-        self.stop_quietly(name)
+    def state(self, name):
+        return self.status.get(name, {"state": "stopped", "why": "not-started"})["state"]
+
+    def startup(self, name):
+        i = self.info(name)
+        return i["enabled"] and i["run"] == "startup" and "skip" not in i
+
+    def start(self, name, cause="user"):
+        """Lifecycle.java's Start, or its refusal of a source that does not compile."""
         src = self.files[name]["source"]
-        p = self.problems(src)
-        if any(x["severity"] == "error" for x in p) or "throw " in src:
-            err = (f"SyntaxError: {p[0]['message']} ({name}#{p[0]['line']})" if p
-                   else f"Error: {src.split('throw ', 1)[1].splitlines()[0]} ({name}:1)")
-            self.store.add("script_error", {"script": name, "callback": "start", "error": err})
-            self.last[name] = {"t": int(time.time() * 1000), "ok": False, "error": err}
+        h, now = self.hash(src), int(time.time() * 1000)
+        p = [x for x in self.problems(src) if x["severity"] == "error"]
+        if p:
+            err = f"{p[0]['message']} ({name}:{p[0]['line']})"
+            cur = self.status.get(name, {})
+            if cur.get("state") == "running":
+                cur["rejected"] = {"hash": h, "error": err}
+                self.store.add("script_error", {"script": name, "callback": "compile", "cause": cause, "error": err, "kept": True})
+                return {"ok": False, "error": err, "kept": "the previous version is still running"}
+            self.status[name] = {"state": "failed", "hash": h, "error": err, "at": now}
+            self.store.add("script_error", {"script": name, "callback": "compile", "cause": cause, "error": err})
             return {"ok": False, "error": err}
-        self.running[name] = {"listeners": src.count("sculk.on("), "timers": 0}
-        self.store.add("script_run", {"script": name})
+        self.stop_quietly(name, cause)
+        if "throw " in src:
+            err = f"Error: {src.split('throw ', 1)[1].splitlines()[0]} ({name}:1)"
+            self.status[name] = {"state": "failed", "hash": h, "error": err, "at": now}
+            self.store.add("script_error", {"script": name, "callback": "start", "cause": cause, "error": err})
+            return {"ok": False, "error": err}
+        self.status[name] = {"state": "running", "hash": h, "since": now, "listeners": src.count("sculk.on("), "timers": 0}
+        self.store.add("script_run", {"script": name, "cause": cause})
         for m in re.finditer(r"^sculk\.log\('([^']*)'\)", src, re.M):
             self.store.add("script_log", {"script": name, "message": m.group(1)})
-        self.last[name] = {"t": int(time.time() * 1000), "ok": True}
         last = [l.strip().rstrip(";") for l in src.splitlines() if l.strip() and not l.strip().startswith("//")]
         result = None
         if last and re.fullmatch(r"\d+", last[-1]):
             result = int(last[-1])
         return {"ok": True, "result": result}
 
-    def stop_quietly(self, name):
-        if self.running.pop(name, None) is not None:
-            self.store.add("script_stop", {"script": name})
+    def stop_quietly(self, name, cause, why=None):
+        if self.state(name) == "running":
+            self.store.add("script_stop", {"script": name, "cause": cause})
+        if why:
+            self.status[name] = {"state": "stopped", "why": why}
 
     def save(self, name, source, base):
         with self.lock:
@@ -525,8 +540,12 @@ class MockScripts:
                 self.files[name] = {"source": source, "enabled": True}
             self.audit(name, "create" if created else "save")
             out = {"created": created}
-            if name in self.running:
-                out["restart"] = self.start(name)
+            st = self.status.get(name, {})
+            # Lifecycle.fileChanged: a wanted script follows its file; a new startup script starts.
+            if st.get("state") in ("running", "failed") and st.get("hash") != self.hash(source):
+                out["restart"] = self.start(name, "file")
+            elif created and self.startup(name):
+                out["restart"] = self.start(name, "file")
             return {**out, **self.info(name)}
 
     def run(self, name):
@@ -537,17 +556,17 @@ class MockScripts:
 
     def stop(self, name):
         with self.lock:
-            if name not in self.running:
+            if self.state(name) == "stopped":
                 raise self.error(409, f"{name} is not running")
-            self.stop_quietly(name)
-            return {"ok": True, "name": name, "state": "stopped"}
+            self.stop_quietly(name, "user", "user")
+            return {"ok": True, "name": name, "status": self.status[name]}
 
     def delete(self, name):
         with self.lock:
             self.get(name)
-            self.stop_quietly(name)
+            self.stop_quietly(name, "file")
             del self.files[name]
-            self.last.pop(name, None)
+            self.status.pop(name, None)
             self.audit(name, "delete")
             return {"ok": True, "name": name}
 
@@ -557,47 +576,58 @@ class MockScripts:
             self.check_name(to)
             if to in self.files and to.lower() != name.lower():
                 raise self.error(409, f"{to} already exists")
-            was = name in self.running
-            self.stop_quietly(name)
+            wanted = self.state(name) != "stopped"
+            old = self.status.pop(name, None)
+            if old and old["state"] == "running":
+                self.store.add("script_stop", {"script": name, "cause": "file"})
             self.files[to] = self.files.pop(name)
-            if name in self.last:
-                self.last[to] = self.last.pop(name)
             self.audit(name, "rename", to)
-            out = {"restart": self.start(to)} if was else {}
-            return {**out, **self.info(to)}
+            if not wanted:
+                if old:
+                    self.status[to] = old
+                return self.info(to)
+            return {"restart": self.start(to, "file"), **self.info(to)}
 
     def enable(self, name, enabled):
         with self.lock:
             f = self.get(name)
+            out = {}
             if f["enabled"] != enabled:
                 f["enabled"] = enabled
                 self.audit(name, "enable" if enabled else "disable")
-            out = {}
-            if not enabled:
-                self.stop_quietly(name)
-            elif name not in self.running and self.info(name)["run"] == "startup" and "skip" not in self.info(name):
-                out["restart"] = self.start(name)
+                if not enabled:
+                    self.stop_quietly(name, "file", "disabled")
+                elif self.state(name) == "stopped":
+                    if self.startup(name):
+                        out["restart"] = self.start(name, "file")
+                    else:
+                        self.status[name] = {"state": "stopped", "why": "not-started"}
             return {**out, **self.info(name)}
 
     def reload(self):
         with self.lock:
-            for n in list(self.running):
-                self.stop_quietly(n)
+            for n in list(self.status):
+                self.stop_quietly(n, "launch")
+            self.status = {}
             loaded, errors, skipped = [], [], []
             for n in sorted(self.files, key=str.lower):
                 i = self.info(n)
-                if not i["enabled"] or i["run"] == "manual":
+                if not i["enabled"]:
+                    self.status[n] = {"state": "stopped", "why": "disabled"}
                     continue
                 if "skip" in i:
+                    self.status[n] = {"state": "stopped", "why": "wrong-dist"}
                     skipped.append({"script": n, "reason": i["skip"]})
                     continue
-                r = self.start(n)
+                if i["run"] == "manual":
+                    continue
+                r = self.start(n, "launch")
                 (loaded.append(n) if r["ok"] else errors.append({"script": n, "error": r["error"]}))
             return {"ok": not errors, "loaded": loaded, "skipped": skipped, "errors": errors}
 
     def running_names(self):
         with self.lock:
-            return list(self.running)
+            return [n for n, st in self.status.items() if st["state"] == "running"]
 
 
 def varint(n):

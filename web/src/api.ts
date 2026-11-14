@@ -61,6 +61,8 @@ export interface EvalResult {
   ok: boolean;
   result?: unknown;
   error?: string;
+  /** Set when a script's new source was refused and its previous version kept running. */
+  kept?: string;
 }
 
 export interface ReloadResult {
@@ -86,11 +88,19 @@ export interface ScriptInfo {
   hash?: string;
   size?: number;
   modified?: number;
-  state: "active" | "idle" | "stopped";
-  listeners: number;
-  timers: number;
-  lastRun?: { t: number; ok: boolean; error?: string };
+  status: ScriptStatus;
 }
+
+/**
+ * A script's state on the game side. Running: from the source with `hash`
+ * (`rejected` is a newer file that did not compile, so this older version kept
+ * running). Failed: still wanted, and retried when the file changes. Stopped:
+ * not wanted, with why.
+ */
+export type ScriptStatus =
+  | { state: "running"; hash: string; since: number; listeners: number; timers: number; rejected?: { hash: string; error: string } }
+  | { state: "failed"; hash: string; error: string; at: number }
+  | { state: "stopped"; why: "not-started" | "user" | "disabled" | "deleted" | "wrong-dist" };
 
 export interface ScriptList {
   dir: string;
@@ -102,7 +112,7 @@ export interface ScriptSource extends ScriptInfo {
   source: string;
 }
 
-/** A script's info after a change, with the restart's outcome when it was running. */
+/** A script's info after a change, with the outcome when it started the script or refused the change. */
 export interface ScriptChange extends ScriptInfo {
   created?: boolean;
   restart?: EvalResult;

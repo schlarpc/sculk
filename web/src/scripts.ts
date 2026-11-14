@@ -5,6 +5,8 @@ import { Api, ApiError, type EvalResult, type ScriptInfo, type ScriptList, type 
 import { byId, el, store } from "./dom";
 import { newState, newView, type EditorHooks, type EditorState, type EditorView } from "./editor";
 import { showMenu, type MenuItem } from "./menu";
+import * as buf from "./script-state";
+import { statusView, stoppable } from "./script-state";
 
 export interface Env {
   /** Runs an API call with the current token; undefined when the token was refused (a new one is being asked for). */
@@ -33,14 +35,8 @@ sculk.on('packet', e => {
 });
 `;
 
-/** One open script: its editor state, the source as last loaded or saved, and the hash that source had. */
-interface Buffer {
-  state: EditorState;
-  saved: string;
-  base: string;
-  /** Set when the file changed on disk while this buffer had unsaved edits. */
-  conflict?: string;
-}
+/** One open script; see script-state.ts for its states. */
+type Buffer = buf.Buffer<EditorState>;
 
 const filterString = (s: string) => JSON.stringify(s);
 
@@ -152,12 +148,12 @@ export class ScriptsPage {
   }
 
   private dirtyNames(): string[] {
-    return [...this.buffers].filter(([, b]) => b.state.doc.toString() !== b.saved).map(([n]) => n);
+    return [...this.buffers].filter(([, b]) => buf.isDirty(b)).map(([n]) => n);
   }
 
   private dirty(name: string): boolean {
     const b = this.buffers.get(name);
-    return !!b && b.state.doc.toString() !== b.saved;
+    return !!b && buf.isDirty(b);
   }
 
   async refresh(): Promise<void> {
@@ -178,12 +174,10 @@ export class ScriptsPage {
     // Files changed on disk under an open buffer.
     for (const s of list.scripts) {
       const b = this.buffers.get(s.name);
-      if (!b || !s.hash || s.hash === b.base) continue;
-      if (this.dirty(s.name)) {
-        b.conflict = s.hash;
-      } else {
-        await this.loadFromDisk(s.name, "reloaded: it changed on disk");
-      }
+      if (!b || !s.hash) continue;
+      const { buffer, reload } = buf.onDisk(b, s.hash);
+      this.buffers.set(s.name, buffer);
+      if (reload) await this.loadFromDisk(s.name, "reloaded: it changed on disk");
     }
     if (this.selected && !this.info(this.selected) && !this.buffers.has(this.selected)) this.showEmpty();
     this.renderList();
@@ -203,17 +197,17 @@ export class ScriptsPage {
   }
 
   private item(s: ScriptInfo): HTMLLIElement {
-    const li = el("li", `sl-item st-${s.state}`);
+    const status = statusView(s);
+    const li = el("li", `sl-item st-${status.cls}`);
     li.dataset.name = s.name;
     li.tabIndex = 0;
     li.setAttribute("role", "option");
     li.setAttribute("aria-selected", String(s.name === this.selected));
     if (s.name === this.selected) li.classList.add("selected");
     if (!s.enabled) li.classList.add("off");
-    if (s.lastRun && !s.lastRun.ok) li.classList.add("failed");
 
     const dot = el("span", "sl-dot");
-    dot.title = stateText(s);
+    dot.title = status.detail ? `${status.text}\n${status.detail}` : status.text;
     const main = el("span", "sl-main");
     const nameLine = el("span", "sl-name", s.origin === "property" ? s.name.split(/[\\/]/).pop() ?? s.name : s.name);
     if (this.dirty(s.name)) nameLine.append(el("span", "sl-dirty", " ●"));
@@ -242,11 +236,11 @@ export class ScriptsPage {
 
   private menuItems(s: ScriptInfo): MenuItem[] {
     const file = s.origin === "dir";
-    const running = s.state !== "stopped";
+    const running = s.status.state === "running";
     return [
       { heading: s.name },
       { label: running ? "Restart" : "Run", hint: "Ctrl+Enter", disabled: s.origin === "memory", run: () => void this.run(s.name) },
-      { label: "Stop", disabled: !running, run: () => void this.stop(s.name) },
+      { label: "Stop", disabled: !stoppable(s), run: () => void this.stop(s.name) },
       "separator",
       { label: s.enabled ? "Disable" : "Enable", disabled: !file, run: () => void this.setEnabled(s, !s.enabled) },
       { label: "Rename…", disabled: !file, run: () => void this.rename(s) },
@@ -304,7 +298,7 @@ export class ScriptsPage {
   private async loadFromDisk(name: string, note?: string): Promise<boolean> {
     const info = this.info(name);
     if (info?.origin === "memory") {
-      this.buffers.set(name, { state: newState("// This script is running, but not from a file: there is no source to show.\n", this.hooks, true), saved: "", base: "" });
+      this.buffers.set(name, buf.loaded(newState("// This script is running, but not from a file: there is no source to show.\n", this.hooks, true), "", ""));
       return true;
     }
     let src;
@@ -315,7 +309,7 @@ export class ScriptsPage {
       return false;
     }
     if (!src) return false;
-    const b: Buffer = { state: newState(src.source, this.hooks), saved: src.source, base: src.hash ?? "" };
+    const b = buf.loaded(newState(src.source, this.hooks), src.source, src.hash ?? "");
     this.buffers.set(name, b);
     if (this.selected === name && this.view) {
       // Keep the cursor where it was, as far as the new text allows.
@@ -330,10 +324,11 @@ export class ScriptsPage {
 
   private changed(state: EditorState): void {
     if (!this.selected) return;
-    const b = this.buffers.get(this.selected);
-    if (!b) return;
-    b.state = state;
-    const dirty = state.doc.toString() !== b.saved;
+    const before = this.buffers.get(this.selected);
+    if (!before) return;
+    const b = buf.edited(before, state, state.doc.toString());
+    this.buffers.set(this.selected, b);
+    const dirty = buf.isDirty(b);
     const item = this.listEl.querySelector<HTMLElement>(`li[data-name="${CSS.escape(this.selected)}"] .sl-name`);
     if (item && !!item.querySelector(".sl-dirty") !== dirty) this.renderList();
     this.renderHeader();
@@ -348,22 +343,23 @@ export class ScriptsPage {
     this.nameEl.classList.toggle("dirty", !!name && this.dirty(name));
     this.saveButton.disabled = !editable || !this.dirty(name as string);
     this.runButton.disabled = !editable;
-    this.runButton.textContent = info && info.state !== "stopped" ? "Restart" : "Run";
-    this.stopButton.disabled = !info || info.state === "stopped";
+    this.runButton.textContent = info?.status.state === "running" ? "Restart" : "Run";
+    this.stopButton.disabled = !info || !stoppable(info);
     this.moreButton.disabled = !info;
 
     const parts: HTMLElement[] = [];
     if (info) {
-      parts.push(el("span", `si-state st-${info.state}`, stateText(info)));
+      const status = statusView(info);
+      parts.push(el("span", `si-state st-${status.cls}`, status.text));
       parts.push(el("span", "si-sep", "·"));
       parts.push(el("span", info.enabled ? "" : "si-off", info.enabled ? (info.run === "manual" ? "manual" : "runs at startup") : "disabled"));
       if (info.skip) parts.push(el("span", "si-sep", "·"), el("span", "si-warn", info.skip));
-      if (info.lastRun && !info.lastRun.ok) parts.push(el("span", "si-sep", "·"), Object.assign(el("span", "si-err", `last run failed: ${info.lastRun.error ?? ""}`), { title: info.lastRun.error ?? "" }));
+      if (status.detail) parts.push(el("span", "si-sep", "·"), Object.assign(el("span", "si-err", status.detail), { title: status.detail }));
       else if (info.description) parts.push(el("span", "si-sep", "·"), el("span", "si-desc", info.description));
     }
     this.infoEl.replaceChildren(...parts);
 
-    if (b?.conflict) {
+    if (b?.kind === "conflict") {
       this.banner.hidden = false;
       const reload = el("button", undefined, "Load theirs");
       reload.type = "button";
@@ -372,8 +368,8 @@ export class ScriptsPage {
       keep.type = "button";
       keep.title = "Saving will then overwrite the file";
       keep.onclick = () => {
-        if (b.conflict) b.base = b.conflict;
-        b.conflict = undefined;
+        const now = this.buffers.get(name as string);
+        if (now) this.buffers.set(name as string, buf.keepMine(now));
         this.renderHeader();
       };
       this.banner.replaceChildren(el("span", undefined, "This script changed on disk while you were editing it."), reload, keep);
@@ -407,34 +403,45 @@ export class ScriptsPage {
     const b = name ? this.buffers.get(name) : undefined;
     if (!name || !b || !this.view) return false;
     const source = this.view.state.doc.toString();
-    if (source === b.saved) return { restarted: false };
-    if (b.conflict) {
+    if (b.kind === "conflict") {
       this.env.toast("it changed on disk: choose Load theirs or Keep mine first");
       return false;
     }
+    const saving = buf.startSave(b, source);
+    if (!saving) return { restarted: false };
+    this.buffers.set(name, saving);
+    const settle = (next: (b: Buffer) => Buffer) => {
+      const now = this.buffers.get(name);
+      if (now) this.buffers.set(name, next(now));
+    };
     let r;
     try {
       this.busy = true;
-      r = await this.env.guard((api) => api.saveScript(name, source, b.base));
+      r = await this.env.guard((api) => api.saveScript(name, source, saving.base));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         await this.refresh();
         // The hash on disk now, or "" if it was deleted: Keep mine then saves over it, or makes it again.
-        b.conflict = this.info(name)?.hash ?? "";
+        settle((now) => buf.saveConflict(now, this.info(name)?.hash ?? ""));
         this.renderHeader();
         this.line("not saved: someone else changed it; choose Load theirs or Keep mine", "o-err");
         return false;
       }
+      settle(buf.saveFailed);
+      this.renderHeader();
       this.line(`save: ${(e as Error).message}`, "o-err");
       return false;
     } finally {
       this.busy = false;
     }
-    if (!r) return false;
-    b.saved = source;
-    b.base = r.hash ?? "";
+    if (!r) {
+      settle(buf.saveFailed);
+      return false;
+    }
+    const hash = r.hash ?? "";
+    settle((now) => buf.saveDone(now, hash, (this.selected === name && this.view ? this.view.state : now.state).doc.toString()));
     this.env.toast(`saved ${name}`);
-    if (r.restart) this.result("saved and restarted", r.restart);
+    if (r.restart) this.result(r.created ? "saved and started" : "saved and restarted", r.restart);
     await this.refresh();
     return { restarted: !!r.restart };
   }
@@ -536,7 +543,7 @@ export class ScriptsPage {
       const v = r.result;
       this.line(v === undefined || v === null ? `${what}` : `${what} → ${typeof v === "string" ? v : JSON.stringify(v, null, 2)}`, "o-ok");
     } else {
-      this.line(`${what}: ${r.error ?? "failed"}`, "o-err");
+      this.line(`${what}: ${r.error ?? "failed"}${r.kept ? ` (${r.kept})` : ""}`, "o-err");
     }
   }
 
@@ -548,13 +555,15 @@ export class ScriptsPage {
       case "script":
         return this.line(s(e.data), "o-emit", e.t, "emit");
       case "script_error":
-        return this.line(`${e.callback ? `${s(e.callback)}: ` : ""}${s(e.error)}${e.packet ? `\n  on ${s(e.packet)}` : ""}`, "o-err", e.t, "error");
+        return this.line(
+          `${e.callback ? `${s(e.callback)}: ` : ""}${s(e.error)}${e.kept ? "\n  not applied: the previous version is still running" : ""}${e.packet ? `\n  on ${s(e.packet)}` : ""}`,
+          "o-err", e.t, "error");
       case "script_run":
-        return this.line("started", "o-run", e.t, "run");
+        return this.line(`started${causeText(e.cause)}`, "o-run", e.t, "run");
       case "script_stop":
-        return this.line("stopped", "o-dim", e.t, "stop");
+        return this.line(`stopped${causeText(e.cause)}`, "o-dim", e.t, "stop");
       case "script_file":
-        return this.line(`${s(e.action)}${e.to ? ` → ${s(e.to)}` : ""}`, "o-dim", e.t, "file");
+        return this.line(`${s(e.action)}${e.to ? ` → ${s(e.to)}` : ""}${e.by === "disk" ? " (on disk)" : ""}`, "o-dim", e.t, "file");
       default:
         return this.line(JSON.stringify(e), "o-dim", e.t, e.kind);
     }
@@ -596,15 +605,16 @@ export class ScriptsPage {
   }
 }
 
-function stateText(s: ScriptInfo): string {
-  if (s.state === "active") {
-    const parts = [];
-    if (s.listeners) parts.push(`${s.listeners} listener${s.listeners === 1 ? "" : "s"}`);
-    if (s.timers) parts.push(`${s.timers} timer${s.timers === 1 ? "" : "s"}`);
-    return `active: ${parts.join(", ")}`;
+/** Why a script started or stopped, as a suffix for its output. */
+function causeText(cause: unknown): string {
+  switch (cause) {
+    case "file":
+      return ": its file changed";
+    case "launch":
+      return ": launch or reload";
+    default:
+      return "";
   }
-  if (s.state === "idle") return "idle: ran, nothing registered";
-  return "stopped";
 }
 
 /** Adds .js unless it is there, and drops path separators. */
