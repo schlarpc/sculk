@@ -57,6 +57,8 @@ import sculk.core.util.Bytes;
  * <pre>
  *   GET  /status
  *   GET  /events?filter=&amp;after=&amp;before=&amp;limit=   JSON Lines over the whole capture; see {@link EventFilter}
+ *   GET  /events/page?filter=&amp;from=&amp;count=   matches by position in the whole capture: {"start","total","from","events"}
+ *   GET  /events/position?filter=&amp;id=         the position of the first match at or after an id
  *   GET  /events/stats?filter=&amp;by=&amp;after=&amp;before=&amp;limit=   counts, bytes, first and last, grouped by a field
  *   GET  /events/stream?filter=&amp;after=      the same as server-sent events, live
  *   GET  /frame?id=                         the whole frame of a packet event
@@ -249,6 +251,12 @@ public final class ControlServer {
                     case "GET /events" -> events(ex, query);
                     case "GET /events/stream" -> stream(ex, query);
                     case "GET /events/stats" -> stats(ex, query);
+                    case "GET /events/page" -> page(ex, query);
+                    case "GET /events/position" -> {
+                        Long id = longParam(query, "id");
+                        if (id == null) throw new IllegalArgumentException("id is required");
+                        json(ex, 200, store.position(query.get("filter"), id, EventStore.Progress.NONE));
+                    }
                     case "GET /frame" -> frame(ex, query);
                     case "POST /eval" -> json(ex, 200, engine.scripts().evalForRepl(body(ex)));
                     case "POST /reload" -> json(ex, 200, engine.reloadScripts());
@@ -273,7 +281,7 @@ public final class ControlServer {
                     }
                     case "DELETE /mcp" -> mcp.delete(ex);
                     default -> {
-                        boolean known = Set.of("/status", "/events", "/events/stream", "/events/stats", "/frame", "/eval", "/reload", "/mcp",
+                        boolean known = Set.of("/status", "/events", "/events/stream", "/events/stats", "/events/page", "/events/position", "/frame", "/eval", "/reload", "/mcp",
                                 "/scripts", "/scripts/source", "/scripts/save", "/scripts/check", "/scripts/run", "/scripts/stop",
                                 "/scripts/delete", "/scripts/rename", "/scripts/enable").contains(path);
                         json(ex, known ? 405 : 404, Map.of("error", known ? "wrong method for " + path : "no such endpoint " + path));
@@ -373,6 +381,24 @@ public final class ControlServer {
         int limit = Integer.parseInt(query.getOrDefault("limit", "50"));
         json(ex, 200, store.stats(query.get("filter"), query.get("by"), longParam(query, "after"), longParam(query, "before"),
                 limit, EventStore.Progress.NONE));
+    }
+
+    /** {"start":…, "total":…, "from":…, "events":[…]}: the events go out as stored, not re-serialised. */
+    private void page(HttpExchange ex, Map<String, String> query) throws IOException {
+        Long from = longParam(query, "from");
+        int count = Math.min(Integer.parseInt(query.getOrDefault("count", "200")), 2000);
+        Map<String, Object> page = store.page(query.get("filter"), from == null ? 0 : from, count, EventStore.Progress.NONE);
+        StringBuilder sb = new StringBuilder("{\"start\":").append(page.get("start"))
+                .append(",\"total\":").append(page.get("total"))
+                .append(",\"from\":").append(page.get("from"))
+                .append(",\"events\":[");
+        @SuppressWarnings("unchecked")
+        List<StoredEvent> events = (List<StoredEvent>) page.get("events");
+        for (int i = 0; i < events.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(events.get(i).json());
+        }
+        send(ex, 200, "application/json", sb.append("]}\n").toString());
     }
 
     private static Long longParam(Map<String, String> query, String key) {

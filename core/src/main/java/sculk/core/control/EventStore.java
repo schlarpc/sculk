@@ -367,6 +367,127 @@ public final class EventStore implements AutoCloseable {
         return v instanceof Map<?, ?> || v instanceof List<?> ? sculk.core.log.EventLog.toJson(v) : String.valueOf(v);
     }
 
+    // ---- positions: the n-th match of a filter, for a table that scrolls through the whole capture ----
+
+    /**
+     * The ids matching one filter, in order, extended as events arrive and
+     * trimmed as old ones are dropped. {@link #removed} counts the matches
+     * dropped from the front, so a row keeps its number for as long as it is
+     * held. (Matches dropped before the list first reached them are not
+     * counted: numbers are stable, not counts from the start of the session.)
+     */
+    private static final class Matches {
+        final EventFilter.Compiled filter;
+        int[] ids = new int[1024];
+        int size;
+        long removed;
+        long scannedTo;
+
+        Matches(EventFilter.Compiled filter) {
+            this.filter = filter;
+        }
+
+        void add(long id) {
+            if (size == ids.length) ids = java.util.Arrays.copyOf(ids, ids.length * 2);
+            ids[size++] = (int) id;
+        }
+
+        /** Index of the first id at or after {@code id}. */
+        int lowerBound(long id) {
+            int lo = 0, hi = size;
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                if (ids[mid] < id) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo;
+        }
+    }
+
+    private final Map<String, Matches> matchCache = Collections.synchronizedMap(new LinkedHashMap<>(8, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Matches> eldest) {
+            return size() > 4;
+        }
+    });
+
+    /** The match list for a filter, brought up to date. */
+    private Matches matches(String filter, Progress progress) {
+        String key = filter == null ? "" : filter.trim();
+        Matches m = matchCache.get(key);
+        if (m == null) {
+            m = new Matches(EventFilter.analyze(key));
+            matchCache.put(key, m);
+        }
+        synchronized (m) {
+            long first = firstId(), last = lastId;
+            if (m.filter.matchesAll()) {
+                // Every id: no list needed.
+                m.removed = last == 0 ? 0 : first - 1;
+                m.size = last == 0 ? 0 : (int) (last - first + 1);
+                m.scannedTo = last;
+                return m;
+            }
+            int gone = m.lowerBound(first);
+            if (gone > 0) {
+                System.arraycopy(m.ids, gone, m.ids, 0, m.size - gone);
+                m.size -= gone;
+                m.removed += gone;
+            }
+            long from = Math.max(m.scannedTo + 1, first);
+            if (from <= last) {
+                Matches target = m;
+                scan(m.filter, from, last, true, progress, (id, full) -> {
+                    target.add(id);
+                    return true;
+                });
+                m.scannedTo = last;
+            }
+            return m;
+        }
+    }
+
+    /**
+     * Matches number {@code from} to {@code from + count - 1} of a filter,
+     * counting from the start of the capture. {@code start} is the first
+     * position still held, {@code total} one past the last.
+     */
+    public Map<String, Object> page(String filter, long from, int count, Progress progress) {
+        Matches m = matches(filter, progress);
+        List<StoredEvent> events = new ArrayList<>();
+        long start, total;
+        synchronized (m) {
+            start = m.removed;
+            total = m.removed + m.size;
+            for (long i = Math.max(from, start); i < Math.min(from + count, total); i++) {
+                long id = m.filter.matchesAll() ? i + 1 : m.ids[(int) (i - m.removed)];
+                StoredEvent e = get(id);
+                if (e != null) events.add(e);
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("start", start);
+        out.put("total", total);
+        out.put("from", Math.max(from, start));
+        out.put("events", events);
+        return out;
+    }
+
+    /** The position of the first match at or after {@code id}, and the range of positions held. */
+    public Map<String, Object> position(String filter, long id, Progress progress) {
+        Matches m = matches(filter, progress);
+        synchronized (m) {
+            long index = m.filter.matchesAll()
+                    ? Math.max(m.removed, Math.min(id - 1, m.removed + m.size))
+                    : m.removed + m.lowerBound(id);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("index", index);
+            out.put("start", m.removed);
+            out.put("total", m.removed + m.size);
+            return out;
+        }
+    }
+
     /** Waits until the writer has put {@code id} on disk; for tests. False on timeout or without a disk. */
     boolean awaitWritten(long id, long timeoutMillis) throws InterruptedException {
         long end = System.currentTimeMillis() + timeoutMillis;

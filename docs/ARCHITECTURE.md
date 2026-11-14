@@ -325,6 +325,8 @@ being written (`EventStore`):
 GET  /status                            platform, connections, running scripts, last event id, capture use
 GET  /events?filter=&after=&before=&limit=   JSON Lines; the last `limit` matches (before `before`), or the first after `after`
 GET  /events/stats?filter=&by=&after=&before=&limit=   count, frame bytes, first and last match, grouped by a field
+GET  /events/page?filter=&from=&count=  matches by position: {"start", "total", "from", "events"}; positions stay put while held
+GET  /events/position?filter=&id=       the position of the first match at or after an id
 GET  /events/stream?filter=&after=      server-sent events, live (backlog first with `after`)
 GET  /frame?id=                         a packet event's whole frame, as hex
 POST /eval      body: JavaScript        runs in the console's scope: {"ok":true,"result":...}

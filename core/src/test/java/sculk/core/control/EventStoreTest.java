@@ -241,6 +241,61 @@ class EventStoreTest {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private static List<Long> pageIds(Map<String, Object> page) {
+        return ((List<StoredEvent>) page.get("events")).stream().map(StoredEvent::id).toList();
+    }
+
+    @Test
+    void pagesAndPositionsStayPutAsTheCaptureGrowsAndShrinks(@TempDir Path tmp) throws Exception {
+        List<StoredEvent> all = events(6000, 7);
+        try (EventStore store = new EventStore(32, 1 << 20, tmp.resolve("cap"), 256 << 10, 32 << 10)) {
+            for (StoredEvent e : all.subList(0, 300)) store.add(e);
+            assertTrue(store.awaitWritten(300, 10_000));
+            for (String f : List.of("", "mod", "frame.hex contains ab")) {
+                List<Long> want = expected(all.subList(0, 300), f);
+                Map<String, Object> page = store.page(f, 3, 10, EventStore.Progress.NONE);
+                assertEquals(0L, page.get("start"), f);
+                assertEquals((long) want.size(), page.get("total"), f);
+                assertEquals(want.subList(3, Math.min(13, want.size())), pageIds(page), f);
+                long id = want.get(5);
+                assertEquals(5L, store.position(f, id, EventStore.Progress.NONE).get("index"), f);
+                assertEquals(5L, store.position(f, id - (f.isEmpty() ? 0 : 1) , EventStore.Progress.NONE).get("index"), f + " (first at or after)");
+            }
+
+            // More events: positions keep their numbers; old ones fall off the front as segments go.
+            Map<String, Object> before = store.page("mod", 0, 1, EventStore.Progress.NONE);
+            long firstModId = pageIds(before).get(0);
+            for (StoredEvent e : all.subList(300, 6000)) store.add(e);
+            assertTrue(store.awaitWritten(6000, 10_000));
+            assertTrue(store.firstId() > firstModId, "the first mod event was dropped");
+            long held = store.firstId();
+            List<Long> want = expected(all, "mod").stream().filter(id -> id >= held).toList();
+            Map<String, Object> gone = store.page("mod", 0, 5, EventStore.Progress.NONE);
+            assertEquals(List.of(), pageIds(gone), "rows 0-4 are no longer held");
+            long start = (long) gone.get("start");
+            assertTrue(start > 0, "dropped matches still count, so held rows keep their numbers");
+            Map<String, Object> page = store.page("mod", start, 5, EventStore.Progress.NONE);
+            assertEquals((long) want.size(), (long) page.get("total") - start, "the matches held");
+            assertEquals(start, page.get("from"));
+            assertEquals(want.subList(0, 5), pageIds(page));
+            assertEquals(start + 3, store.position("mod", want.get(3), EventStore.Progress.NONE).get("index"));
+
+            // Rows seen keep their positions when more arrive.
+            long rowOfTenth = (long) store.position("mod", want.get(10), EventStore.Progress.NONE).get("index");
+            for (StoredEvent e : events(1, 8)) {
+                Map<String, Object> f = new LinkedHashMap<>(e.fields());
+                f.put("id", 6001L);
+                store.add(new StoredEvent(6001, f, EventLog.line(f), e.frame()));
+            }
+            assertEquals(rowOfTenth, store.position("mod", want.get(10), EventStore.Progress.NONE).get("index"));
+            Map<String, Object> everything = store.page("", store.firstId() - 1, 3, EventStore.Progress.NONE);
+            assertEquals(store.firstId() - 1, everything.get("start"));
+            assertEquals(List.of(store.firstId(), store.firstId() + 1, store.firstId() + 2), pageIds(everything));
+            assertEquals(6001L, everything.get("total"));
+        }
+    }
+
     @Test
     void scansReportProgressAndStopWhenCancelled() {
         EventStore store = new EventStore(50_000, 1L << 30);

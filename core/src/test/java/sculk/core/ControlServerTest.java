@@ -147,7 +147,7 @@ class ControlServerTest {
 
     /** Every API endpoint, so a new one that skips the checks fails here. */
     private static final List<String> ENDPOINTS = List.of(
-            "GET /status", "GET /events", "GET /frame?id=1", "POST /eval", "POST /reload", "POST /mcp",
+            "GET /status", "GET /events", "GET /events/stats", "GET /events/page", "GET /events/position?id=1", "GET /frame?id=1", "POST /eval", "POST /reload", "POST /mcp",
             "GET /scripts", "GET /scripts/source?name=x.js", "POST /scripts/save?name=x.js", "POST /scripts/check",
             "POST /scripts/run?name=x.js", "POST /scripts/stop?name=x.js", "POST /scripts/delete?name=x.js",
             "POST /scripts/rename?name=x.js&to=y.js", "POST /scripts/enable?name=x.js&enabled=false");
