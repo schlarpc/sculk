@@ -384,6 +384,10 @@ public final class EventStore implements AutoCloseable {
         int size;
         long removed;
         long scannedTo;
+        /** Held while the list is extended or read; see {@link #withMatches}. */
+        final java.util.concurrent.locks.ReentrantLock lock = new java.util.concurrent.locks.ReentrantLock();
+        /** The extending scan's progress, for callers waiting on it. */
+        volatile long scanDone, scanTotal;
 
         Matches(EventFilter.Compiled filter) {
             this.filter = filter;
@@ -406,6 +410,7 @@ public final class EventStore implements AutoCloseable {
         }
     }
 
+    /** The last few filters' match lists; guarded by itself. */
     private final Map<String, Matches> matchCache = Collections.synchronizedMap(new LinkedHashMap<>(8, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, Matches> eldest) {
@@ -413,34 +418,66 @@ public final class EventStore implements AutoCloseable {
         }
     });
 
-    /** The match list for a filter, brought up to date. */
-    private Matches matches(String filter, Progress progress) {
+    /** How often a caller waiting for another's scan of the same filter reports it, and checks whether to give up. */
+    private static final long WAIT_TICK_MILLIS = 100;
+
+    /**
+     * Brings a filter's match list up to date and reads it, under its lock. A
+     * caller that finds another already extending the list waits for it,
+     * reporting that scan's progress as its own, and gives up if it is itself
+     * cancelled. If the other is cancelled instead, this one carries on from
+     * the chunks it finished.
+     */
+    private <T> T withMatches(String filter, Progress progress, java.util.function.Function<Matches, T> read) {
         String key = filter == null ? "" : filter.trim();
-        Matches m = matchCache.get(key);
-        if (m == null) {
-            m = new Matches(EventFilter.analyze(key));
-            matchCache.put(key, m);
+        Matches m;
+        synchronized (matchCache) {
+            m = matchCache.get(key);
+            if (m == null) {
+                m = new Matches(EventFilter.analyze(key));
+                matchCache.put(key, m);
+            }
         }
-        synchronized (m) {
-            long first = firstId(), last = lastId;
-            if (m.filter.matchesAll()) {
-                // Every id: no list needed.
-                m.removed = last == 0 ? 0 : first - 1;
-                m.size = last == 0 ? 0 : (int) (last - first + 1);
-                m.scannedTo = last;
-                return m;
+        try {
+            while (!m.lock.tryLock(WAIT_TICK_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                if (progress.cancelled()) throw new Cancelled();
+                if (m.scanTotal > 0) progress.tick(m.scanDone, m.scanTotal);
             }
-            int gone = m.lowerBound(first);
-            if (gone > 0) {
-                System.arraycopy(m.ids, gone, m.ids, 0, m.size - gone);
-                m.size -= gone;
-                m.removed += gone;
-            }
-            // In chunks, so a scan that is cancelled (the caller went away) keeps what it finished:
-            // a chunk is either wholly in the list, with scannedTo past it, or not at all.
-            long from = Math.max(m.scannedTo + 1, first);
-            long grand = Math.max(0, last - from + 1), base = 0;
-            Matches target = m;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Cancelled();
+        }
+        try {
+            extend(m, progress);
+            return read.apply(m);
+        } finally {
+            m.lock.unlock();
+        }
+    }
+
+    /** Brings a match list up to date; the caller holds its lock. */
+    private void extend(Matches m, Progress progress) {
+        long first = firstId(), last = lastId;
+        if (m.filter.matchesAll()) {
+            // Every id: no list needed.
+            m.removed = last == 0 ? 0 : first - 1;
+            m.size = last == 0 ? 0 : (int) (last - first + 1);
+            m.scannedTo = last;
+            return;
+        }
+        int gone = m.lowerBound(first);
+        if (gone > 0) {
+            System.arraycopy(m.ids, gone, m.ids, 0, m.size - gone);
+            m.size -= gone;
+            m.removed += gone;
+        }
+        // In chunks, so a scan that is cancelled (the caller went away) keeps what it finished:
+        // a chunk is either wholly in the list, with scannedTo past it, or not at all.
+        long from = Math.max(m.scannedTo + 1, first);
+        long grand = Math.max(0, last - from + 1), base = 0;
+        m.scanDone = 0;
+        m.scanTotal = grand;
+        try {
             while (from <= last) {
                 if (progress.cancelled()) throw new Cancelled();
                 long to = Math.min(last, from + matchChunk - 1);
@@ -449,6 +486,7 @@ public final class EventStore implements AutoCloseable {
                 Progress chunk = new Progress() {
                     @Override
                     public void tick(long done, long total) {
+                        m.scanDone = offset + done;
                         progress.tick(offset + done, grand);
                     }
 
@@ -459,7 +497,7 @@ public final class EventStore implements AutoCloseable {
                 };
                 try {
                     scan(m.filter, from, to, true, chunk, (id, full) -> {
-                        target.add(id);
+                        m.add(id);
                         return true;
                     });
                 } catch (Cancelled c) {
@@ -470,7 +508,8 @@ public final class EventStore implements AutoCloseable {
                 base += to - from + 1;
                 from = to + 1;
             }
-            return m;
+        } finally {
+            m.scanTotal = 0;
         }
     }
 
@@ -480,30 +519,35 @@ public final class EventStore implements AutoCloseable {
      * position still held, {@code total} one past the last.
      */
     public Map<String, Object> page(String filter, long from, int count, Progress progress) {
-        Matches m = matches(filter, progress);
-        List<StoredEvent> events = new ArrayList<>();
-        long start, total;
-        synchronized (m) {
-            start = m.removed;
-            total = m.removed + m.size;
-            for (long i = Math.max(from, start); i < Math.min(from + count, total); i++) {
-                long id = m.filter.matchesAll() ? i + 1 : m.ids[(int) (i - m.removed)];
-                StoredEvent e = get(id);
-                if (e != null) events.add(e);
+        // Ids under the lock; the events themselves (perhaps from disk) after it.
+        long[] range = new long[2];
+        long[] ids = withMatches(filter, progress, m -> {
+            range[0] = m.removed;
+            range[1] = m.removed + m.size;
+            long lo = Math.max(from, m.removed), hi = Math.min(from + count, m.removed + m.size);
+            long[] out = new long[(int) Math.max(0, hi - lo)];
+            for (int i = 0; i < out.length; i++) {
+                long pos = lo + i;
+                out[i] = m.filter.matchesAll() ? pos + 1 : m.ids[(int) (pos - m.removed)];
             }
+            return out;
+        });
+        List<StoredEvent> events = new ArrayList<>();
+        for (long id : ids) {
+            StoredEvent e = get(id);
+            if (e != null) events.add(e);
         }
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("start", start);
-        out.put("total", total);
-        out.put("from", Math.max(from, start));
+        out.put("start", range[0]);
+        out.put("total", range[1]);
+        out.put("from", Math.max(from, range[0]));
         out.put("events", events);
         return out;
     }
 
     /** The position of the first match at or after {@code id}, and the range of positions held. */
     public Map<String, Object> position(String filter, long id, Progress progress) {
-        Matches m = matches(filter, progress);
-        synchronized (m) {
+        return withMatches(filter, progress, m -> {
             long index = m.filter.matchesAll()
                     ? Math.max(m.removed, Math.min(id - 1, m.removed + m.size))
                     : m.removed + m.lowerBound(id);
@@ -512,7 +556,7 @@ public final class EventStore implements AutoCloseable {
             out.put("start", m.removed);
             out.put("total", m.removed + m.size);
             return out;
-        }
+        });
     }
 
     /** Waits until the writer has put {@code id} on disk; for tests. False on timeout or without a disk. */

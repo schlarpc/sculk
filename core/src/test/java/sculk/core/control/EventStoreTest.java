@@ -323,6 +323,90 @@ class EventStoreTest {
         assertEquals(want, pageIds(page));
     }
 
+    /** A scan made slow: 100 ms per chunk of 5000, so others have to wait for it. */
+    private static EventStore.Progress slow(java.util.function.BooleanSupplier cancel) {
+        return new EventStore.Progress() {
+            @Override
+            public void tick(long done, long total) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+
+            @Override
+            public boolean cancelled() {
+                return cancel.getAsBoolean();
+            }
+        };
+    }
+
+    private static EventStore slowStore(List<StoredEvent> all) {
+        EventStore store = new EventStore(50_000, 1L << 30);
+        store.matchChunk = 5_000;
+        for (StoredEvent e : all) store.add(e);
+        return store;
+    }
+
+    @Test
+    void aSecondCallerForTheSameFilterReportsTheFirstOnesProgressWhileItWaits() throws Exception {
+        List<StoredEvent> all = events(40_000, 10);
+        EventStore store = slowStore(all);
+        String filter = "frame.hex contains ab";
+        var builder = java.util.concurrent.CompletableFuture.supplyAsync(() -> store.page(filter, 0, 5, slow(() -> false)));
+        Thread.sleep(150);
+        List<long[]> ticks = new java.util.concurrent.CopyOnWriteArrayList<>();
+        Map<String, Object> waited = store.page(filter, 0, 5, new EventStore.Progress() {
+            @Override
+            public void tick(long done, long total) {
+                ticks.add(new long[] {done, total});
+            }
+        });
+        assertTrue(ticks.size() >= 2, "ticks while waiting: " + ticks.size());
+        assertTrue(ticks.stream().allMatch(t -> t[1] == 40_000 && t[0] > 0 && t[0] <= 40_000), "the builder's progress");
+        List<Long> want = expected(all, filter);
+        assertEquals((long) want.size(), waited.get("total"));
+        assertEquals(want.subList(0, 5), pageIds(waited));
+        assertEquals(want.subList(0, 5), pageIds(builder.get(5, java.util.concurrent.TimeUnit.SECONDS)));
+    }
+
+    @Test
+    void aWaitingCallerThatGivesUpLeavesTheBuilderToFinish() throws Exception {
+        List<StoredEvent> all = events(40_000, 11);
+        EventStore store = slowStore(all);
+        String filter = "frame.hex contains cd";
+        var builder = java.util.concurrent.CompletableFuture.supplyAsync(() -> store.page(filter, 0, 5, slow(() -> false)));
+        Thread.sleep(150);
+        long until = System.currentTimeMillis() + 250;
+        long t0 = System.nanoTime();
+        assertThrows(EventStore.Cancelled.class, () -> store.page(filter, 0, 5, new EventStore.Progress() {
+            @Override
+            public boolean cancelled() {
+                return System.currentTimeMillis() > until;
+            }
+        }));
+        assertTrue((System.nanoTime() - t0) / 1_000_000 < 600, "gave up promptly, not after the scan");
+        assertEquals((long) expected(all, filter).size(), builder.get(5, java.util.concurrent.TimeUnit.SECONDS).get("total"));
+    }
+
+    @Test
+    void whenTheBuilderGivesUpTheWaiterCarriesOnFromItsFinishedChunks() throws Exception {
+        List<StoredEvent> all = events(40_000, 12);
+        EventStore store = slowStore(all);
+        String filter = "frame.hex contains ef";
+        long until = System.currentTimeMillis() + 350; // three chunks or so
+        var builder = java.util.concurrent.CompletableFuture.supplyAsync(
+                () -> store.page(filter, 0, 5, slow(() -> System.currentTimeMillis() > until)));
+        Thread.sleep(100);
+        Map<String, Object> waited = store.page(filter, 0, Integer.MAX_VALUE, EventStore.Progress.NONE);
+        var failure = assertThrows(java.util.concurrent.ExecutionException.class, () -> builder.get(5, java.util.concurrent.TimeUnit.SECONDS));
+        assertTrue(failure.getCause() instanceof EventStore.Cancelled, String.valueOf(failure.getCause()));
+        List<Long> want = expected(all, filter);
+        assertEquals((long) want.size(), waited.get("total"), "nothing counted twice or missed");
+        assertEquals(want, pageIds(waited));
+    }
+
     @Test
     void scansReportProgressAndStopWhenCancelled() {
         EventStore store = new EventStore(50_000, 1L << 30);
