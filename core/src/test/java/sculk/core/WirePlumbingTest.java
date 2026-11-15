@@ -147,7 +147,7 @@ class WirePlumbingTest {
         behaviour = e -> {
             if (e.getMod() != null) {
                 try {
-                    e.replacePayload("edited " + e.getMod().getData());
+                    e.replacePayload("edited " + e.getPacket().getData());
                 } catch (Exception ex) {
                     throw new RuntimeException(ex);
                 }

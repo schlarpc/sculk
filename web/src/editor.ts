@@ -163,8 +163,8 @@ const SCULK_API: Completion[] = [
 const PACKET_EVENT: Completion[] = [
   { label: "conn", type: "property", info: "The live connection: id, side, remote, inject(dir, bytes), injectPacket(dir, obj), injectPayload(dir, channel, payload), replay(event)." },
   { label: "frame", type: "property", info: "{seq, dir, len, bytes, spans}: the bytes on the wire." },
-  { label: "packet", type: "property", info: "{id, state, flow, type, javaClass, owner, object}: the game's packet." },
-  { label: "mod", type: "property", info: "Custom payloads only: {channel, owner, registeredVia, javaClass, roundTrip, data}." },
+  { label: "packet", type: "property", info: "{id, state, flow, type, javaClass, owner, object, data}: the game's packet; data is what it carries (a custom payload's payload, else the packet)." },
+  { label: "mod", type: "property", info: "Custom payloads only: {channel, owner, registeredVia, javaClass, roundTrip, roundTripDetail}." },
   { label: "dir", type: "property", detail: "shorthand", info: "frame.dir: 'inbound' or 'outbound'." },
   { label: "len", type: "property", detail: "shorthand", info: "frame.len" },
   { label: "side", type: "property", detail: "shorthand", info: "conn.side: 'client' or 'server'." },
@@ -175,7 +175,7 @@ const PACKET_EVENT: Completion[] = [
   { label: "drop", type: "method", detail: "()", info: "Drop this packet." },
   { label: "replaceFrame", type: "method", detail: "(bytes)", info: "Send these bytes instead." },
   { label: "replacePacket", type: "method", detail: "(obj)", info: "Send this packet object instead." },
-  { label: "replacePayload", type: "method", detail: "(payload)", info: "Send this mod payload object (e.g. sculk.with(e.mod.data, field, value)) on the same channel instead." },
+  { label: "replacePayload", type: "method", detail: "(payload)", info: "Send this mod payload object (e.g. sculk.with(e.packet.data, field, value)) on the same channel instead." },
 ];
 
 const SNIPPETS: Completion[] = [

@@ -25,10 +25,10 @@ sculk.on('packet', e => {
   if (!edited && isSink(e)) {
     edited = true;
     // What a script sees of the payload: the same tree as the event log.
-    sculk.emit({ step: 'sink_tree', tree: sculk.tree(e.mod.data) });
+    sculk.emit({ step: 'sink_tree', tree: sculk.tree(e.packet.data) });
     const sinkConn = e.conn;
     const channel = e.mod.channel;
-    const data = e.mod.data;
+    const data = e.packet.data;
     sculk.schedule(500, () => {
       const tag = data.tag().copy();
       tag.putString('edited', 'by server script');

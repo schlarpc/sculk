@@ -13,7 +13,7 @@ import { shortClass, type Span } from "./event";
  * that could not be read ({@code $string}, {@code $reflectionError}) shows
  * as its string.
  *
- * With a {@code path} (the value's field path, such as {@code mod.data}),
+ * With a {@code path} (the value's field path, such as {@code packet.data}),
  * each entry is marked with its own path for the context menu: list indices
  * are left out, since a filter path through a list matches any element.
  */

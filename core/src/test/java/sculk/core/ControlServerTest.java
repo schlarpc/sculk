@@ -923,7 +923,7 @@ class ControlServerTest {
         later.join();
         List<JsonObject> found = lines(toolText(waited));
         assertEquals(1, found.size(), toolText(waited));
-        assertEquals("late", found.get(0).getAsJsonObject("mod").get("data").getAsString());
+        assertEquals("late", found.get(0).getAsJsonObject("packet").get("data").getAsString());
         assertTrue(millis < 5000, "returned when the event arrived, not at the timeout: " + millis + "ms");
     }
 

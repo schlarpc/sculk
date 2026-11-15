@@ -2,6 +2,7 @@ package sculk.core.packet;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import sculk.core.model.ObjectModel;
 import sculk.core.platform.PacketInfo;
 import sculk.core.util.Bytes;
 
@@ -21,6 +22,12 @@ public final class PacketLayer {
 
     /** The packet object itself, for {@code replacePacket} and {@code injectPacket}. */
     public Object getObject() { return object; }
+    /**
+     * What the packet carries: for a custom payload, the decoded payload
+     * (for {@code replacePayload}; null when nothing decoded it), else the
+     * packet object itself.
+     */
+    public Object getData() { return info.isCustomPayload() ? info.payload() : object; }
     /** The packet id on the wire, or null if the packet was never serialised. */
     public Integer getId() {
         if (frame == null) return null;
@@ -34,7 +41,8 @@ public final class PacketLayer {
     /** The mod whose class this packet is, or minecraft. A custom payload's mod is in the mod layer. */
     public String getOwner() { return owner; }
 
-    public Map<String, Object> toJson() {
+    /** The layer as logged, with {@code data} as an {@link ObjectModel} tree at most {@code treeDepth} deep. */
+    public Map<String, Object> toJson(int treeDepth) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", getId());
         m.put("state", getState());
@@ -42,6 +50,8 @@ public final class PacketLayer {
         m.put("type", getType());
         m.put("javaClass", getJavaClass());
         m.put("owner", owner);
+        Object data = getData();
+        m.put("data", data == null ? null : ObjectModel.toTree(data, treeDepth));
         return m;
     }
 }

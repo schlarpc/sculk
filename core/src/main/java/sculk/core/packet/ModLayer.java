@@ -4,11 +4,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
-import sculk.core.model.ObjectModel;
 
 /**
- * The {@code mod} layer of a packet event: a custom payload, the mod it
- * belongs to and what it decoded to. Absent (null) for other packets.
+ * The {@code mod} layer of a packet event: a custom payload's channel, the
+ * mod it belongs to and how faithfully it re-encodes. What it decoded to
+ * is the packet layer's {@code data}. Absent (null) for other packets.
  */
 public final class ModLayer {
     private final String channel;
@@ -38,8 +38,7 @@ public final class ModLayer {
         if (registeredViaValue == null) registeredViaValue = List.copyOf(registeredVia.get());
         return registeredViaValue;
     }
-    /** The decoded payload object (a record or mod class), or null when the platform could not decode it. */
-    public Object getData() { return data; }
+    /** The decoded payload's class, or null when the platform could not decode it. */
     public String getJavaClass() { return data == null ? null : data.getClass().getName(); }
     /** On loaders where payloads stay opaque on the wire (Forge 1.20.1), the payload's raw bytes; otherwise null. */
     public byte[] getBytes() { return opaqueBytes; }
@@ -60,8 +59,8 @@ public final class ModLayer {
         return roundTripValue;
     }
 
-    /** The layer as logged, with {@code data} as an {@link ObjectModel} tree. */
-    public Map<String, Object> toJson(int treeDepth) {
+    /** The layer as logged. */
+    public Map<String, Object> toJson() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("channel", channel);
         m.put("owner", owner);
@@ -69,7 +68,6 @@ public final class ModLayer {
         m.put("javaClass", getJavaClass());
         m.put("roundTrip", getRoundTrip());
         if (getRoundTripDetail() != null) m.put("roundTripDetail", getRoundTripDetail());
-        m.put("data", data == null ? null : ObjectModel.toTree(data, treeDepth));
         return m;
     }
 }

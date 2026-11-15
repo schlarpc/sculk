@@ -169,7 +169,7 @@ mixins.
 
 ### Game types in trees
 
-`mod.data` (and `sculk.tree`) turns payload objects into trees by
+`packet.data` (and `sculk.tree`) turns packets and payload objects into trees by
 reflection, which shows game types badly: an NBT compound is a hash map of
 tag objects, an item stack drags in its item's whole class graph, and an
 identifier is `{namespace, path}`. Each platform's renderer
@@ -184,10 +184,10 @@ would write them; it also applies to map keys:
 | block position, vector | `{x, y, z}` |
 | block state | `"ns:block[prop=value,...]"` |
 | text component | JSON text (`{"text": ..., "color": ...}`, or a plain string) |
-| Netty `ByteBuf` (core) | `{"$bytes": hex}` of its readable bytes |
+| byte array, Netty `ByteBuf` (core) | `{"$bytes": hex}` (of a buffer's readable bytes), with `$len` when the hex is cut short (1 KB per array, 8 KB per tree) and `$text` holding its runs of 4+ printable characters, one per line |
 
 The tree is a view: types are lost (an NBT byte and int are both
-numbers). Scripts keep the live objects: `e.mod.data.tag().copy()` is the
+numbers). Scripts keep the live objects: `e.packet.data.tag().copy()` is the
 game's own `CompoundTag`. A renderer that throws falls back to
 reflection for that value.
 
@@ -311,12 +311,12 @@ The `sculk` global is that script's `ScriptApi`:
 sculk.on('packet', e => {
   // the same fields as logged packet events (below): e.conn, e.frame, e.packet, e.mod, e.injected, e.action
   if (e.frame.dir === 'inbound' && e.mod && e.mod.owner === 'somemod') e.drop();
-  if (e.channel === 'somemod:sync') sculk.emit(sculk.tree(e.mod.data)); // shorthands work here too
+  if (e.channel === 'somemod:sync') sculk.emit(sculk.tree(e.packet.data)); // shorthands work here too
 });
 sculk.on('connection', c => sculk.log('connected as ' + c.side));
 // c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event); sculk.connection(id) finds one
 // c.injectPayload('outbound', channel, payload): a mod payload object, wrapped for the side and direction
-// e.replacePayload(sculk.with(e.mod.data, 'field', value)): edit a mod payload in flight, same channel
+// e.replacePayload(sculk.with(e.packet.data, 'field', value)): edit a mod payload in flight, same channel
 // sculk.emit(obj), sculk.schedule(ms, fn), sculk.payloadTypes(), sculk.tree(obj),
 // sculk.with(record, 'field', value), sculk.copy(bytes), sculk.hex(bytes), sculk.unhex(str)
 // sculk.log(msg) (a script_log event), sculk.chat(msg) (a chat line only the player sees; a chat event),
@@ -348,29 +348,33 @@ object, and a layer is absent when it does not apply.
 injected, action          what sculk did: action is pass, drop or replace
 conn    {id, side, remote}                          the connection
 frame   {seq, dir, len, hex, spans}                 the bytes on the wire
-packet  {id, state, flow, type, javaClass, owner}   the game's packet
+packet  {id, state, flow, type, javaClass, owner,   the game's packet, and
+         data}                                      what it carries
 mod     {channel, owner, registeredVia, javaClass,  custom payloads only:
-         roundTrip, data}                           the decoded payload
+         roundTrip, roundTripDetail}                the channel and its mod
 ```
 
 - `frame.spans` lists where fields sit in the frame, as
-  `{field, off, len}`: `packet.id`, then `mod.channel` and `mod.data` for
-  a custom payload, or `packet.body` for anything else.
+  `{field, off, len}`: `packet.id`, then (for a custom payload)
+  `mod.channel`, then `packet.data`.
 - `packet.owner` is the mod whose class the packet is (usually
   `minecraft`); `mod.owner` is the mod that owns a payload's channel.
-- `mod.data` is the payload as an object tree; `mod.roundTrip` is `ok`,
+- `packet.data` is what the packet carries, as an object tree: for a
+  custom payload, the decoded payload (`mod.javaClass` is its class; null
+  when nothing decoded it), else the packet itself. `mod.roundTrip` is `ok`,
   `equivalent`, `mismatch`, `opaque`, `error` or `n/a` (see Attribution
   above), with `mod.roundTripDetail` saying more for mismatch (the
   re-encoded hex), opaque and error.
 - `connection` and `disconnect` events carry `conn`; `payload_type` events
   carry `mod` (with `codecClass`, `protocol`, `flow` and `discriminator`
-  instead of `data` and `roundTrip`).
+  instead of `roundTrip`).
 
 Scripts get the same tree: a path names the same thing in a filter, in the
 log and in code. Where the log has a serialised copy, scripts get the live
 thing: `e.conn` is the connection (with `inject` and `replay`),
-`e.frame.bytes` the frame, `e.packet.object` the packet and `e.mod.data`
-the payload object.
+`e.frame.bytes` the frame, `e.packet.object` the packet (for
+`replacePacket`) and `e.packet.data` the payload object (for
+`replacePayload`), or the packet again for a vanilla packet.
 
 Shorthands, in filters and in scripts: `dir` (`frame.dir`), `len`
 (`frame.len`), `side` (`conn.side`), `type` (`packet.type`), `channel`
@@ -403,7 +407,7 @@ being written (`EventStore`):
   conn.side, frame.dir, frame.len, packet.type, packet.owner, packet.state,
   mod.channel, mod.owner, injected, action and script. A filter that reads
   only those (shorthands included) runs on the index, at about 2 million
-  events a second; one that reads anything else (`mod.data...`,
+  events a second; one that reads anything else (`packet.data...`,
   `frame.hex`) reads events back from disk, at about 400 thousand a
   second. An event whose shape the index cannot mirror exactly is always
   read whole, so both give the same answers.
@@ -510,8 +514,8 @@ Filters are Wireshark-style:
 ```
 kind == packet && dir == inbound && owner != minecraft
 type matches "recipe|chat" and len > 1000
-mod.data contains "../" or data.step == done
-mod.data.pos.x >= 100 && mod.registeredVia == balm
+packet.data contains "../" or data.step == done
+packet.data.pos.x >= 100 && mod.registeredVia == balm
 mod && action != pass
 ```
 

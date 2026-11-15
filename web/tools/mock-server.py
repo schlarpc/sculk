@@ -362,7 +362,7 @@ sculk.on('packet', e => {
 
 sculk.on('packet', e => {
   if (e.channel !== 'sophisticatedbackpacks:sync_slot' || e.dir !== 'outbound') return;
-  const data = sculk.with(e.mod.data, 'slot', e.mod.data.slot + 1);
+  const data = sculk.with(e.packet.data, 'slot', e.packet.data.slot + 1);
   sculk.schedule(50, () => e.conn.injectPacket('outbound', data));
 });
 """),
@@ -757,7 +757,7 @@ def varint_at(b, off):
 
 
 def spans(frame, channel):
-    """FrameLayer.spans in Python: packet.id, then mod.channel + mod.data, or packet.body."""
+    """FrameLayer.spans in Python: packet.id, then mod.channel for a custom payload, then packet.data."""
     out = []
     _, n = varint_at(frame, 0)
     if n < 0:
@@ -771,10 +771,10 @@ def spans(frame, channel):
             out.append({"field": "mod.channel", "off": pos, "len": prefix + strlen})
             pos += prefix + strlen
             if pos < len(frame):
-                out.append({"field": "mod.data", "off": pos, "len": len(frame) - pos})
+                out.append({"field": "packet.data", "off": pos, "len": len(frame) - pos})
             return out
     if pos < len(frame):
-        out.append({"field": "packet.body", "off": pos, "len": len(frame) - pos})
+        out.append({"field": "packet.data", "off": pos, "len": len(frame) - pos})
     return out
 
 
@@ -856,7 +856,7 @@ class Game:
         remote = next((r for c, r in self.open + self.closed if c == cid), "?")
         return {"id": cid, "side": "client", "remote": remote}
 
-    def packet_event(self, cid, d, state, t, frame, cls, owner="minecraft", channel=None, injected=False, action="pass", mod=None):
+    def packet_event(self, cid, d, state, t, frame, cls, owner="minecraft", channel=None, injected=False, action="pass", mod=None, data=None):
         """A packet event shaped as Sculk.java logs it (see PacketEvent.toJson)."""
         if any(d == rd and (channel if rf == "channel" else t) == rv for rd, rf, rv in self.drops):
             action = "drop"
@@ -867,7 +867,8 @@ class Game:
                       "hex": hexs(frame, LOG_FRAME_BYTES if channel else 256), "spans": spans(frame, channel)},
             "packet": {"id": varint_at(frame, 0)[0], "state": state,
                        "flow": "clientbound" if d == "inbound" else "serverbound", "type": t,
-                       "javaClass": cls, "owner": owner},
+                       "javaClass": cls, "owner": owner,
+                       "data": data if data is not None else {"$class": cls}},
         }
         if mod is not None:
             e["mod"] = mod
@@ -895,11 +896,10 @@ class Game:
         layer = {"channel": ch, "owner": owner, "registeredVia": via, "javaClass": cls, "roundTrip": roundtrip}
         if detail:
             layer["roundTripDetail"] = detail
-        layer["data"] = tree
         side = "Clientbound" if d == "inbound" else "Serverbound"
         self.packet_event(cid, d, "play", "minecraft:custom_payload", frame,
                           f"net.minecraft.network.protocol.common.{side}CustomPayloadPacket",
-                          channel=ch, injected=injected, action=action, mod=layer)
+                          channel=ch, injected=injected, action=action, mod=layer, data=tree)
 
     def tick_one(self):
         with self.lock:
@@ -1179,7 +1179,7 @@ def make_handler(store, game, bundle):
 
         def scanning(self, src, work):
             """Like ControlServer.scanning: SSE progress then the result, when asked for. A filter
-            the mock has not scanned before that reads a deep field (mod.data, frame.hex) pretends
+            the mock has not scanned before that reads a deep field (packet.data, frame.hex) pretends
             to be slow, so the UI's progress shows."""
             if "text/event-stream" not in (self.headers.get("Accept") or ""):
                 return self.send(200, "application/json", work().encode())

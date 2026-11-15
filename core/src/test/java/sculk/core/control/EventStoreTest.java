@@ -65,7 +65,7 @@ class EventStoreTest {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("channel", channel);
                     m.put("owner", channel.substring(0, channel.indexOf(':')));
-                    m.put("data", new LinkedHashMap<>(Map.of("slot", r.nextInt(10), "name", "n" + r.nextInt(5))));
+                    p.put("data", new LinkedHashMap<>(Map.of("slot", r.nextInt(10), "name", "n" + r.nextInt(5))));
                     e.put("mod", m);
                 }
                 out.add(new StoredEvent(i, e, EventLog.line(e), frame));
@@ -100,7 +100,7 @@ class EventStoreTest {
             "", "kind == packet", "dir == inbound && owner != minecraft", "channel matches \"^mod[12]:\"", "len > 50",
             "side == client", "injected", "!injected && kind == packet", "action == drop", "script == a.js",
             "script == \"b c.js\"", "mod", "!mod", "owner == weird", "dir == sideways", "conn.id == 2", "conn.id == not-a-number",
-            "mod.data.slot >= 5", "frame.hex contains ab", "data.n < 10 || type == move", "t >= " + (T0 + 7000),
+            "packet.data.slot >= 5", "frame.hex contains ab", "data.n < 10 || type == move", "t >= " + (T0 + 7000),
             "id > 100 && id < 200", "packet.state == play", "mod contains slot", "frame", "kind == odd || injected == 3",
             "type == custom_payload && !(channel ~ other)");
 
@@ -202,7 +202,7 @@ class EventStoreTest {
         try (EventStore store = new EventStore(64, 1 << 20, tmp.resolve("cap"), 1L << 30, 64 << 10)) {
             for (StoredEvent e : all) store.add(e);
             assertTrue(store.awaitWritten(3000, 10_000));
-            for (String by : List.of("channel", "mod.data.name")) {
+            for (String by : List.of("channel", "packet.data.name")) {
                 Map<String, Object> stats = store.stats("mod", by, null, null, 100, EventStore.Progress.NONE);
                 Map<String, long[]> want = new LinkedHashMap<>();
                 for (StoredEvent e : all) {
@@ -236,7 +236,7 @@ class EventStoreTest {
             // Except the events whose shape the index cannot mirror (the weird and odd ones), read whole each time.
             long unindexable = all.stream().filter(e -> Stream.of("weird", "odd").anyMatch(k -> k.equals(e.fields().get("kind")))).count();
             assertEquals(before + 2 * unindexable, store.diskReads.get(), "the index answered the rest");
-            store.stats("mod.data.slot >= 5", null, null, null, 10, EventStore.Progress.NONE);
+            store.stats("packet.data.slot >= 5", null, null, null, 10, EventStore.Progress.NONE);
             assertTrue(store.diskReads.get() > before, "deep fields read events back");
         }
     }

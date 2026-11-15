@@ -127,13 +127,22 @@ function packetSections(e: SculkEvent, loadFrame: FrameLoader, stillShown: () =>
       tag.dataset.path = "mod.javaClass";
       title.append(tag);
     }
-    const body = m.data === undefined || m.data === null
+    const body = p?.data === undefined || p.data === null
       ? el("p", "hint", "not decoded: no codec for this channel on this side")
-      : jsonTree(m.data, 4, "mod.data");
+      : jsonTree(p.data, 4, "packet.data");
     const rt = m.roundTrip && roundTripBad(m.roundTrip)
       ? el("p", "error detail-rt", `round trip ${m.roundTrip}${m.roundTripDetail ? ": " + m.roundTripDetail : ""}`)
       : null;
     out.push(section(title, rt, body));
+  } else if (p?.data !== undefined && p.data !== null) {
+    const title = el("span");
+    title.append("Packet ");
+    const tag = classTag(p.javaClass);
+    if (tag) {
+      tag.dataset.path = "packet.javaClass";
+      title.append(tag);
+    }
+    out.push(section(title, jsonTree(p.data, 4, "packet.data")));
   }
 
   if (typeof f?.len === "number" && f.len > 0) {

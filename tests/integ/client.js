@@ -80,9 +80,9 @@ sculk.on('packet', e => {
   }
   // The test mod's report about the sink server.js edited: its note starts "edited".
   if (!replaced && e.dir === 'outbound' && e.mod && e.mod.javaClass === 'sculktest.Report'
-      && String(e.mod.data.note()).indexOf('edited') === 0) {
+      && String(e.packet.data.note()).indexOf('edited') === 0) {
     replaced = true;
-    e.replacePayload(sculk.with(e.mod.data, 'note', 'replaced by client script'));
+    e.replacePayload(sculk.with(e.packet.data, 'note', 'replaced by client script'));
     sculk.emit({ step: 'payload_replaced', channel: e.mod.channel });
     maybeFinish();
   }

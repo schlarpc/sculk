@@ -63,19 +63,19 @@ final class McpHandler {
             a `chat` event), schedule(ms, fn), tree(obj), \
             with(record, field, value), hex(bytes), unhex(str), copy(bytes), scope(name) (another running script's \
             globals), name, dist. Connections offer inject(dir, bytes), injectPacket(dir, obj), \
-            injectPayload(dir, channel, payload) (a mod payload object, e.g. an edited e.mod.data), replay(event). \
+            injectPayload(dir, channel, payload) (a mod payload object, e.g. an edited e.packet.data), replay(event). \
             Packet events have the same fields and shorthands as logged events (e.mod.channel, e.frame.dir, e.owner), \
-            plus e.frame.bytes, e.packet.object, e.mod.data as live objects and e.conn as the live connection, and \
+            plus e.frame.bytes, e.packet.object, e.packet.data (a custom payload's payload, else the packet) as live objects and e.conn as the live connection, and \
             offer drop(), replaceFrame(bytes), replacePacket(obj), replacePayload(payload) (same channel). \
-            e.mod.data trees show NBT as JSON, item stacks as {item, count, components or tag}, identifiers, \
+            e.packet.data trees show NBT as JSON, item stacks as {item, count, components or tag}, identifiers, \
             registry entries and holders as "ns:path", positions as {x, y, z}, text components as JSON text; \
-            the live objects are the game's own (e.g. e.mod.data.tag().copy()).""";
+            the live objects are the game's own (e.g. e.packet.data.tag().copy()).""";
 
     private static final String FILTER_HELP = """
             Filter syntax (Wireshark-style; blank matches everything): \
             `kind == packet && dir == inbound && owner != minecraft`, \
-            `packet.type matches "recipe|chat" and len > 1000`, `mod.data contains "../"`, \
-            `mod.data.pos.x >= 100`, `mod && action != pass`. \
+            `packet.type matches "recipe|chat" and len > 1000`, `packet.data contains "../"`, \
+            `packet.data.pos.x >= 100`, `mod && action != pass`. \
             Fields are event keys; dots walk into nested objects and lists (a list matches if any element does). \
             Operators: == != < <= > >= contains matches (~ is matches, a regex found anywhere). \
             A field alone means present and not false, so `mod` alone means "is a custom payload". \
@@ -85,9 +85,10 @@ final class McpHandler {
             script events carry `script` (the script's name, or "console"). \
             Packet events are layered: id, kind, t, injected, action (pass/drop/replace); \
             conn {id, side (client/server), remote}; frame {seq, dir (inbound/outbound), len, hex, spans: \
-            [{field, off, len}] saying which bytes hold packet.id, packet.body, mod.channel, mod.data}; \
-            packet {id, state, flow, type, javaClass, owner}; and for custom payloads only \
-            mod {channel, owner (mod id), registeredVia, javaClass, roundTrip, data (decoded tree)}. \
+            [{field, off, len}] saying which bytes hold packet.id, mod.channel, packet.data}; \
+            packet {id, state, flow, type, javaClass, owner, data (decoded tree: a custom payload's payload, \
+            else the packet itself)}; and for custom payloads only mod {channel, owner (mod id), registeredVia, \
+            javaClass (the payload's), roundTrip (ok, equivalent, mismatch, opaque, error), roundTripDetail}. \
             connection and disconnect events have conn; payload_type events have mod. \
             Shorthands: dir, len, side, type, channel, and owner (mod.owner, else packet.owner).""";
 
@@ -707,7 +708,7 @@ final class McpHandler {
         Map<String, Object> filter = prop("string", "Event filter; blank or absent matches everything.");
         Map<String, Object> after = prop("integer", "Only events with an id greater than this.");
         Map<String, Object> fields = prop("string", "Optional: comma-separated fields to return instead of whole events, "
-                + "e.g. \"t,type,channel,mod.data\" (shorthands and dotted paths as in filters). Each event comes back as "
+                + "e.g. \"t,type,channel,packet.data\" (shorthands and dotted paths as in filters). Each event comes back as "
                 + "{\"id\": ..., \"<field>\": value, ...}.");
         Map<String, Object> hex = prop("boolean", "Include frame.hex and frame.spans (default false).");
         List<Map<String, Object>> out = new ArrayList<>();
@@ -721,7 +722,7 @@ final class McpHandler {
                         + "`limit` matches (before `before`, if given: page backwards with the first id returned); with "
                         + "`after`, the first `limit` matches after it (page forward with the last id returned). "
                         + "Filters on id, t, kind, conn, dir, len, side, type, channel, owner, injected, action, script and "
-                        + "packet.state run on an index and are fast over millions of events; other fields (mod.data..., "
+                        + "packet.state run on an index and are fast over millions of events; other fields (packet.data..., "
                         + "frame.hex) read events back from disk, so narrow those with an id range or an indexed clause. "
                         + "Long scans report progress and can be cancelled. For counts and summaries, sculk_stats is "
                         + "cheaper than paging. " + SHAPE_HELP + "\n\n"
@@ -732,7 +733,7 @@ final class McpHandler {
         out.add(tool("sculk_stats",
                 "Summarise the events matching a filter, over the whole session or an id range: how many, their frame "
                         + "bytes, and the first and last of them (id and time t, epoch ms). With `by` (a field, e.g. channel, "
-                        + "owner, type, kind, dir, conn.id, script, or a deeper one like mod.data.slot), one row per distinct "
+                        + "owner, type, kind, dir, conn.id, script, or a deeper one like packet.data.slot), one row per distinct "
                         + "value, biggest first. Use it to see what a session holds before reading events: which mods talk "
                         + "most, when a channel first appeared, how many drops a script made. Same filter syntax as sculk_events.",
                 Map.of("filter", filter, "by", prop("string", "Field to group by; absent for one row of everything."),

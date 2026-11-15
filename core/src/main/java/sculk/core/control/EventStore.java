@@ -40,7 +40,7 @@ import sculk.core.Sculk;
  *   <li><b>Index.</b> In memory, about 47 bytes per event: time, kind,
  *       connection, direction, length, packet type, owners, channel, script
  *       and where the event sits on disk. A filter that only reads those
- *       fields runs on the index alone; anything else ({@code mod.data.x},
+ *       fields runs on the index alone; anything else ({@code packet.data.x},
  *       {@code frame.hex contains ...}) reads the events back from disk.</li>
  *   <li><b>Hot cache.</b> The most recent events stay in memory whole, so
  *       live tails and recent queries never touch the disk, and events the

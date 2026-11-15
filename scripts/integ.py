@@ -180,6 +180,7 @@ def check(server, client, outs=None, stress=False):
     script = lambda log, step: [e for e in log if e["kind"] == "script" and e["data"].get("step") == step]
     # Layers of a packet event (see docs/ARCHITECTURE.md, "Events").
     mod = lambda e: e.get("mod") or {}
+    data = lambda e: (e.get("packet") or {}).get("data")
     dir_ = lambda e: e["frame"]["dir"]
     hex_ = lambda e: e["frame"].get("hex")
 
@@ -225,11 +226,11 @@ def check(server, client, outs=None, stress=False):
     apple_bad = [mod(e)["roundTrip"] for e in custom
                  if mod(e).get("owner") == "appleskin" and mod(e)["roundTrip"] not in ("ok", "opaque")]
     r.check("appleskin payloads re-encode byte-for-byte", not apple_bad, apple_bad[:3])
-    # A payload with no body (an empty "ack" message) has no mod.data span: the channel ends the frame.
+    # A payload with no body (an empty "ack" message) has no packet.data span: the channel ends the frame.
     def split(e):
         spans = e["frame"]["spans"]
         fields = [s["field"] for s in spans]
-        if fields == ["packet.id", "mod.channel", "mod.data"]:
+        if fields == ["packet.id", "mod.channel", "packet.data"]:
             return True
         return fields == ["packet.id", "mod.channel"] and spans[1]["off"] + spans[1]["len"] == e["frame"]["len"]
     unsplit = [mod(e)["channel"] for e in custom if not split(e)]
@@ -362,10 +363,10 @@ def sculktest_check(r, server, client, outs, pk, mod, dir_, script):
     r.check("server registry lists sculktest payloads", types, len(types))
 
     sinks_in = [e for e in pk(client) if dir_(e) == "inbound" and cls(e, "Sink")]
-    natural = [e for e in sinks_in if not mod(e)["data"].get("tag", {}).get("edited")] if sinks_in else []
+    natural = [e for e in sinks_in if not data(e).get("tag", {}).get("edited")] if sinks_in else []
     r.check("client received a sculktest sink", natural)
     if natural:
-        problems = sink_problems(mod(natural[0])["data"])
+        problems = sink_problems(data(natural[0]))
         r.check("sink decoded exactly: NBT of every type, items, pos, uuid, text, varints, optionals, bytes",
                 not problems, problems[:6])
     test_events = [e for e in pk(server) + pk(client) if mod(e).get("owner") == "sculktest"]
@@ -379,11 +380,11 @@ def sculktest_check(r, server, client, outs, pk, mod, dir_, script):
 
     # server.js edits the NBT through the game's API and injects the copy as a payload object.
     r.check("server script injected an edited sink", script(server, "sink_injected"))
-    edited = [e for e in sinks_in if mod(e)["data"].get("tag", {}).get("edited") == "by server script"]
-    r.check("client decoded the edited sink", edited and mod(edited[0])["data"]["tag"].get("int") == 7,
+    edited = [e for e in sinks_in if data(e).get("tag", {}).get("edited") == "by server script"]
+    r.check("client decoded the edited sink", edited and data(edited[0])["tag"].get("int") == 7,
             f"{len(sinks_in)} sinks in")
     if edited:
-        rest = {k: v for k, v in mod(edited[0])["data"].items() if k != "tag"}
+        rest = {k: v for k, v in data(edited[0]).items() if k != "tag"}
         problems = [p for p in sink_problems({**rest, "tag": EXPECTED_TAG}) if not p.startswith("tag")]
         r.check("editing the NBT left the other fields alone", not problems, problems[:3])
 
@@ -406,14 +407,14 @@ def sculktest_check(r, server, client, outs, pk, mod, dir_, script):
     r.check("client script replaced a report", script(client, "payload_replaced"),
             json.dumps(script(client, "payload_replace_skipped")))
     reports = [e for e in pk(server) if dir_(e) == "inbound" and cls(e, "Report")]
-    natural_reports = [e for e in reports if mod(e)["data"].get("note") == "natural"]
+    natural_reports = [e for e in reports if data(e).get("note") == "natural"]
     r.check("server decoded the natural report and its echoed sink",
-            natural_reports and not sink_problems(mod(natural_reports[0])["data"].get("echo")),
-            sink_problems(mod(natural_reports[0])["data"].get("echo"))[:4] if natural_reports else len(reports))
+            natural_reports and not sink_problems(data(natural_reports[0]).get("echo")),
+            sink_problems(data(natural_reports[0]).get("echo"))[:4] if natural_reports else len(reports))
     r.check("server decoded the replaced report",
-            any(mod(e)["data"].get("note") == "replaced by client script"
-                and mod(e)["data"]["echo"]["tag"].get("edited") == "by server script" for e in reports),
-            [mod(e)["data"].get("note") for e in reports])
+            any(data(e).get("note") == "replaced by client script"
+                and data(e)["echo"]["tag"].get("edited") == "by server script" for e in reports),
+            [data(e).get("note") for e in reports])
 
 
 def stress_check(r, server, client, pk, mod, dir_, hex_):
@@ -443,7 +444,7 @@ def stress_check(r, server, client, pk, mod, dir_, hex_):
         c = rows[m.get("owner")]
         c["payloads"] += 1
         c["channels:" + m["channel"]] += 1
-        if m.get("data") is not None:
+        if data(e) is not None:
             c["decoded"] += 1
         c["rt:" + str(m.get("roundTrip"))] += 1
     print("  per mod (both sides):")

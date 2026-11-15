@@ -472,8 +472,7 @@ button.link:hover { color: var(--glow-hot); background: none; }
 .hexdump { --sp: transparent; }
 .sp-packet-id { --sp: var(--gold); }
 .sp-mod-channel { --sp: var(--bone); }
-.sp-mod-data { --sp: var(--glow); }
-.sp-packet-body { --sp: var(--glow-mid); }
+.sp-packet-data { --sp: var(--glow); }
 .hx-grid .hx-b[data-field] { background: color-mix(in srgb, var(--sp) 16%, transparent); }
 .hx-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 4px; }
 .hx-chip { cursor: default; color: var(--text); }

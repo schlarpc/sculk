@@ -32,7 +32,7 @@ const TEMPLATE = (title: string) => `// ==Sculk==
 // Add "// @dist client" or "// @dist server" to run in only one of them.
 
 sculk.on('packet', e => {
-  // e.dir, e.channel, e.owner, e.mod.data ... e.drop(), e.replacePacket(obj)
+  // e.dir, e.channel, e.owner, e.packet.data ... e.drop(), e.replacePacket(obj)
 });
 `;
 

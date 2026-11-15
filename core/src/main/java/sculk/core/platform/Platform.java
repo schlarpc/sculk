@@ -76,7 +76,7 @@ public interface Platform {
 
     /**
      * A custom payload packet carrying {@code payload} (a decoded mod payload
-     * object, as in {@code mod.data}) on {@code channel}, travelling
+     * object, as in {@code packet.data}) on {@code channel}, travelling
      * clientbound or serverbound: what {@code conn.injectPayload} and
      * {@code e.replacePayload} send. Where payloads are opaque on the wire
      * (Forge 1.20.1), the payload is encoded with the channel's own codec.

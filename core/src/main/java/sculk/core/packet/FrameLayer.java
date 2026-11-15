@@ -41,7 +41,7 @@ public final class FrameLayer {
     public Integer getLen() { return bytes == null ? null : bytes.length; }
     public String getHex() { return Bytes.hex(bytes); }
 
-    /** Where {@code packet.id}, {@code mod.channel}, {@code mod.data} or {@code packet.body} sit in the frame. */
+    /** Where {@code packet.id}, {@code mod.channel} (custom payloads) and {@code packet.data} sit in the frame. */
     public synchronized Span[] getSpans() {
         if (spans == null) spans = spans(bytes, channel).toArray(new Span[0]);
         return spans.clone();
@@ -61,9 +61,9 @@ public final class FrameLayer {
     }
 
     /**
-     * Splits a frame into the packet id and either the body or, for a custom
-     * payload whose channel is written as a string right after the id (as in
-     * every supported version), the channel and the payload's own bytes.
+     * Splits a frame into the packet id and the data: for a custom payload
+     * whose channel is written as a string right after the id (as in every
+     * supported version), the channel and then the payload's own bytes.
      */
     static List<Span> spans(byte[] frame, String channel) {
         List<Span> out = new ArrayList<>();
@@ -82,12 +82,12 @@ public final class FrameLayer {
                         && Arrays.equals(frame, start, start + strLen, expected, 0, expected.length)) {
                     out.add(new Span("mod.channel", pos, prefix + strLen));
                     pos = start + strLen;
-                    if (pos < frame.length) out.add(new Span("mod.data", pos, frame.length - pos));
+                    if (pos < frame.length) out.add(new Span("packet.data", pos, frame.length - pos));
                     return out;
                 }
             }
         }
-        if (pos < frame.length) out.add(new Span("packet.body", pos, frame.length - pos));
+        if (pos < frame.length) out.add(new Span("packet.data", pos, frame.length - pos));
         return out;
     }
 }

@@ -16,9 +16,11 @@ import sculk.core.platform.PacketInfo;
  *   kind, t, injected, action
  *   conn    {id, side, remote}            the live connection: also inject(), replay()
  *   frame   {seq, dir, len, hex, spans}   scripts also get frame.bytes
- *   packet  {id, state, flow, type, javaClass, owner}   scripts also get packet.object
- *   mod     {channel, owner, registeredVia, javaClass, roundTrip, data}   custom payloads only
+ *   packet  {id, state, flow, type, javaClass, owner, data}   scripts also get packet.object
+ *   mod     {channel, owner, registeredVia, javaClass, roundTrip, roundTripDetail}   custom payloads only
  * </pre>
+ * {@code packet.data} is what the packet carries: a custom payload's
+ * decoded payload, else the packet itself.
  * Shorthands, as in filters: {@code dir side owner type channel len}.
  * {@code owner} is the mod layer's owner when there is one, else the packet's.
  *
@@ -99,7 +101,7 @@ public final class PacketEvent {
 
     /**
      * Replaces a custom payload packet with one carrying {@code payload} on
-     * the same channel: usually an edited copy of {@code mod.data}
+     * the same channel: usually an edited copy of {@code packet.data}
      * ({@code sculk.with}).
      */
     public void replacePayload(Object payload) throws Exception {
@@ -128,8 +130,8 @@ public final class PacketEvent {
         m.put("t", timestampMillis);
         m.put("conn", connection.toJson());
         m.put("frame", frame.toJson(maxHex));
-        m.put("packet", packet.toJson());
-        if (mod != null) m.put("mod", mod.toJson(treeDepth));
+        m.put("packet", packet.toJson(treeDepth));
+        if (mod != null) m.put("mod", mod.toJson());
         m.put("injected", injected);
         m.put("action", getAction());
         return m;

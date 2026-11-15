@@ -32,6 +32,8 @@ export interface PacketLayer {
   type?: string;
   javaClass?: string | null;
   owner?: string;
+  /** What the packet carries: a custom payload's decoded payload, else the packet itself. */
+  data?: unknown;
 }
 
 export interface ModLayer {
@@ -41,7 +43,6 @@ export interface ModLayer {
   javaClass?: string | null;
   roundTrip?: string;
   roundTripDetail?: string;
-  data?: unknown;
   codecClass?: string | null;
   protocol?: string;
   flow?: string;

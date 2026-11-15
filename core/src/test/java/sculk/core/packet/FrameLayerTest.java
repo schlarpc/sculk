@@ -35,19 +35,19 @@ class FrameLayerTest {
     void customPayloadSplitsIntoIdChannelAndData() {
         byte[] frame = customPayload(200, "waystones:sync", new byte[] {1, 2, 3});
         // 200 takes two VarInt bytes; the channel is one length byte and 14 characters.
-        assertEquals(List.of("packet.id[0+2]", "mod.channel[2+15]", "mod.data[17+3]"),
+        assertEquals(List.of("packet.id[0+2]", "mod.channel[2+15]", "packet.data[17+3]"),
                 describe(FrameLayer.spans(frame, "waystones:sync")));
     }
 
     @Test
-    void channelThatDoesNotMatchTheBytesLeavesABody() {
+    void channelThatDoesNotMatchTheBytesLeavesItAllData() {
         byte[] frame = customPayload(25, "other:channel", new byte[] {1});
-        assertEquals(List.of("packet.id[0+1]", "packet.body[1+15]"), describe(FrameLayer.spans(frame, "waystones:sync")));
+        assertEquals(List.of("packet.id[0+1]", "packet.data[1+15]"), describe(FrameLayer.spans(frame, "waystones:sync")));
     }
 
     @Test
-    void vanillaPacketsHaveIdAndBody() {
-        assertEquals(List.of("packet.id[0+1]", "packet.body[1+8]"), describe(FrameLayer.spans(new byte[9], null)));
+    void vanillaPacketsHaveIdAndData() {
+        assertEquals(List.of("packet.id[0+1]", "packet.data[1+8]"), describe(FrameLayer.spans(new byte[9], null)));
         assertEquals(List.of("packet.id[0+1]"), describe(FrameLayer.spans(new byte[] {7}, null)));
         assertEquals(List.of(), describe(FrameLayer.spans(null, null)));
         assertEquals(List.of(), describe(FrameLayer.spans(new byte[] {(byte) 0x80}, null)), "a cut-off id");

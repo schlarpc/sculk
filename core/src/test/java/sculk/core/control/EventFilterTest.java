@@ -18,12 +18,12 @@ class EventFilterTest {
         e.put("kind", "packet");
         e.put("conn", Map.of("id", 1, "side", "client", "remote", "local:1"));
         e.put("frame", Map.of("seq", 3, "dir", "inbound", "len", 1500, "hex", "0aff"));
-        e.put("packet", Map.of("id", 25, "type", "minecraft:update_recipes", "owner", "minecraft"));
+        e.put("packet", Map.of("id", 25, "type", "minecraft:update_recipes", "owner", "minecraft",
+                "data", Map.of("pos", Map.of("x", 12, "y", 64), "name", "../../evil")));
         e.put("mod", Map.of(
                 "channel", "waystones:sync",
                 "owner", "waystones",
-                "registeredVia", List.of("balm", "waystones"),
-                "data", Map.of("pos", Map.of("x", 12, "y", 64), "name", "../../evil")));
+                "registeredVia", List.of("balm", "waystones")));
         e.put("injected", false);
         e.put("action", "pass");
         e.put("note", null);
@@ -94,7 +94,7 @@ class EventFilterTest {
     @Test
     void containsAndMatches() {
         assertTrue(test("type contains recipes"));
-        assertTrue(test("mod.data contains \"../\""), "contains on an object searches its JSON");
+        assertTrue(test("packet.data contains \"../\""), "contains on an object searches its JSON");
         assertTrue(test("type matches \"recipe|chat\""));
         assertTrue(test("type ~ '^minecraft:'"));
         assertFalse(test("type matches '^chat'"));
@@ -102,8 +102,8 @@ class EventFilterTest {
 
     @Test
     void dottedPathsAndLists() {
-        assertTrue(test("mod.data.pos.x == 12"));
-        assertTrue(test("mod.data.pos.y > 60"));
+        assertTrue(test("packet.data.pos.x == 12"));
+        assertTrue(test("packet.data.pos.y > 60"));
         assertTrue(test("mod.registeredVia == waystones"), "a list matches when any element does");
         assertTrue(test("mod.registeredVia.0 == balm"));
         assertFalse(test("mod.registeredVia.1 == balm"));

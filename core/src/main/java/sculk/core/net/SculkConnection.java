@@ -154,7 +154,7 @@ public final class SculkConnection {
 
     /**
      * Sends a mod payload object (for example an edited copy of
-     * {@code e.mod.data}, see {@code sculk.with}) on {@code channel}, wrapped
+     * {@code e.packet.data}, see {@code sculk.with}) on {@code channel}, wrapped
      * in the right custom payload packet for the direction and side, through
      * the game's encoder (outbound) or straight to its handlers (inbound).
      */
