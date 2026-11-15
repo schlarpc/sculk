@@ -308,6 +308,21 @@ public final class ScriptApi implements AutoCloseable {
         return ScriptHost.jsTree(ObjectModel.toTree(ScriptHost.toJava(value), 6), scope);
     }
 
+    /**
+     * {@link #tree(Object)} with options: {@code depth} (default 6) and
+     * {@code nodes}, how many values the tree may hold (default
+     * {@link ObjectModel#TREE_NODES}, as in the event log), for a full view
+     * of something big. The live object is never cut; only its tree is.
+     */
+    public Object tree(Object value, Object options) {
+        int depth = 6, nodes = ObjectModel.TREE_NODES;
+        if (ScriptHost.toJava(options) instanceof Map<?, ?> o) {
+            if (o.get("depth") instanceof Number n) depth = n.intValue();
+            if (o.get("nodes") instanceof Number n) nodes = n.intValue();
+        }
+        return ScriptHost.jsTree(ObjectModel.toTree(ScriptHost.toJava(value), depth, nodes), scope);
+    }
+
     /** A copy of a record with one component replaced, for editing decoded payloads. */
     public Object with(Object record, String component, Object value) throws ReflectiveOperationException {
         return ObjectModel.withComponent(ScriptHost.toJava(record), component, ScriptHost.toJava(value));

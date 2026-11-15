@@ -149,7 +149,7 @@ const SCULK_API: Completion[] = [
   { label: "log", type: "method", detail: "(msg)", info: "Writes msg to the game log and a script_log event (this script's output pane)." },
   { label: "chat", type: "method", detail: "(msg)", info: "Shows msg to the player only: a local chat line in a game client (never sent to the server), the console in a dedicated server. A chat event." },
   { label: "schedule", type: "method", detail: "(ms, fn)", info: "Runs fn once after ms milliseconds, unless the script stops first." },
-  { label: "tree", type: "method", detail: "(obj)", info: "A plain object tree of any value: records, mod payloads, packets." },
+  { label: "tree", type: "method", detail: "(obj, [{depth, nodes}])", info: "A plain object tree of any value: records, mod payloads, packets. At most 4096 values unless nodes says more; a cut tree has $cut: true." },
   { label: "with", type: "method", detail: "(record, field, value)", info: "A copy of a record with one component replaced, for editing decoded payloads." },
   { label: "decoder", type: "method", detail: "(className, (obj, tree) => tree)", info: "Shows objects of a Java class (and subclasses) your way wherever sculk makes a tree: change tree in place or return a new one." },
   { label: "game", type: "property", info: "What packets have said about the game: game.entity(id) {id, type, uuid, spawnPos, name, self}, game.menu(containerId) {containerId, type, title}, game.menus(), game.summary(). Each takes an optional connection." },

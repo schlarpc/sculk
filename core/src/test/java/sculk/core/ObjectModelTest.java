@@ -150,6 +150,11 @@ class ObjectModelTest {
         String json = sculk.core.log.EventLog.toJson(ObjectModel.toTree(cube, 8));
         assertTrue(json.length() < ObjectModel.TREE_NODES * 12, "bounded: " + json.length());
         assertTrue(json.contains(ObjectModel.CUT));
+        record Big(Object[][][] cube) {}
+        assertEquals(true, ((Map<?, ?>) ObjectModel.toTree(new Big(cube), 8)).get("$cut"), "a cut tree says so");
+        assertEquals(null, ((Map<?, ?>) ObjectModel.toTree(new Big(new Object[1][1][1]), 8)).get("$cut"));
+        assertTrue(sculk.core.log.EventLog.toJson(ObjectModel.toTree(cube, 8, 300_000)).indexOf(ObjectModel.CUT) < 0,
+                "a bigger budget shows it all");
         // ...and the budget is per tree.
         assertEquals("stone", ((List<?>) ((List<?>) ((List<?>) ObjectModel.toTree(cube, 8)).get(0)).get(0)).get(0));
     }

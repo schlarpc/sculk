@@ -62,7 +62,8 @@ final class McpHandler {
             The `sculk` global offers: on('packet'|'connection', [filter], fn) (filter: the sculk_events filter \
             language, checked before the script runs), connections(), connection(id), payloadTypes(), \
             emit(obj) (a `script` event), log(msg) (a `script_log` event), chat(msg) (a chat line only the player sees; \
-            a `chat` event), schedule(ms, fn), tree(obj), decoder(className, (obj, tree) => tree) (show a Java class's \
+            a `chat` event), schedule(ms, fn), tree(obj, [{depth, nodes}]) (a plain view; logged trees stop at 4096 \
+            values and get "$cut": true, the live object is whole), decoder(className, (obj, tree) => tree) (show a Java class's \
             objects your way wherever sculk makes a tree, e.g. packet.data: for mod data kept as raw bytes; change \
             tree in place or return a new one), reader(bytes) (reads as the game does: varInt varLong bool i8 u8 i16 u16 \
             i32 i64 f32 f64 string uuid bytes(n) byteArray rest skip readable, and nbt itemStack component identifier \

@@ -186,6 +186,15 @@ would write them; it also applies to map keys:
 | text component | JSON text (`{"text": ..., "color": ...}`, or a plain string) |
 | byte array, Netty `ByteBuf` (core) | `{"$bytes": hex}` (of a buffer's readable bytes), with `$len` when the hex is cut short (1 KB per array, 8 KB per tree) and `$text` holding its runs of 4+ printable characters, one per line |
 
+Beyond the renderers, core shows Guava multimaps and tables as their map
+views (`asMap()`, `rowMap()`) rather than their internals, a lambda as
+`"(lambda) Interface"` rather than what it captured, and JDK classes
+(`java.`, `javax.`, `jdk.`, `sun.`, `com.sun.`) as their string. One tree
+holds at most 4096 values and 8 KB of hex; past that, values show as `…`
+and the tree's top gets `"$cut": true`, so a filter or reader can tell
+it is partial (`packet.data.$cut`). Only the view is cut: scripts hold the
+whole live object, and `sculk.tree(x, {nodes, depth})` makes a bigger view.
+
 The tree is a view: types are lost (an NBT byte and int are both
 numbers). Scripts keep the live objects: `e.packet.data.tag().copy()` is the
 game's own `CompoundTag`. A renderer that throws falls back to

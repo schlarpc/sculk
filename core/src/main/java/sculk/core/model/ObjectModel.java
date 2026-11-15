@@ -41,13 +41,20 @@ public final class ObjectModel {
     /** What stands for the values a tree had no room left for. */
     public static final String CUT = "…";
 
-    /** Hex bytes, then values, left in the tree being built on this thread; null outside {@link #toTree}. */
+    /** Hex bytes left, values left, and 1 once something was cut, for the tree being built on this thread; null outside {@link #toTree}. */
     private static final ThreadLocal<int[]> BYTES_LEFT = new ThreadLocal<>();
 
     /** True once the tree being built has used up its values: callers stop adding and leave a {@link #CUT}. */
     private static boolean full() {
         int[] left = BYTES_LEFT.get();
         return left != null && left[1] <= 0;
+    }
+
+    /** {@link #CUT}, noting that this tree lost values to its budget. */
+    private static String cut() {
+        int[] left = BYTES_LEFT.get();
+        if (left != null) left[2] = 1;
+        return CUT;
     }
 
     /**
@@ -123,10 +130,26 @@ public final class ObjectModel {
      * searched.
      */
     public static Object toTree(Object value, int depth) {
+        return toTree(value, depth, TREE_NODES);
+    }
+
+    /**
+     * {@link #toTree(Object, int)} with room for {@code nodes} values. A
+     * tree that ran out has {@code "$cut": true} at its top (when its top
+     * is an object), so readers and filters can tell it is partial.
+     */
+    public static Object toTree(Object value, int depth, int nodes) {
         if (BYTES_LEFT.get() != null) return walk(value, depth);
-        BYTES_LEFT.set(new int[] {TREE_BYTES, TREE_NODES});
+        int[] left = {TREE_BYTES, Math.max(1, nodes), 0};
+        BYTES_LEFT.set(left);
         try {
-            return walk(value, depth);
+            Object tree = walk(value, depth);
+            if (left[2] != 0 && tree instanceof Map<?, ?> m) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> top = (Map<String, Object>) m;
+                top.put("$cut", true);
+            }
+            return tree;
         } finally {
             BYTES_LEFT.remove();
         }
@@ -134,7 +157,7 @@ public final class ObjectModel {
 
     private static Object walk(Object value, int depth) {
         int[] left = BYTES_LEFT.get();
-        if (left != null && left[1]-- <= 0) return CUT;
+        if (left != null && left[1]-- <= 0) return cut();
         if (!DECODERS.isEmpty() && value != null && !(value instanceof Number || value instanceof Boolean
                 || value instanceof CharSequence || value instanceof Map<?, ?> || value instanceof Collection<?>)) {
             Decoder d = decoderFor(value.getClass());
@@ -181,7 +204,7 @@ public final class ObjectModel {
             int n = java.lang.reflect.Array.getLength(value);
             for (int i = 0; i < Math.min(n, MAX_ELEMENTS); i++) {
                 if (full()) {
-                    out.add(CUT);
+                    out.add(cut());
                     break;
                 }
                 out.add(toTree(java.lang.reflect.Array.get(value, i), depth - 1));
@@ -193,7 +216,7 @@ public final class ObjectModel {
             for (Object o : c) {
                 if (out.size() >= MAX_ELEMENTS) break;
                 if (full()) {
-                    out.add(CUT);
+                    out.add(cut());
                     break;
                 }
                 out.add(toTree(o, depth - 1));
@@ -205,7 +228,7 @@ public final class ObjectModel {
             for (Map.Entry<?, ?> e : m.entrySet()) {
                 if (out.size() >= MAX_ELEMENTS) break;
                 if (full()) {
-                    out.put(CUT, CUT);
+                    out.put(CUT, cut());
                     break;
                 }
                 out.put(key(e.getKey()), toTree(e.getValue(), depth - 1));
