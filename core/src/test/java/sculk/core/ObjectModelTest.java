@@ -23,6 +23,33 @@ class ObjectModelTest {
     }
 
     @Test
+    void bytesShowTheirTextAndLengthWhenCut() {
+        byte[] terminal = "Up to 8 item IDs\u00f0\u00f0ab\u00f0> diamond_block   ".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+        Map<?, ?> t = (Map<?, ?>) ObjectModel.toTree(terminal, 2);
+        assertEquals("Up to 8 item IDs\n> diamond_block   ", t.get("$text"), "runs of 4+ printable characters, one per line");
+        assertEquals(null, t.get("$len"), "not cut");
+
+        Map<?, ?> big = (Map<?, ?>) ObjectModel.toTree(new byte[5000], 2);
+        assertEquals(5000, big.get("$len"));
+        assertEquals(ObjectModel.MAX_BYTES * 2 + 3, ((String) big.get("$bytes")).length());
+        assertEquals(null, big.get("$text"));
+    }
+
+    @Test
+    void oneTreeShowsOnlySoManyBytesInAll() {
+        List<byte[]> many = new java.util.ArrayList<>();
+        for (int i = 0; i < 20; i++) many.add(new byte[2048]);
+        List<?> tree = (List<?>) ObjectModel.toTree(many, 3);
+        int hex = 0;
+        for (Object o : tree) hex += ((String) ((Map<?, ?>) o).get("$bytes")).replace("...", "").length();
+        assertEquals(ObjectModel.TREE_BYTES * 2, hex);
+        assertEquals("...", ((Map<?, ?>) tree.get(19)).get("$bytes"));
+        assertEquals(2048, ((Map<?, ?>) tree.get(19)).get("$len"));
+        // ...and the budget is per tree: the next one starts afresh.
+        assertEquals(5000, ((Map<?, ?>) ObjectModel.toTree(new byte[5000], 2)).get("$len"));
+    }
+
+    @Test
     void canonicalFormIgnoresCollectionOrder() {
         assertEquals(
                 ObjectModel.canonical(new Outer(1, List.of(new Inner("a", null), new Inner("b", null)))),

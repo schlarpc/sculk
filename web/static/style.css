@@ -448,6 +448,7 @@ button.link:hover { color: var(--glow-hot); background: none; }
 .j-null { color: var(--text-faint); font-style: italic; }
 .j-class { color: var(--glow-mid); }
 .j-bytes { color: var(--text-dim); overflow-wrap: anywhere; }
+.j-bytes-text { display: block; white-space: pre-wrap; color: var(--text); margin-top: 2px; }
 .j-node[open] > summary .j-close { display: none; }
 
 .hexdump { font-size: 12px; text-shadow: none; }

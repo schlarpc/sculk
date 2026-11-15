@@ -19,6 +19,21 @@ import sculk.core.util.Bytes;
 public final class ObjectModel {
     /** Elements shown per collection, map or array; the rest are left out. */
     public static final int MAX_ELEMENTS = 64;
+    /** Bytes shown as hex per byte array or buffer. */
+    public static final int MAX_BYTES = 1024;
+    /**
+     * Bytes shown as hex in one whole tree; past it, byte arrays show only
+     * their length (and text). Keeps packets made of many buffers (chunk
+     * light data) from logging tens of kilobytes each.
+     */
+    public static final int TREE_BYTES = 8192;
+    /** Characters of {@code $text} per byte array. */
+    public static final int MAX_TEXT = 2048;
+    /** Shortest run of printable ASCII that {@code $text} keeps, as {@code strings(1)} does. */
+    static final int MIN_RUN = 4;
+
+    /** Hex bytes left in the tree being built on this thread; null outside {@link #toTree}. */
+    private static final ThreadLocal<int[]> BYTES_LEFT = new ThreadLocal<>();
 
     /**
      * Game-specific views of game types (NBT, item stacks, identifiers,
@@ -45,17 +60,34 @@ public final class ObjectModel {
         renderer = r;
     }
 
+    /**
+     * The tree for {@code value}, at most {@code depth} objects deep. Byte
+     * arrays and buffers become {@code {"$bytes": hex}}, with {@code $len}
+     * when the hex is cut short and {@code $text} holding their runs of
+     * printable text (one per line), so text kept as bytes can be read and
+     * searched.
+     */
     public static Object toTree(Object value, int depth) {
+        if (BYTES_LEFT.get() != null) return walk(value, depth);
+        BYTES_LEFT.set(new int[] {TREE_BYTES});
+        try {
+            return walk(value, depth);
+        } finally {
+            BYTES_LEFT.remove();
+        }
+    }
+
+    private static Object walk(Object value, int depth) {
         if (value == null || value instanceof Number || value instanceof Boolean || value instanceof CharSequence) {
             return value instanceof CharSequence cs ? cs.toString() : value;
         }
         if (value instanceof Character || value instanceof Enum<?>) return value.toString();
-        if (value instanceof byte[] bytes) return Map.of("$bytes", Bytes.hex(bytes, 1024));
+        if (value instanceof byte[] bytes) return bytes(bytes, bytes.length);
         // Payloads that keep a raw buffer (FriendlyByteBuf and the like): its readable bytes.
         if (value instanceof io.netty.buffer.ByteBuf buf) {
-            byte[] bytes = new byte[Math.min(buf.readableBytes(), 1024)];
+            byte[] bytes = new byte[Math.min(buf.readableBytes(), 64 * 1024)];
             buf.getBytes(buf.readerIndex(), bytes);
-            return Map.of("$bytes", Bytes.hex(bytes, 1024));
+            return bytes(bytes, buf.readableBytes());
         }
         if (value instanceof Optional<?> opt) return opt.map(v -> toTree(v, depth)).orElse(null);
         Renderer r = renderer;
@@ -116,6 +148,38 @@ public final class ObjectModel {
             out.put("$reflectionError", e.toString());
         }
         return out;
+    }
+
+    /** {@code bytes}, the first bytes of {@code len}, as {@code {$bytes, $len?, $text?}}. */
+    private static Map<String, Object> bytes(byte[] bytes, int len) {
+        int[] left = BYTES_LEFT.get();
+        int shown = Math.min(Math.min(bytes.length, MAX_BYTES), left == null ? MAX_BYTES : Math.max(left[0], 0));
+        if (left != null) left[0] -= shown;
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("$bytes", shown < len ? Bytes.hex(java.util.Arrays.copyOf(bytes, shown)) + "..." : Bytes.hex(bytes));
+        if (shown < len) out.put("$len", len);
+        String text = text(bytes);
+        if (text != null) out.put("$text", text);
+        return out;
+    }
+
+    /** The runs of at least {@link #MIN_RUN} printable ASCII characters in {@code bytes}, one per line, or null if none. */
+    static String text(byte[] bytes) {
+        StringBuilder out = new StringBuilder();
+        int start = -1;
+        for (int i = 0; i <= bytes.length && out.length() < MAX_TEXT; i++) {
+            boolean printable = i < bytes.length && bytes[i] >= 0x20 && bytes[i] < 0x7f;
+            if (printable && start < 0) start = i;
+            if (!printable && start >= 0) {
+                if (i - start >= MIN_RUN) {
+                    if (out.length() > 0) out.append('\n');
+                    out.append(new String(bytes, start, i - start, java.nio.charset.StandardCharsets.US_ASCII));
+                }
+                start = -1;
+            }
+        }
+        if (out.length() == 0) return null;
+        return out.length() > MAX_TEXT ? out.substring(0, MAX_TEXT) + "..." : out.toString();
     }
 
     /** A map key as a string: the renderer's view when that is a string (an identifier, say), else {@code toString}. */

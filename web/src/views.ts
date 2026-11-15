@@ -8,7 +8,8 @@ import { shortClass, type Span } from "./event";
  *
  * Understands the object trees the engine makes of Java objects
  * (ObjectModel.java): {@code $class} becomes a label on the brace (full name
- * on hover) rather than a key, {@code $bytes} shows as hex, and an object
+ * on hover) rather than a key, {@code $bytes} shows as hex (with its
+ * {@code $len} when cut and its {@code $text} below), and an object
  * that could not be read ({@code $string}, {@code $reflectionError}) shows
  * as its string.
  *
@@ -25,10 +26,15 @@ export function jsonTree(value: unknown, open = 2, path: string | null = null, d
   };
   if (!Array.isArray(value)) {
     const obj = value as Record<string, unknown>;
-    if (typeof obj.$bytes === "string" && Object.keys(obj).length === 1) {
+    if (typeof obj.$bytes === "string" && Object.keys(obj).every((k) => k === "$bytes" || k === "$len" || k === "$text")) {
       const span = el("span", "j-bytes", obj.$bytes);
-      span.prepend(el("span", "j-class", "bytes "));
-      return span;
+      span.prepend(el("span", "j-class", typeof obj.$len === "number" ? `bytes (${obj.$len}) ` : "bytes "));
+      if (typeof obj.$text !== "string") return span;
+      const both = el("span");
+      const text = el("span", "j-bytes-text", obj.$text);
+      text.title = "printable text in these bytes";
+      both.append(span, text);
+      return both;
     }
     if (typeof obj.$string === "string") {
       const span = el("span", "j-str", JSON.stringify(obj.$string));
