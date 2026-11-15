@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "sculktest",
+  "version": "0.0.0",
+  "name": "Sculk integration test mod",
+  "description": "Sends and checks payloads with NBT, item stacks and the like, for sculk's integration test.",
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["sculktest.fabric.SculkTestFabric"],
+    "client": ["sculktest.fabric.SculkTestFabricClient"]
+  },
+  "depends": { "fabric-api": "*" }
+}

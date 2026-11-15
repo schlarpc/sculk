@@ -6,11 +6,17 @@
 // naturally produced. Frame layout in every supported version:
 // [packet id: 1 byte][x: f64][y: f64][z: f64][on-ground flags: 1 byte].
 //
+// It also rewrites, in flight, the sculktest Report the client's test mod
+// sends back about the edited Sink that server.js injects: the server's test
+// mod must log the replaced note.
+//
 // Event-driven rather than timed: slow (software-rendered) clients can take a
 // while after joining before they send their first movement packet.
 let joined = false;
 let scheduled = false;
 let finished = false;
+let moved = false;    // the movement injection is done (or skipped)
+let replaced = false; // the report replacement is done
 
 const isMove = e => e.dir === 'outbound' && e.packet.state === 'play' && /move_player_pos$|MovePlayerPacket\$Pos$/.test(e.type);
 
@@ -41,6 +47,10 @@ function finish(delayMillis) {
   sculk.schedule(delayMillis, () => sculk.emit({ step: 'done' }));
 }
 
+function maybeFinish() {
+  if (moved && replaced) finish(4000);
+}
+
 sculk.on('packet', e => {
   if (!joined && e.dir === 'inbound' && e.packet.state === 'play') {
     joined = true;
@@ -48,8 +58,8 @@ sculk.on('packet', e => {
     sculk.chat('integ chat check'); // integ.py looks for it in the client's own chat log
     sculk.schedule(2000, clickSculkButton);
     sculk.schedule(90000, () => {
-      if (scheduled) return;
-      sculk.emit({ step: 'client_inject_skipped', reason: 'no move packet within 90s of joining' });
+      if (!scheduled) sculk.emit({ step: 'client_inject_skipped', reason: 'no move packet within 90s of joining' });
+      if (!replaced) sculk.emit({ step: 'payload_replace_skipped', reason: 'no edited sink report within 90s of joining' });
       finish(0);
     });
   }
@@ -58,8 +68,17 @@ sculk.on('packet', e => {
     const move = e;
     sculk.schedule(1000, () => {
       injectMove(move);
-      finish(4000);
+      moved = true;
+      maybeFinish();
     });
+  }
+  // The test mod's report about the sink server.js edited: its note starts "edited".
+  if (!replaced && e.dir === 'outbound' && e.mod && e.mod.javaClass === 'sculktest.Report'
+      && String(e.mod.data.note()).indexOf('edited') === 0) {
+    replaced = true;
+    e.replacePayload(sculk.with(e.mod.data, 'note', 'replaced by client script'));
+    sculk.emit({ step: 'payload_replaced', channel: e.mod.channel });
+    maybeFinish();
   }
 });
 

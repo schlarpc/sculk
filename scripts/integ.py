@@ -249,9 +249,154 @@ def check(server, client, outs=None, stress=False):
                 arrived and arrived[0]["packet"]["type"] == inj[0]["data"]["type"],
                 f"{len(arrived)} matching frames")
 
+    sculktest_check(r, server, client, outs, pk, mod, dir_, script)
     if stress:
         stress_check(r, server, client, pk, mod, dir_, hex_)
     return r
+
+
+# ---------------------------------------------------------------- sculktest
+
+# What sculk must show for the payload the test mod sends (sculktest.Expected,
+# platforms/shared/mc-*/testmod). The NBT, positions, identifiers, text and
+# primitives are the same tree on every platform; item stacks differ by era
+# (components from 1.20.5, an NBT tag before), so ITEM_CHECKS looks for
+# their parts wherever they sit.
+LMIN, LMAX = -2**63, 2**63 - 1
+IMIN, IMAX = -2**31, 2**31 - 1
+EXPECTED_TAG = {
+    "boolean": 1, "byte": -128, "short": -32768, "int": IMAX, "long": LMIN,
+    "float": 0.15625, "double": -1e300, "string": "ünïcödé ☃ 𝄞",
+    "bytes": {"$bytes": "ff00017f"}, "ints": [IMIN, 0, IMAX], "longs": [LMIN, 0, LMAX],
+    "strings": ["a", "b", "c"], "compounds": [{"k": 1}, {"k": 2}], "lists": [[1, 2], [3]],
+    "nested": {"a": {"b": {"c": "deep"}}}, "empty_compound": {}, "empty_list": [],
+}
+EXPECTED_SINK = {
+    "tag": EXPECTED_TAG,
+    "pos": {"x": -30000000, "y": -64, "z": 29999999},
+    "uuid": "0badc0de-5c01-4cee-8000-00000000beef",
+    "id": "sculktest:thing/with_path",
+    "text": {"text": "Hello, ", "bold": True, "extra": [{"text": "sculk", "color": "dark_aqua"}]},
+    "varInt": -1, "varLong": LMIN,
+    "unicode": "ünïcödé ☃ 𝄞 \u0000 end",
+    "present": "here", "absent": None, "mode": "GAMMA",
+    "blob": {"$bytes": bytes(i & 0xFF for i in range(300)).hex()},
+    "counts": {"zeta": 26, "alpha": 1, "mid": 13},
+}
+
+
+def find(tree, pred):
+    """Whether any (key, value) pair anywhere in a tree satisfies pred."""
+    if isinstance(tree, dict):
+        return any(pred(k, v) or find(v, pred) for k, v in tree.items())
+    if isinstance(tree, list):
+        return any(find(v, pred) for v in tree)
+    return False
+
+
+def text_of(v):
+    return json.dumps(v, ensure_ascii=False)
+
+
+def js_numbers(tree):
+    """A tree with integers as a JavaScript number holds them (doubles: exact only up to 2^53)."""
+    if isinstance(tree, dict):
+        return {k: js_numbers(v) for k, v in tree.items()}
+    if isinstance(tree, list):
+        return [js_numbers(v) for v in tree]
+    if isinstance(tree, int) and not isinstance(tree, bool) and abs(tree) > 2**53:
+        return float(tree)
+    return tree
+
+
+def sink_problems(data, js=False):
+    """How a decoded Sink tree differs from the expected one; empty when it matches."""
+    if not isinstance(data, dict):
+        return [f"not decoded: {str(data)[:200]}"]
+    expected = js_numbers(EXPECTED_SINK) if js else EXPECTED_SINK
+    out = [f"{k}: {text_of(data.get(k))[:300]} != {text_of(v)[:300]}"
+           for k, v in expected.items() if data.get(k) != v]
+    tag = data.get("tag")
+    if isinstance(tag, dict) and list(tag) != sorted(tag):
+        out.append(f"tag keys not sorted: {list(tag)}")
+    if isinstance(data.get("counts"), dict) and list(data["counts"]) != ["zeta", "alpha", "mid"]:
+        out.append(f"counts lost wire order: {list(data['counts'])}")
+    items = data.get("items")
+    if not isinstance(items, list) or len(items) != 3:
+        return out + [f"items: {text_of(items)[:300]}"]
+    sword, stone, empty = items
+    want = [(sword, "item", "minecraft:diamond_sword"), (sword, "count", 1), (stone, "item", "minecraft:stone"),
+            (stone, "count", 64), (empty, "count", 0)]
+    out += [f"items: {k} {text_of(it.get(k))} != {text_of(v)}" for it, k, v in want if it.get(k) != v]
+    # The sword's name, enchantment and custom data, wherever the era keeps them.
+    if "Sculk Blade" not in text_of(sword):
+        out.append("items: sword lost its name")
+    if not find(sword, lambda k, v: k in ("minecraft:sharpness", "id") and v in (5, "minecraft:sharpness")):
+        out.append("items: sword lost sharpness")
+    if not find(sword, lambda k, v: k == "owner" and v == "sculktest"):
+        out.append("items: sword lost its custom data")
+    return out
+
+
+def sculktest_check(r, server, client, outs, pk, mod, dir_, script):
+    """A test mod's payloads with NBT, item stacks and more: decoded exactly, edited by scripts, accepted by the mod."""
+    cls = lambda e, name: mod(e).get("javaClass") == "sculktest." + name
+    types = [e["mod"] for e in server if e["kind"] == "payload_type" and e["mod"]["owner"] == "sculktest"]
+    r.check("server registry lists sculktest payloads", types, len(types))
+
+    sinks_in = [e for e in pk(client) if dir_(e) == "inbound" and cls(e, "Sink")]
+    natural = [e for e in sinks_in if not mod(e)["data"].get("tag", {}).get("edited")] if sinks_in else []
+    r.check("client received a sculktest sink", natural)
+    if natural:
+        problems = sink_problems(mod(natural[0])["data"])
+        r.check("sink decoded exactly: NBT of every type, items, pos, uuid, text, varints, optionals, bytes",
+                not problems, problems[:6])
+    test_events = [e for e in pk(server) + pk(client) if mod(e).get("owner") == "sculktest"]
+    not_ok = [(dir_(e), mod(e)["javaClass"], mod(e)["roundTrip"]) for e in test_events if mod(e)["roundTrip"] != "ok"]
+    r.check(f"all {len(test_events)} sculktest payloads re-encode byte-for-byte", test_events and not not_ok, not_ok[:3])
+
+    # Scripts hold numbers as JavaScript does: longs past 2^53 arrive rounded.
+    trees = script(server, "sink_tree")
+    script_problems = [p for p in sink_problems(js_numbers(trees[0]["data"]["tree"]), js=True)] if trees else ["no sink_tree step"]
+    r.check("a script sees the sink as the same tree", not script_problems, script_problems[:4])
+
+    # server.js edits the NBT through the game's API and injects the copy as a payload object.
+    r.check("server script injected an edited sink", script(server, "sink_injected"))
+    edited = [e for e in sinks_in if mod(e)["data"].get("tag", {}).get("edited") == "by server script"]
+    r.check("client decoded the edited sink", edited and mod(edited[0])["data"]["tag"].get("int") == 7,
+            f"{len(sinks_in)} sinks in")
+    if edited:
+        rest = {k: v for k, v in mod(edited[0])["data"].items() if k != "tag"}
+        problems = [p for p in sink_problems({**rest, "tag": EXPECTED_TAG}) if not p.startswith("tag")]
+        r.check("editing the NBT left the other fields alone", not problems, problems[:3])
+
+    # The test mods' own verdicts, from the game logs.
+    if outs is not None:
+        lines = lambda text: [l.split("[sculktest] ", 1)[1].strip() for l in text.splitlines() if "[sculktest] " in l]
+        server_lines, client_lines = lines(outs[0]), lines(outs[1])
+        r.check("client mod: the natural sink matched field for field",
+                "client got sink: matched=true differences=[] edited=" in client_lines, client_lines[:4])
+        r.check("client mod: the injected sink arrived with the script's edits",
+                "client got sink: matched=false differences=[tag] edited=by server script" in client_lines, client_lines[:4])
+        r.check("server mod: the client's echo of the natural sink matched",
+                "server got report: note=natural matched=true differences=[] echoDifferences=[]" in server_lines,
+                server_lines[:4])
+        r.check("server mod: got the report the client script replaced",
+                "server got report: note=replaced by client script matched=false differences=[tag] echoDifferences=[tag]"
+                in server_lines, server_lines[:4])
+
+    # client.js replaces the mod's report in flight; the server decodes what it sent.
+    r.check("client script replaced a report", script(client, "payload_replaced"),
+            json.dumps(script(client, "payload_replace_skipped")))
+    reports = [e for e in pk(server) if dir_(e) == "inbound" and cls(e, "Report")]
+    natural_reports = [e for e in reports if mod(e)["data"].get("note") == "natural"]
+    r.check("server decoded the natural report and its echoed sink",
+            natural_reports and not sink_problems(mod(natural_reports[0])["data"].get("echo")),
+            sink_problems(mod(natural_reports[0])["data"].get("echo"))[:4] if natural_reports else len(reports))
+    r.check("server decoded the replaced report",
+            any(mod(e)["data"].get("note") == "replaced by client script"
+                and mod(e)["data"]["echo"]["tag"].get("edited") == "by server script" for e in reports),
+            [mod(e)["data"].get("note") for e in reports])
 
 
 def stress_check(r, server, client, pk, mod, dir_, hex_):

@@ -11,6 +11,15 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 apply from: rootProject.file('gradle/platform-common.gradle')
 
+// The integration test mod (sculktest): shared payloads and logic from
+// platforms/shared, Forge glue from src/testmod. Always compiled, loaded in
+// dev runs only with -Psculk.integ.
+sourceSets {
+    testmod {
+        java.srcDirs = ['src/testmod/java', rootProject.file("platforms/shared/mc-${shared_mc}/testmod/java")]
+    }
+}
+
 legacyForge {
     version = "${minecraft_version}-${forge_version}"
     parchment {
@@ -34,8 +43,11 @@ legacyForge {
     }
     mods {
         "${mod_id}" { sourceSet sourceSets.main }
+        if (sculkInteg) sculktest { sourceSet sourceSets.testmod }
     }
 }
+
+legacyForge.addModdingDependenciesTo(sourceSets.testmod)
 
 mixin {
     add sourceSets.main, "${mod_id}.refmap.json"

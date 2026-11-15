@@ -11,7 +11,22 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 
 apply from: rootProject.file('gradle/platform-common.gradle')
 
+// The integration test mod (sculktest): shared payloads and logic from
+// platforms/shared, Fabric glue from src/testmod. Always compiled, loaded in
+// dev runs only with -Psculk.integ.
+sourceSets {
+    testmod {
+        java.srcDirs = ['src/testmod/java', rootProject.file("platforms/shared/mc-${shared_mc}/testmod/java")]
+        compileClasspath += sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
+}
+
 loom {
+    mods {
+        "${mod_id}" { sourceSet sourceSets.main }
+        if (sculkInteg) sculktest { sourceSet sourceSets.testmod }
+    }
     runs {
         client {
             runDir = 'run/client'
@@ -22,6 +37,7 @@ loom {
         }
         configureEach {
             sculkRunProperties.each { k, v -> property k, v }
+            if (sculkInteg) source sourceSets.testmod
         }
     }
 }
