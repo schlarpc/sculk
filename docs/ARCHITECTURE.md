@@ -136,7 +136,7 @@ zero-length frame that every supported decoder ignores.
 
 | Target | Names at runtime | Consequence |
 |---|---|---|
-| Forge 1.20.1 | Mojang class names, SRG member names | Mixins are remapped through a refmap (handled by the build). The script name bridge needs SRG tables. |
+| Forge 1.18.2 – 1.20.1 | Mojang class names, SRG member names | Mixins are remapped through a refmap (handled by the build). The script name bridge needs SRG tables. |
 | NeoForge 1.21.1 | Mojang | none |
 | Fabric ≤ 1.21.11 (sculk: 1.21.1) | Intermediary | Loom's remapping plugin (`net.fabricmc.fabric-loom-remap`) builds against Mojang names and remaps the jar. Dev runs use Mojang names. Trees of types the renderer does not know show `class_1234`/`field_5678` names in production; the script name bridge needs intermediary tables. |
 | All of 26.x | Unobfuscated | none |
@@ -151,7 +151,7 @@ mapping tables.
 "Codec" below is the game's own `PacketDecoder`/`PacketEncoder` instance,
 which carries the protocol state.
 
-| Method | Era C (1.21.1 and 26.3, both loaders) | Era A (Forge 1.20.1) |
+| Method | Era C (1.21.1 and 26.3, both loaders) | Era A (Forge 1.18.2, 1.19.2, 1.20.1) |
 |---|---|---|
 | `describe(packet, codec)` | `ProtocolInfo` from the codec; payload already decoded | protocol from the packet class; payload bytes decoded via `payloadCodec` |
 | `encode` / `decode` | `ProtocolInfo.codec()` | `ConnectionProtocol` + `Packet.write` / `createPacket` (state from the channel) |
@@ -209,7 +209,9 @@ Two more methods face the player rather than the wire:
   action). A click reaches the client command on Fabric (Fabric API hooks
   `sendUnattendedCommand`) and NeoForge (`sendUnsignedCommand`); Forge
   1.20.1 sends clicks straight to the server, so a client mixin there hands
-  `sculk` commands to `ClientCommandHandler` first.
+  `sculk` commands to `ClientCommandHandler` first (1.19.2 clicks go
+  through `LocalPlayer.commandUnsigned` instead; 1.18.2 already offers
+  clicks to client commands, so it needs no mixin).
 
 ### Attribution
 
@@ -643,6 +645,8 @@ web/                      control server web UI: TypeScript (src/), static files
 gradle/platform-common.gradle
                           applied by every platform: compiles core in, embeds relocated libs and the web UI
 platforms/
+  forge-1.18.2/           MDG Legacy, as 1.20.1; joins with --server/--port (no Quick Play before 1.20)
+  forge-1.19.2/           MDG Legacy, as 1.20.1; joins with --server/--port
   forge-1.20.1/           MDG Legacy, SRG reobf + mixin refmap, Java 17
   neoforge-1.21.1/        MDG, Java 21
   fabric-1.21.1/          Loom (remapping: Mojang names in source, intermediary jar), Java 21
@@ -720,7 +724,8 @@ Done:
 - Unit, smoke and real-mod integration tests for all targets, plus a test
   mod whose NBT, item stack and other payloads must decode to known trees
   and survive script edits in both directions.
-- Targets: Forge 1.20.1, NeoForge 1.21.1 and 26.3, Fabric 1.21.1 and 26.3.
+- Targets: Forge 1.18.2, 1.19.2 and 1.20.1, NeoForge 1.21.1 and 26.3,
+  Fabric 1.21.1 and 26.3.
 - Game types (NBT, item stacks, identifiers, ...) shown as readable trees;
   `injectPayload` / `replacePayload` for edited payload objects.
 

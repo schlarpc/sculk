@@ -15,7 +15,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for goals, design and roadmap.
 
 ## Status
 
-Early, but working on all five targets: capture, drop, replace and inject
+Early, but working on every target below: capture, drop, replace and inject
 frames and packets in both directions on both sides; attribute payloads to
 the mod that owns them; decode them with the mod's own codec; script all of
 it in JavaScript; and drive it live from a local control server (CLI, web UI,
@@ -25,6 +25,8 @@ next.
 
 | Target | Loader | Minecraft | Java | Why |
 |---|---|---|---|---|
+| `platforms/forge-1.18.2` | Forge 40 | 1.18.2 | 17 | long-lived modpack version |
+| `platforms/forge-1.19.2` | Forge 43 | 1.19.2 | 17 | long-lived modpack version |
 | `platforms/forge-1.20.1` | Forge 47 | 1.20.1 | 17 | largest modpack install base |
 | `platforms/neoforge-1.21.1` | NeoForge 21.1 | 1.21.1 | 21 | largest active mod ecosystem |
 | `platforms/fabric-1.21.1` | Fabric 0.20 | 1.21.1 | 21 | the same mods' Fabric builds; intermediary names |

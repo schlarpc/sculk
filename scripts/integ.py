@@ -116,8 +116,10 @@ def seed_run_dirs(run: Path, port: int):
     """Writes server.properties (offline, flat, on `port`) and client options for a quiet headless join."""
     (run / "server").mkdir(parents=True, exist_ok=True)
     (run / "server" / "eula.txt").write_text("eula=true\n")
+    # Plain "flat", not "minecraft:flat": 1.18.2 has no namespaced world
+    # presets and would quietly generate full terrain for the latter.
     (run / "server" / "server.properties").write_text(
-        f"server-port={port}\nonline-mode=false\nlevel-type=minecraft\\:flat\n"
+        f"server-port={port}\nonline-mode=false\nlevel-type=flat\n"
         "spawn-protection=0\nenforce-secure-profile=false\nsync-chunk-writes=false\n"
         # Newer versions whitelist by default.
         "white-list=false\nenforce-whitelist=false\n")

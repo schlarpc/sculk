@@ -22,8 +22,10 @@ const isMove = e => e.dir === 'outbound' && e.packet.state === 'play' && /move_p
 
 // Does what a click on one of sculk's chat buttons does: the game's
 // RUN_COMMAND handling calls the connection's unattended (26.3) or unsigned
-// (1.20.1, 1.21.1) command method. A client command must catch it there, or
-// it goes to the server, which has no /sculk. integ.py checks for the mark.
+// (1.20.1, 1.21.1) command method, the player's commandUnsigned (1.19.2), or
+// on 1.18.2 Screen.sendMessage, which offers it to Forge's client commands
+// first. A client command must catch it there, or it goes to the server,
+// which has no /sculk. integ.py checks for the mark.
 function clickSculkButton() {
   try {
     const mc = Packages.net.minecraft.client.Minecraft.getInstance();
@@ -31,7 +33,11 @@ function clickSculkButton() {
       try {
         const conn = mc.player.connection;
         if (typeof conn.sendUnattendedCommand === 'function') conn.sendUnattendedCommand('sculk mark clicked', null);
-        else conn.sendUnsignedCommand('sculk mark clicked');
+        else if (typeof conn.sendUnsignedCommand === 'function') conn.sendUnsignedCommand('sculk mark clicked');
+        else if (typeof mc.player.commandUnsigned === 'function') mc.player.commandUnsigned('sculk mark clicked');
+        else if (!Packages.net.minecraftforge.client.ClientCommandHandler.sendMessage('/sculk mark clicked')) {
+          mc.player.chat('/sculk mark clicked'); // what Screen.sendMessage does next: to the server
+        }
       } catch (err) {
         sculk.emit({ step: 'click_failed', error: String(err) });
       }
