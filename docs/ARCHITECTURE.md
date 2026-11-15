@@ -597,6 +597,11 @@ ulp. It then checks the two event logs:
 - every payload frame the client received was sent by the server;
 - both injections arrived and were decoded by the other side.
 
+Each game JVM runs with a capped heap (server 2G, client 3G; 3G and 4G
+with `--stress`), passed as `-Psculk.jvmArgs`, which adds JVM arguments to
+any dev run. The Gradle daemons that launch them get 1.5G. Unset, every JVM
+may grow to a quarter of RAM, and a run has four.
+
 Real mods send whatever they send, so the test mod covers the structures
 mod payloads are built from, with values known in advance. Its payloads
 (`platforms/shared/mc-<version>/testmod`; per loader, only registration

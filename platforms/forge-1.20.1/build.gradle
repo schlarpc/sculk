@@ -39,6 +39,7 @@ legacyForge {
         }
         configureEach {
             sculkRunProperties.each { k, v -> systemProperty k, v }
+            jvmArguments.addAll(sculkRunJvmArgs)
         }
     }
     mods {

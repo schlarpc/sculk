@@ -59,8 +59,20 @@ def wait_for(predicate, timeout, procs, what):
     raise SystemExit(f"timed out after {timeout}s waiting for {what}")
 
 
-def gradle(platform, task, props, log, env=None, integ=True):
-    cmd = ["gradle", "--console=plain", f":platforms:{platform}:{task}"]
+# Heap caps for the game JVMs (-Psculk.jvmArgs) and the Gradle daemons that
+# launch them. Unset, each JVM may grow to a quarter of RAM, and a run has four
+# of them. Measured peaks (server + daemon) are around 3G during world
+# generation; --stress mods (Create, AE2, ...) need more.
+GAME_HEAP = {"runServer": "2G", "runClient": "3G"}
+STRESS_HEAP = {"runServer": "3G", "runClient": "4G"}
+GRADLE_HEAP = "-Xmx1536m"
+
+
+def gradle(platform, task, props, log, env=None, integ=True, stress=False):
+    heap = (STRESS_HEAP if stress else GAME_HEAP).get(task)
+    cmd = ["gradle", "--console=plain", f"-Dorg.gradle.jvmargs={GRADLE_HEAP}", f":platforms:{platform}:{task}"]
+    if heap:
+        cmd.append(f"-Psculk.jvmArgs=-Xmx{heap}")
     if integ:
         cmd.append("-Psculk.integ=true")
     cmd += [f"-P{k}={v}" for k, v in props.items()]
@@ -472,7 +484,7 @@ def main():
         with open(out / "server.out", "w") as so, open(out / "client.out", "w") as co:
             print(f"[integ] {args.platform}: starting server on port {port}")
             procs["server"] = gradle(args.platform, "runServer", {
-                "sculk.eventLog": server_log, "sculk.scripts": scripts("server.js"), **extra}, so)
+                "sculk.eventLog": server_log, "sculk.scripts": scripts("server.js"), **extra}, so, stress=args.stress)
             wait_for(lambda: "Done (" in (out / "server.out").read_text(errors="replace"),
                      args.timeout, procs, "server startup")
             print("[integ] server up; starting headless client")
@@ -480,7 +492,7 @@ def main():
             env["DISPLAY"] = display
             procs["client"] = gradle(args.platform, "runClient", {
                 "sculk.eventLog": client_log, "sculk.scripts": scripts("client.js"),
-                "sculk.quickPlay": f"localhost:{port}", **extra}, co, env=env)
+                "sculk.quickPlay": f"localhost:{port}", **extra}, co, env=env, stress=args.stress)
             def client_finished():
                 events = read_jsonl(client_log)
                 if any(e["kind"] == "disconnect" for e in events):

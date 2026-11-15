@@ -37,6 +37,7 @@ loom {
         }
         configureEach {
             sculkRunProperties.each { k, v -> property k, v }
+            if (sculkRunJvmArgs) vmArgs(*sculkRunJvmArgs)
             if (sculkInteg) source sourceSets.testmod
         }
     }
