@@ -40,6 +40,7 @@ export interface ModLayer {
   registeredVia?: string[];
   javaClass?: string | null;
   roundTrip?: string;
+  roundTripDetail?: string;
   data?: unknown;
   codecClass?: string | null;
   protocol?: string;
@@ -84,7 +85,7 @@ export function field(e: SculkEvent, name: string): unknown {
 
 /** True when a round-trip result says edited objects would not be sent faithfully. */
 export function roundTripBad(rt: unknown): boolean {
-  return typeof rt === "string" && /^(mismatch|error)/.test(rt);
+  return rt === "mismatch" || rt === "error";
 }
 
 /** The last segment of a Java class name, inner classes included: a.b.Outer$Inner → Outer$Inner. */

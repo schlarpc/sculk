@@ -886,11 +886,16 @@ class Game:
         tree = make()
         pid = 0x19 if d == "inbound" else 0x14
         frame = varint(pid) + mc_string(ch) + encode_tree(tree)
+        detail = None
         if roundtrip is None:
             x = random.random()
-            roundtrip = "ok" if x < 0.9 else "equivalent" if x < 0.985 else \
-                "mismatch: payload " + random.randbytes(24).hex()
-        layer = {"channel": ch, "owner": owner, "registeredVia": via, "javaClass": cls, "roundTrip": roundtrip, "data": tree}
+            roundtrip = "ok" if x < 0.9 else "equivalent" if x < 0.985 else "mismatch"
+            if roundtrip == "mismatch":
+                detail = "re-encoded payload: " + random.randbytes(24).hex()
+        layer = {"channel": ch, "owner": owner, "registeredVia": via, "javaClass": cls, "roundTrip": roundtrip}
+        if detail:
+            layer["roundTripDetail"] = detail
+        layer["data"] = tree
         side = "Clientbound" if d == "inbound" else "Serverbound"
         self.packet_event(cid, d, "play", "minecraft:custom_payload", frame,
                           f"net.minecraft.network.protocol.common.{side}CustomPayloadPacket",

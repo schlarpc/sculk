@@ -65,10 +65,9 @@ function badge(text: string, cls: string, path?: string, title?: string): HTMLEl
   return b;
 }
 
-function roundTripBadge(rt: string): HTMLElement {
-  const word = rt.split(/[: ]/)[0] ?? rt;
-  const cls = roundTripBad(rt) ? "b-bad" : word === "ok" ? "b-ok" : "b-meh";
-  return badge(`round trip: ${word}`, cls, "mod.roundTrip", rt);
+function roundTripBadge(rt: string, detail?: string): HTMLElement {
+  const cls = roundTripBad(rt) ? "b-bad" : rt === "ok" ? "b-ok" : "b-meh";
+  return badge(`round trip: ${rt}`, cls, "mod.roundTrip", detail ?? rt);
 }
 
 function classTag(cls: string | null | undefined): HTMLElement | null {
@@ -111,7 +110,7 @@ function header(e: SculkEvent, time: string): HTMLElement {
   if (e.action === "drop") badges.append(badge("✕ dropped", "b-bad", "action", "a script dropped it"));
   if (e.action === "replace") badges.append(badge("↻ replaced", "b-meh", "action", "a script replaced it"));
   const rt = mod(e)?.roundTrip;
-  if (rt) badges.append(roundTripBadge(rt));
+  if (rt) badges.append(roundTripBadge(rt, mod(e)?.roundTripDetail));
   head.append(badges);
   return head;
 }
@@ -131,7 +130,9 @@ function packetSections(e: SculkEvent, loadFrame: FrameLoader, stillShown: () =>
     const body = m.data === undefined || m.data === null
       ? el("p", "hint", "not decoded: no codec for this channel on this side")
       : jsonTree(m.data, 4, "mod.data");
-    const rt = m.roundTrip && roundTripBad(m.roundTrip) ? el("p", "error detail-rt", m.roundTrip) : null;
+    const rt = m.roundTrip && roundTripBad(m.roundTrip)
+      ? el("p", "error detail-rt", `round trip ${m.roundTrip}${m.roundTripDetail ? ": " + m.roundTripDetail : ""}`)
+      : null;
     out.push(section(title, rt, body));
   }
 
@@ -159,7 +160,7 @@ function packetSections(e: SculkEvent, loadFrame: FrameLoader, stillShown: () =>
     ]],
     ["mod", m ? [
       ["channel", m.channel], ["owner", m.owner], ["registeredVia", m.registeredVia],
-      ["javaClass", m.javaClass], ["roundTrip", m.roundTrip],
+      ["javaClass", m.javaClass], ["roundTrip", m.roundTrip], ["roundTripDetail", m.roundTripDetail],
     ] : []],
   ])));
   return out;

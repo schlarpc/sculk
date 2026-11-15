@@ -218,12 +218,12 @@ def check(server, client, outs=None, stress=False):
             apple_in and all(mod(e).get("javaClass") for e in apple_in),
             [mod(e).get("javaClass") for e in apple_in[:3]])
     custom = [e for e in pk(server) + pk(client) if mod(e).get("channel")]
-    outcomes = collections.Counter(str(mod(e).get("roundTrip")).split(":")[0].split(" ")[0] for e in custom)
-    bad = [(e["conn"]["side"], dir_(e), mod(e)["channel"], mod(e)["roundTrip"]) for e in custom
-           if outcomes and str(mod(e).get("roundTrip")).split(":")[0] in ("mismatch", "error")]
+    outcomes = collections.Counter(str(mod(e).get("roundTrip")) for e in custom)
+    bad = [(e["conn"]["side"], dir_(e), mod(e)["channel"], mod(e)["roundTrip"], mod(e).get("roundTripDetail")) for e in custom
+           if outcomes and mod(e).get("roundTrip") in ("mismatch", "error")]
     r.check(f"all {len(custom)} custom payloads re-encode faithfully {dict(outcomes)}", custom and not bad, bad[:5])
     apple_bad = [mod(e)["roundTrip"] for e in custom
-                 if mod(e).get("owner") == "appleskin" and not str(mod(e)["roundTrip"]).startswith("ok")]
+                 if mod(e).get("owner") == "appleskin" and mod(e)["roundTrip"] not in ("ok", "opaque")]
     r.check("appleskin payloads re-encode byte-for-byte", not apple_bad, apple_bad[:3])
     # A payload with no body (an empty "ack" message) has no mod.data span: the channel ends the frame.
     def split(e):
@@ -445,9 +445,7 @@ def stress_check(r, server, client, pk, mod, dir_, hex_):
         c["channels:" + m["channel"]] += 1
         if m.get("data") is not None:
             c["decoded"] += 1
-        rt = str(m.get("roundTrip"))
-        # "ok (opaque payload)": the packet re-encodes, but nothing decoded the payload to check.
-        c["rt:" + ("opaque" if "opaque" in rt else rt.split(":")[0].split(" ")[0])] += 1
+        c["rt:" + str(m.get("roundTrip"))] += 1
     print("  per mod (both sides):")
     print(f"    {'owner':24} {'channels':>8} {'payloads':>8} {'decoded':>8}  round trip")
     for owner, c in sorted(rows.items(), key=lambda kv: -kv[1]["payloads"]):

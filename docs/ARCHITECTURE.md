@@ -359,7 +359,9 @@ mod     {channel, owner, registeredVia, javaClass,  custom payloads only:
 - `packet.owner` is the mod whose class the packet is (usually
   `minecraft`); `mod.owner` is the mod that owns a payload's channel.
 - `mod.data` is the payload as an object tree; `mod.roundTrip` is `ok`,
-  `equivalent`, `mismatch: ...` or `error: ...` (see Attribution above).
+  `equivalent`, `mismatch`, `opaque`, `error` or `n/a` (see Attribution
+  above), with `mod.roundTripDetail` saying more for mismatch (the
+  re-encoded hex), opaque and error.
 - `connection` and `disconnect` events carry `conn`; `payload_type` events
   carry `mod` (with `codecClass`, `protocol`, `flow` and `discriminator`
   instead of `data` and `roundTrip`).

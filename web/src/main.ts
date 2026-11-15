@@ -20,7 +20,7 @@ const PRESETS: [string, string][] = [
   ["injected", "injected"],
   ["dropped / replaced", "kind == packet && action != pass"],
   ["scripts", 'kind matches "^(script|eval)"'],
-  ["errors", 'kind matches "error" || mod.roundTrip matches "^(mismatch|error)"'],
+  ["errors", 'kind matches "error" || mod.roundTrip matches "^(mismatch|error)$"'],
 ];
 
 // ---- token ----

@@ -370,12 +370,17 @@ public final class Sculk {
      *   <li>{@code equivalent}: different bytes that decode to the same
      *       content once collection order is ignored, typically hash-ordered
      *       sets and maps re-encoded in a different iteration order;</li>
-     *   <li>{@code mismatch: ...}: re-encoding changes meaning, so edited
-     *       objects would not be sent faithfully.</li>
+     *   <li>{@code mismatch}: re-encoding changes meaning, so edited
+     *       objects would not be sent faithfully;</li>
+     *   <li>{@code opaque}: the packet re-encodes the same, but nothing
+     *       decoded the payload to check;</li>
+     *   <li>{@code error} or {@code n/a}.</li>
      * </ul>
+     * Returns {outcome, detail}; the detail (the re-encoded hex, the error)
+     * is null for ok, equivalent and n/a.
      */
-    private String roundTrip(PacketEvent ev, PacketInfo info) {
-        if (ev.frameBytes() == null || ev.codec() == null) return "n/a";
+    private String[] roundTrip(PacketEvent ev, PacketInfo info) {
+        if (ev.frameBytes() == null || ev.codec() == null) return new String[] {"n/a", null};
         try {
             byte[] again = platform.encode(ev.packetObject(), ev.codec());
             if (!Arrays.equals(again, ev.frameBytes())) {
@@ -384,23 +389,25 @@ public final class Sculk {
                 if (info.payload() != null
                         && (info.payload().equals(payloadAgain)
                                 || ObjectModel.canonical(info.payload()).equals(ObjectModel.canonical(payloadAgain)))) {
-                    return "equivalent";
+                    return new String[] {"equivalent", null};
                 }
-                return "mismatch: packet " + Bytes.hex(again, 128);
+                return new String[] {"mismatch", "re-encoded packet: " + Bytes.hex(again, 128)};
             }
             if (info.payloadBytes() != null) {
                 PayloadCodec codec = platform.payloadCodec(info.payloadChannel());
-                if (codec == null || info.payload() == null) return "ok (opaque payload)";
+                if (codec == null || info.payload() == null) {
+                    return new String[] {"opaque", "the packet re-encodes the same, but nothing decoded the payload to check"};
+                }
                 byte[] payloadAgain = codec.encode(info.payload());
                 if (!Arrays.equals(payloadAgain, info.payloadBytes())) {
                     return codec.decode(payloadAgain).equals(info.payload())
-                            ? "equivalent"
-                            : "mismatch: payload " + Bytes.hex(payloadAgain, 128);
+                            ? new String[] {"equivalent", null}
+                            : new String[] {"mismatch", "re-encoded payload: " + Bytes.hex(payloadAgain, 128)};
                 }
             }
-            return "ok";
+            return new String[] {"ok", null};
         } catch (Exception e) {
-            return "error: " + e;
+            return new String[] {"error", e.toString()};
         }
     }
 
