@@ -327,7 +327,7 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 // Decoders: show a class's objects your way wherever sculk makes a tree (packet.data in the
 // log and the web UI, sculk.tree), for mod data kept as raw bytes.
 sculk.decoder('appeng.core.network.clientbound.GuiDataSyncPacket', (obj, tree) => {
-  const r = sculk.reader(obj.syncData);   // bytes, a buffer or a hex string
+  const r = sculk.reader(obj.syncData()); // bytes, a buffer or a hex string (a record: components are methods)
   tree.fields = [];
   while (r.readable() > 0) tree.fields.push(r.varInt());
   delete tree.syncData;                    // change tree in place, or return a new one

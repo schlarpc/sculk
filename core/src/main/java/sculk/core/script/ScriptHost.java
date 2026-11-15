@@ -35,6 +35,9 @@ public final class ScriptHost {
         // Hand Java Strings/numbers/booleans to scripts as JS primitives, so
         // that e.channel === 'mod:x' works as script authors expect.
         cx.getWrapFactory().setJavaPrimitiveWrap(false);
+        // Packages.net.minecraft... resolves through sculk's own loader, which sees the game and its
+        // mods, whatever thread (a Netty thread, the render thread) the script runs on.
+        cx.setApplicationClassLoader(ScriptHost.class.getClassLoader());
         return cx;
     }
 
