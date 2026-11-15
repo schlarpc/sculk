@@ -246,11 +246,10 @@ public final class ObjectModel {
             }
         }
         Class<?> cls = value.getClass();
-        // A lambda's fields are what it captured, not data: name what it is instead.
-        if (cls.isHidden() || cls.getName().contains("$$Lambda")) {
-            Class<?>[] is = cls.getInterfaces();
-            return "(lambda) " + (is.length > 0 ? is[0].getSimpleName() : cls.getName().replaceFirst("\\$\\$Lambda.*", ""));
-        }
+        // Code, not data: a lambda's or an anonymous class's fields are what it captured, and a
+        // codec's are other codecs. Name what it is instead.
+        String code = CODE.get(cls);
+        if (code != null) return code;
         if (isJdk(cls.getName())) return value.toString();
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("$class", cls.getName());
@@ -285,6 +284,34 @@ public final class ObjectModel {
                 out[i].setAccessible(true);
             }
             return out;
+        }
+    };
+
+    /** Interfaces whose implementations are codecs (by name: core depends on neither library). */
+    private static final List<String> CODECS = List.of("com.mojang.serialization.Codec", "net.minecraft.network.codec.StreamCodec",
+            "com.mojang.serialization.Encoder", "com.mojang.serialization.Decoder",
+            "com.mojang.serialization.MapEncoder", "com.mojang.serialization.MapDecoder",
+            "net.minecraft.network.codec.StreamEncoder", "net.minecraft.network.codec.StreamDecoder");
+
+    /** For classes that are code rather than data, how they show ("(lambda) Supplier"); else null. */
+    private static final ClassValue<String> CODE = new ClassValue<>() {
+        @Override
+        protected String computeValue(Class<?> cls) {
+            for (String codec : CODECS) {
+                if (findInterface(cls, codec) != null) {
+                    return "(codec) " + (cls.isAnonymousClass() || cls.isHidden() ? codec.substring(codec.lastIndexOf('.') + 1) : cls.getSimpleName());
+                }
+            }
+            if (cls.isHidden() || cls.getName().contains("$$Lambda")) return "(lambda) " + implemented(cls);
+            if (cls.isAnonymousClass()) return "(anonymous) " + implemented(cls);
+            return null;
+        }
+
+        private String implemented(Class<?> cls) {
+            Class<?>[] is = cls.getInterfaces();
+            if (is.length > 0) return is[0].getSimpleName();
+            Class<?> sup = cls.getSuperclass();
+            return sup != null && sup != Object.class ? sup.getSimpleName() : cls.getName().replaceFirst("\\$\\$Lambda.*", "");
         }
     };
 

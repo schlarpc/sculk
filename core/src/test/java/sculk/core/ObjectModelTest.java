@@ -164,4 +164,22 @@ class ObjectModelTest {
         var key = new javax.crypto.spec.SecretKeySpec(new byte[] {1, 2}, "AES");
         assertTrue(ObjectModel.toTree(key, 4) instanceof String);
     }
+
+    interface Codec {}
+
+    record Serializer(Object codec, Runnable task, Object marker) {}
+
+    @Test
+    void anonymousClassesAreNamedNotWalked() {
+        Object captured = "secret internals";
+        Runnable anon = new Runnable() {
+            @Override
+            public void run() {
+                System.out.println(captured);
+            }
+        };
+        Map<?, ?> tree = (Map<?, ?>) ObjectModel.toTree(new Serializer(null, anon, new Object() {}), 4);
+        assertEquals("(anonymous) Runnable", tree.get("task"));
+        assertTrue(String.valueOf(tree.get("marker")).startsWith("(anonymous)"), String.valueOf(tree.get("marker")));
+    }
 }

@@ -1,0 +1,1 @@
+sculk.scope('/tmp/sculk-test8626590537408262858/startup.js').startupRuns;
