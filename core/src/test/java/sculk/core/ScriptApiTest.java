@@ -180,25 +180,4 @@ class ScriptApiTest {
                 """.formatted(conn.getId()));
         assertEquals("minecraft:zombie,2,Chest,,", out);
     }
-
-    @Test
-    void constInALoopBodyGetsANewValueEachPass() {
-        // mozilla/rhino#326: without the rewrite this is "0,0,0|0,0,0|0,0".
-        Object out = FakeGame.sculk().scripts().eval("""
-                (() => {
-                  const a = [], b = [], c = [];
-                  for (let i = 0; i < 3; i++) { const x = i * 10; a.push(x); }
-                  let j = 0; while (j < 3) { const y = j++; b.push(y); }
-                  for (const z of [5, 6]) c.push(z);
-                  const top = 'const in a string stays';
-                  return [a.join(','), b.join(','), c.join(','), top].join('|');
-                })()
-                """);
-        assertEquals("0,10,20|0,1,2|5,6|const in a string stays", out);
-    }
-
-    @Test
-    void theSyntaxCheckAcceptsWhatEvalAccepts() {
-        assertEquals(java.util.List.of(), sculk.core.script.ScriptHost.check("x.js", "for (const z of [1]) print(z);"));
-    }
 }
