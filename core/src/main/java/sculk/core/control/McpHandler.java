@@ -48,8 +48,9 @@ final class McpHandler {
     private static final int MAX_PENDING = 8;
 
     static final String SCRIPT_HELP = """
-            Scripts are JavaScript (Rhino, ES6: arrow functions, let/const, template strings, classes; no modules, \
-            no async/await) files in the game's script directory. Each running script has its own top-level scope \
+            Scripts are JavaScript (Rhino, ES6, with Babel lowering what Rhino gets wrong or lacks: let/const with a \
+            binding per loop pass, for (const x of ...), ?., ??, nested destructuring, object rest/spread; arrow \
+            functions, template strings and classes run as they are; no modules, no async/await) files in the game's script directory. Each running script has its own top-level scope \
             and owns the listeners and timers it registers, so stopping or restarting one leaves the others alone. \
             A script can begin with a metadata block:
             // ==Sculk==

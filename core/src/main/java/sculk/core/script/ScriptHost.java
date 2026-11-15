@@ -58,10 +58,24 @@ public final class ScriptHost {
         }
     }
 
-    /** Evaluates {@code source} in {@code scope} and returns the result converted to a Java object. */
-    public synchronized Object eval(Scriptable scope, String sourceName, String source) {
-        try (Context cx = enter()) {
-            return toJava(cx.evaluateString(scope, source, sourceName, 1, null));
+    /**
+     * Evaluates {@code source} in {@code scope} and returns the result
+     * converted to a Java object. The source goes through {@link Transpiler}
+     * first (outside the host's lock: Babel may still be loading), so
+     * modern syntax and block scoping in loops work; a syntax error it finds
+     * is thrown as Rhino's would be, at the script's own line.
+     */
+    public Object eval(Scriptable scope, String sourceName, String source) {
+        String code;
+        try {
+            code = Transpiler.shared().transform(source);
+        } catch (Transpiler.SyntaxError e) {
+            throw new EvaluatorException(e.getMessage(), sourceName, e.line, null, e.column - 1);
+        }
+        synchronized (this) {
+            try (Context cx = enter()) {
+                return toJava(cx.evaluateString(scope, code, sourceName, 1, null));
+            }
         }
     }
 
@@ -123,6 +137,20 @@ public final class ScriptHost {
 
     /** Parses {@code source} without running it and returns its syntax errors and warnings. */
     public static List<Problem> check(String sourceName, String source) {
+        List<Problem> asWritten = parse(sourceName, source);
+        if (!Transpiler.available() || asWritten.stream().noneMatch(p -> !p.warning())) return asWritten;
+        // Rhino cannot parse it as written: what matters is whether Babel can, and Rhino its output.
+        String code;
+        try {
+            code = Transpiler.shared().transform(source);
+        } catch (Transpiler.SyntaxError e) {
+            return List.of(new Problem(e.line, e.column, e.getMessage(), false));
+        }
+        return parse(sourceName, code);
+    }
+
+    /** Rhino's syntax errors and warnings for {@code source}. */
+    private static List<Problem> parse(String sourceName, String source) {
         List<Problem> out = new ArrayList<>();
         ErrorReporter reporter = new ErrorReporter() {
             @Override

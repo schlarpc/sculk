@@ -83,6 +83,8 @@
         # The control server's web UI; Gradle runs `nix build .#web` and packs
         # the result into each mod jar under sculk/web/.
         web = pkgs.callPackage ./web { };
+        # @babel/standalone for the script transpiler, packed under sculk/babel/.
+        babel = pkgs.callPackage ./nix/babel.nix { };
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);

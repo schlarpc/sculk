@@ -21,9 +21,6 @@
 // Fields of types this cannot read (GenericStack, PacketWritable) stop the
 // walk; what is left shows as hex. Names are read by reflection, so this
 // wants a NeoForge game (Mojang names at run time).
-//
-// Rhino note: `const` inside a loop body keeps its first value on every
-// pass, so loops here use `let`.
 
 let BuiltInRegistries = Packages.net.minecraft.core.registries.BuiltInRegistries;
 let ResourceLocation = Packages.net.minecraft.resources.ResourceLocation;

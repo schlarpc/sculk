@@ -35,6 +35,7 @@ import sculk.core.platform.PayloadCodec;
 import sculk.core.platform.Platform;
 import sculk.core.platform.Side;
 import sculk.core.script.ScriptManager;
+import sculk.core.script.Transpiler;
 import sculk.core.script.ScriptHost;
 import sculk.core.util.Bytes;
 
@@ -157,6 +158,8 @@ public final class Sculk {
                 if (!p.isBlank()) extra.add(Path.of(p.trim()));
             }
         }
+        // Babel takes Rhino a couple of seconds to load: start now, while the game loads.
+        Transpiler.preload(platform.configDir().resolve("sculk").resolve("cache").resolve("babel"));
         String dir = System.getProperty("sculk.scriptDir");
         Path scriptDir = dir != null && !dir.isBlank() ? Path.of(dir.trim()) : platform.configDir().resolve("sculk").resolve("scripts");
         sculk.scripts = new ScriptManager(sculk, scriptDir, extra);

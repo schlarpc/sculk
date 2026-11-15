@@ -84,6 +84,13 @@ processResources {
         filePermissions { unix('rw-r--r--') }
         dirPermissions { unix('rwxr-xr-x') }
     }
+    // Babel, for the script transpiler (see the root project's babel task).
+    if (!rootProject.babelDir.isPresent()) dependsOn rootProject.tasks.named('babel')
+    from(rootProject.babelDir.isPresent() ? rootProject.babelDir.get() : rootProject.layout.buildDirectory.dir('babel')) {
+        into 'sculk/babel'
+        filePermissions { unix('rw-r--r--') }
+        dirPermissions { unix('rwxr-xr-x') }
+    }
 }
 
 // runServer reads its console from Gradle's stdin, so commands can be typed

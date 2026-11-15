@@ -254,7 +254,25 @@ anything that hashes or signs payload bytes.
 
 ## Scripting
 
-Scripts are JavaScript (Rhino, ES6 mode). Installed scripts are the `.js`
+Scripts are JavaScript (Rhino, ES6 mode), run through Babel first
+(`Transpiler`): only the transforms for what Rhino gets wrong or lacks.
+Rhino gives a loop body's `const` and `let` one binding for the whole loop
+(mozilla/rhino#326, #1386; a `const` keeps its first value), and does not
+parse `for (const x of ...)`, `?.`, `??` or some destructuring and spread;
+Babel's block scoping gives each pass its own binding (a function per pass
+where a closure needs one, as Rhino's maintainers suggest) and lowers the
+rest. `retainLines` keeps every line where it was, so errors and the
+syntax check point at the script's own lines. Babel (`@babel/standalone`,
+fetched by Nix from npm's tarball with its integrity hash, nix/babel.nix,
+packed under `sculk/babel/`) takes Rhino about two seconds and 18 MiB to
+load: it loads once, on a background thread at startup, in a sealed scope.
+Output is kept by a hash of the source, in memory and under
+`<config>/sculk/cache/babel/`, so unchanged scripts are not transformed
+again, even after a restart. The syntax check reports Rhino's problems
+with the script as written when Rhino can parse it, else Babel's, else
+Rhino's with Babel's output.
+
+Installed scripts are the `.js`
 files in `<config>/sculk/scripts/` (or `-Dsculk.scriptDir`), so a modpack
 can ship them in its `config/` folder. `x.js.disabled` is script `x.js`,
 disabled, the way launchers disable mod jars. Files named in

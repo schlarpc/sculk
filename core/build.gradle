@@ -46,3 +46,13 @@ dependencies {
 test {
     useJUnitPlatform()
 }
+
+// Babel on the test classpath under sculk/babel/, as in the mod jars.
+processTestResources {
+    if (!rootProject.babelDir.isPresent()) dependsOn rootProject.tasks.named('babel')
+    from(rootProject.babelDir.isPresent() ? rootProject.babelDir.get() : rootProject.layout.buildDirectory.dir('babel')) {
+        into 'sculk/babel'
+        filePermissions { unix('rw-r--r--') }
+        dirPermissions { unix('rwxr-xr-x') }
+    }
+}
