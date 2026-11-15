@@ -9,6 +9,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import sculk.core.command.SculkCommand;
+import sculk.mc.Chat;
 
 /** {@link sculk.core.platform.Platform#registerCommands} through Fabric API's command events. */
 final class SculkCommands {

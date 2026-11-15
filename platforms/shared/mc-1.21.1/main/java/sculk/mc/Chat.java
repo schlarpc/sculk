@@ -1,4 +1,4 @@
-package sculk.neoforge;
+package sculk.mc;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ClickEvent;
@@ -9,10 +9,10 @@ import net.minecraft.network.chat.Style;
 import sculk.core.platform.ChatLine;
 
 /** Turns a {@link ChatLine} into the game's chat component (1.21.1: click and hover events take an action). */
-final class Chat {
+public final class Chat {
     private Chat() {}
 
-    static MutableComponent render(ChatLine line) {
+    public static MutableComponent render(ChatLine line) {
         MutableComponent out = Component.empty();
         for (ChatLine.Part part : line.parts()) {
             if (!part.button()) {
@@ -28,7 +28,7 @@ final class Chat {
     }
 
     /** A line for the player's own chat: tagged as sculk's. */
-    static Component tagged(ChatLine line) {
+    public static Component tagged(ChatLine line) {
         return Component.literal("[sculk] ").withStyle(ChatFormatting.DARK_AQUA).append(render(line).withStyle(ChatFormatting.WHITE));
     }
 }

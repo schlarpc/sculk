@@ -7,6 +7,7 @@ import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import sculk.core.command.SculkCommand;
+import sculk.mc.Chat;
 
 /**
  * {@link sculk.core.platform.Platform#registerCommands} through NeoForge's command

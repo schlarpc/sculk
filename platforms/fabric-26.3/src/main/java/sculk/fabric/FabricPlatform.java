@@ -1,10 +1,6 @@
 package sculk.fabric;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufUtil;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -12,21 +8,19 @@ import java.util.stream.Collectors;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.ModContainer;
 import net.minecraft.client.Minecraft;
-import net.minecraft.network.ProtocolInfo;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.codec.StreamCodec;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
-import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import sculk.core.Sculk;
+import sculk.core.model.ObjectModel;
 import sculk.core.platform.ChatLine;
 import sculk.core.platform.PacketInfo;
 import sculk.core.platform.Platform;
+import sculk.mc.Chat;
+import sculk.mc.GameTrees;
+import sculk.mc.Protocols;
 
 /**
- * Fabric 26.3: protocol era C, unobfuscated. Same shape as NeoForge 1.21.1,
- * except that ResourceLocation is now Identifier and class-to-mod lookup goes
+ * Fabric 26.3: protocol era C, unobfuscated. The protocol code is shared with
+ * NeoForge 26.3 ({@code platforms/shared/mc-26.3}); class to mod lookup goes
  * through Fabric Loader's mod containers (there are no JPMS modules).
  */
 final class FabricPlatform implements Platform {
@@ -83,34 +77,27 @@ final class FabricPlatform implements Platform {
 
     @Override
     public PacketInfo describe(Object packet, Object codec) {
-        ProtocolInfo<?> info = protocolInfo(codec);
-        Packet<?> p = (Packet<?>) packet;
-        String state = info == null ? "?" : info.id().id();
-        String flow = (info == null ? p.type().flow() : info.flow()).name().toLowerCase(Locale.ROOT);
-        String type = p.type().id().toString();
-        CustomPacketPayload payload = null;
-        if (p instanceof ServerboundCustomPayloadPacket c) payload = c.payload();
-        else if (p instanceof ClientboundCustomPayloadPacket c) payload = c.payload();
-        String channel = payload == null ? null : payload.type().id().toString();
-        return new PacketInfo(state, flow, type, channel, payload, null);
+        return Protocols.describe(packet, codec);
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public byte[] encode(Object packet, Object codec) {
-        StreamCodec<ByteBuf, Object> streamCodec = (StreamCodec<ByteBuf, Object>) (Object) requireInfo(codec).codec();
-        ByteBuf buf = Unpooled.buffer();
-        try {
-            streamCodec.encode(buf, packet);
-            return ByteBufUtil.getBytes(buf);
-        } finally {
-            buf.release();
-        }
+        return Protocols.encode(packet, codec);
     }
 
     @Override
     public Object decode(byte[] frame, Object codec, Channel channel) {
-        return requireInfo(codec).codec().decode(Unpooled.wrappedBuffer(frame));
+        return Protocols.decode(frame, codec);
+    }
+
+    @Override
+    public Object payloadPacket(String channel, Object payload, boolean clientbound) {
+        return Protocols.payloadPacket(channel, payload, clientbound);
+    }
+
+    @Override
+    public ObjectModel.Renderer renderer() {
+        return new GameTrees();
     }
 
     @Override
@@ -136,15 +123,5 @@ final class FabricPlatform implements Platform {
             if (mod.findPath(resource).isPresent()) return mod.getMetadata().getId();
         }
         return NONE;
-    }
-
-    private static ProtocolInfo<?> protocolInfo(Object codec) {
-        return codec instanceof ProtocolInfoAccess access ? access.sculk$protocolInfo() : null;
-    }
-
-    private static ProtocolInfo<?> requireInfo(Object codec) {
-        ProtocolInfo<?> info = protocolInfo(codec);
-        if (info == null) throw new IllegalStateException("no protocol info available from codec " + codec);
-        return info;
     }
 }

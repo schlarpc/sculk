@@ -6,6 +6,12 @@
 
 sourceSets.main.java.srcDir rootProject.file('core/src/main/java')
 
+// Game code shared by every loader of one Minecraft version (protocol
+// helpers, chat, tree renderers): platforms/shared/mc-<version>, named by
+// the platform's shared_mc property. See docs/ARCHITECTURE.md, "Build layout".
+ext.sharedMc = project.findProperty('shared_mc')
+if (sharedMc) sourceSets.main.java.srcDir rootProject.file("platforms/shared/mc-${sharedMc}/main/java")
+
 configurations {
     shadedRhino {
         canBeConsumed = false

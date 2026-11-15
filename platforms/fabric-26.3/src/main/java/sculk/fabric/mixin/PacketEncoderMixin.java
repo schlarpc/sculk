@@ -13,7 +13,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import sculk.core.net.WireHooks;
-import sculk.fabric.ProtocolInfoAccess;
+import sculk.mc.ProtocolInfoAccess;
 
 @Mixin(PacketEncoder.class)
 abstract class PacketEncoderMixin implements ProtocolInfoAccess {

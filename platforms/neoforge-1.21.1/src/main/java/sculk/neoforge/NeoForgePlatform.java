@@ -1,33 +1,28 @@
 package sculk.neoforge;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufUtil;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import net.minecraft.client.Minecraft;
-import net.minecraft.network.ProtocolInfo;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.codec.StreamCodec;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
-import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.neoforgespi.language.IModFileInfo;
 import sculk.core.Sculk;
+import sculk.mc.Chat;
+import sculk.core.model.ObjectModel;
 import sculk.core.platform.ChatLine;
 import sculk.core.platform.PacketInfo;
 import sculk.core.platform.Platform;
+import sculk.mc.GameTrees;
+import sculk.mc.Protocols;
 
 /**
- * NeoForge 1.21.1: protocol era C. Every packet, mod payloads included, is
- * decoded by the game through the codec's {@link ProtocolInfo}.
+ * NeoForge 1.21.1: protocol era C. The protocol code is shared with the
+ * other 1.21.1 loaders ({@code platforms/shared/mc-1.21.1}); this class holds
+ * what is NeoForge's own: mods, config, commands, chat.
  */
 final class NeoForgePlatform implements Platform {
     private volatile Map<String, String> modByModule;
@@ -79,34 +74,27 @@ final class NeoForgePlatform implements Platform {
 
     @Override
     public PacketInfo describe(Object packet, Object codec) {
-        ProtocolInfo<?> info = protocolInfo(codec);
-        Packet<?> p = (Packet<?>) packet;
-        String state = info == null ? "?" : info.id().id();
-        String flow = info == null ? p.type().flow().name().toLowerCase(Locale.ROOT) : info.flow().name().toLowerCase(Locale.ROOT);
-        String type = p.type().id().toString();
-        CustomPacketPayload payload = null;
-        if (p instanceof ServerboundCustomPayloadPacket c) payload = c.payload();
-        else if (p instanceof ClientboundCustomPayloadPacket c) payload = c.payload();
-        String channel = payload == null ? null : payload.type().id().toString();
-        return new PacketInfo(state, flow, type, channel, payload, null);
+        return Protocols.describe(packet, codec);
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public byte[] encode(Object packet, Object codec) {
-        StreamCodec<ByteBuf, Object> streamCodec = (StreamCodec<ByteBuf, Object>) (Object) requireInfo(codec).codec();
-        ByteBuf buf = Unpooled.buffer();
-        try {
-            streamCodec.encode(buf, packet);
-            return ByteBufUtil.getBytes(buf);
-        } finally {
-            buf.release();
-        }
+        return Protocols.encode(packet, codec);
     }
 
     @Override
     public Object decode(byte[] frame, Object codec, Channel channel) {
-        return requireInfo(codec).codec().decode(Unpooled.wrappedBuffer(frame));
+        return Protocols.decode(frame, codec);
+    }
+
+    @Override
+    public Object payloadPacket(String channel, Object payload, boolean clientbound) {
+        return Protocols.payloadPacket(channel, payload, clientbound);
+    }
+
+    @Override
+    public ObjectModel.Renderer renderer() {
+        return new GameTrees();
     }
 
     @Override
@@ -129,15 +117,5 @@ final class NeoForgePlatform implements Platform {
             modByModule = map;
         }
         return map.get(module);
-    }
-
-    private static ProtocolInfo<?> protocolInfo(Object codec) {
-        return codec instanceof ProtocolInfoAccess access ? access.sculk$protocolInfo() : null;
-    }
-
-    private static ProtocolInfo<?> requireInfo(Object codec) {
-        ProtocolInfo<?> info = protocolInfo(codec);
-        if (info == null) throw new IllegalStateException("no protocol info available from codec " + codec);
-        return info;
     }
 }

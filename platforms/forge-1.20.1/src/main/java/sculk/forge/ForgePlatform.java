@@ -25,6 +25,7 @@ import net.minecraftforge.fml.loading.FMLLoader;
 import net.minecraftforge.forgespi.language.IModFileInfo;
 import net.minecraftforge.network.simple.IndexedMessageCodec;
 import sculk.core.Sculk;
+import sculk.core.model.ObjectModel;
 import sculk.core.payload.PayloadRegistration;
 import sculk.core.payload.PayloadRegistry;
 import sculk.core.platform.ChatLine;
@@ -33,6 +34,7 @@ import sculk.core.platform.PayloadCodec;
 import sculk.core.platform.Platform;
 import sculk.forge.mixin.IndexedMessageCodecAccessor;
 import sculk.forge.mixin.MessageHandlerAccessor;
+import sculk.mc.GameTrees;
 
 /**
  * Forge 1.20.1: protocol era A. Packets have no ids of their own; the
@@ -151,6 +153,20 @@ final class ForgePlatform implements Platform {
             if (reg.codec() instanceof IndexedMessageCodec codec) return new SimpleChannelCodec(codec);
         }
         return VanillaPayloads.codec(channel);
+    }
+
+    @Override
+    public Object payloadPacket(String channel, Object payload, boolean clientbound) throws Exception {
+        PayloadCodec codec = payloadCodec(channel);
+        if (codec == null) throw new IllegalArgumentException("no payload codec for channel " + channel);
+        ResourceLocation id = new ResourceLocation(channel);
+        FriendlyByteBuf data = new FriendlyByteBuf(Unpooled.wrappedBuffer(codec.encode(payload)));
+        return clientbound ? new ClientboundCustomPayloadPacket(id, data) : new ServerboundCustomPayloadPacket(id, data);
+    }
+
+    @Override
+    public ObjectModel.Renderer renderer() {
+        return new GameTrees();
     }
 
     @Override
