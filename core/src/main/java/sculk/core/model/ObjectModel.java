@@ -129,19 +129,11 @@ public final class ObjectModel {
         out.put("$class", cls.getName());
         try {
             if (cls.isRecord()) {
-                for (RecordComponent rc : cls.getRecordComponents()) {
-                    var accessor = rc.getAccessor();
-                    accessor.setAccessible(true);
-                    out.put(rc.getName(), toTree(accessor.invoke(value), depth - 1));
+                for (java.lang.reflect.Method accessor : ACCESSORS.get(cls)) {
+                    out.put(accessor.getName(), toTree(accessor.invoke(value), depth - 1));
                 }
             } else {
-                for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
-                    for (Field f : c.getDeclaredFields()) {
-                        if (Modifier.isStatic(f.getModifiers())) continue;
-                        f.setAccessible(true);
-                        out.putIfAbsent(f.getName(), toTree(f.get(value), depth - 1));
-                    }
-                }
+                for (Field f : FIELDS.get(cls)) out.putIfAbsent(f.getName(), toTree(f.get(value), depth - 1));
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
             out.put("$string", value.toString());
@@ -149,6 +141,41 @@ public final class ObjectModel {
         }
         return out;
     }
+
+    /**
+     * A record's component accessors, made accessible, in order. Looked up
+     * once per class: every packet goes through here, so the reflection
+     * lookups must not be paid per packet. Throws (each time) what
+     * setAccessible threw.
+     */
+    private static final ClassValue<java.lang.reflect.Method[]> ACCESSORS = new ClassValue<>() {
+        @Override
+        protected java.lang.reflect.Method[] computeValue(Class<?> cls) {
+            RecordComponent[] rcs = cls.getRecordComponents();
+            java.lang.reflect.Method[] out = new java.lang.reflect.Method[rcs.length];
+            for (int i = 0; i < rcs.length; i++) {
+                out[i] = rcs[i].getAccessor();
+                out[i].setAccessible(true);
+            }
+            return out;
+        }
+    };
+
+    /** A class's instance fields, its own first and then its superclasses', made accessible; as {@link #ACCESSORS}. */
+    private static final ClassValue<Field[]> FIELDS = new ClassValue<>() {
+        @Override
+        protected Field[] computeValue(Class<?> cls) {
+            List<Field> out = new ArrayList<>();
+            for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (Modifier.isStatic(f.getModifiers())) continue;
+                    f.setAccessible(true);
+                    out.add(f);
+                }
+            }
+            return out.toArray(new Field[0]);
+        }
+    };
 
     /** {@code bytes}, the first bytes of {@code len}, as {@code {$bytes, $len?, $text?}}. */
     private static Map<String, Object> bytes(byte[] bytes, int len) {
