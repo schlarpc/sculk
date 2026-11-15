@@ -24,7 +24,8 @@ import sculk.core.platform.PacketInfo;
  *
  * <p>Listeners may change what happens to the packet by calling
  * {@link #drop()}, {@link #replaceFrame(byte[])} or
- * {@link #replacePacket(Object)} before the hook returns.
+ * {@link #replacePacket(Object)} or {@link #replacePayload(Object)} before
+ * the hook returns.
  */
 public final class PacketEvent {
     public enum Outcome { PASS, DROP, REPLACE_FRAME, REPLACE_PACKET }
@@ -94,6 +95,17 @@ public final class PacketEvent {
     public void replacePacket(Object newPacket) {
         outcome = Outcome.REPLACE_PACKET;
         replacementPacket = Objects.requireNonNull(newPacket);
+    }
+
+    /**
+     * Replaces a custom payload packet with one carrying {@code payload} on
+     * the same channel: usually an edited copy of {@code mod.data}
+     * ({@code sculk.with}).
+     */
+    public void replacePayload(Object payload) throws Exception {
+        if (mod == null) throw new IllegalStateException("not a custom payload: " + this);
+        replacePacket(sculk.core.Sculk.get().platform()
+                .payloadPacket(mod.getChannel(), payload, connection.clientbound(direction())));
     }
 
     // ---- for the engine ----

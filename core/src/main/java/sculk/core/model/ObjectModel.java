@@ -17,9 +17,33 @@ import sculk.core.util.Bytes;
  * records for re-encoding.
  */
 public final class ObjectModel {
-    private static final int MAX_ELEMENTS = 64;
+    /** Elements shown per collection, map or array; the rest are left out. */
+    public static final int MAX_ELEMENTS = 64;
+
+    /**
+     * Game-specific views of game types (NBT, item stacks, identifiers,
+     * positions, text components...) that reflection would show badly or
+     * not at all. Supplied by the platform ({@link sculk.core.platform.Platform#renderer}).
+     */
+    public interface Renderer {
+        /**
+         * The tree for {@code value}, or {@link #UNHANDLED} to fall back to
+         * reflection. Children go back through {@link ObjectModel#toTree}.
+         */
+        Object render(Object value, int depth);
+    }
+
+    /** What a {@link Renderer} returns for values it leaves to reflection. */
+    public static final Object UNHANDLED = new Object();
+
+    private static volatile Renderer renderer;
 
     private ObjectModel() {}
+
+    /** Installs the platform's renderer (null for none). Called once at startup. */
+    public static void setRenderer(Renderer r) {
+        renderer = r;
+    }
 
     public static Object toTree(Object value, int depth) {
         if (value == null || value instanceof Number || value instanceof Boolean || value instanceof CharSequence) {
@@ -28,6 +52,16 @@ public final class ObjectModel {
         if (value instanceof Character || value instanceof Enum<?>) return value.toString();
         if (value instanceof byte[] bytes) return Map.of("$bytes", Bytes.hex(bytes, 1024));
         if (value instanceof Optional<?> opt) return opt.map(v -> toTree(v, depth)).orElse(null);
+        Renderer r = renderer;
+        if (r != null) {
+            Object rendered;
+            try {
+                rendered = r.render(value, depth);
+            } catch (RuntimeException | LinkageError e) {
+                rendered = UNHANDLED; // a renderer bug must not lose the event; reflection still works
+            }
+            if (rendered != UNHANDLED) return rendered;
+        }
         if (depth <= 0) return value.toString();
         if (value.getClass().isArray()) {
             List<Object> out = new ArrayList<>();
@@ -47,7 +81,7 @@ public final class ObjectModel {
             Map<String, Object> out = new LinkedHashMap<>();
             for (Map.Entry<?, ?> e : m.entrySet()) {
                 if (out.size() >= MAX_ELEMENTS) break;
-                out.put(String.valueOf(e.getKey()), toTree(e.getValue(), depth - 1));
+                out.put(key(e.getKey()), toTree(e.getValue(), depth - 1));
             }
             return out;
         }
@@ -76,6 +110,16 @@ public final class ObjectModel {
             out.put("$reflectionError", e.toString());
         }
         return out;
+    }
+
+    /** A map key as a string: the renderer's view when that is a string (an identifier, say), else {@code toString}. */
+    private static String key(Object k) {
+        if (k instanceof String s) return s;
+        if (k != null && !(k instanceof Number) && !(k instanceof Enum<?>)) {
+            Object tree = toTree(k, 1);
+            if (tree instanceof String s) return s;
+        }
+        return String.valueOf(k);
     }
 
     /**

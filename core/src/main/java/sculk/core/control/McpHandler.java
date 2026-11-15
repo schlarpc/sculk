@@ -62,10 +62,14 @@ final class McpHandler {
             emit(obj) (a `script` event), log(msg) (a `script_log` event), chat(msg) (a chat line only the player sees; \
             a `chat` event), schedule(ms, fn), tree(obj), \
             with(record, field, value), hex(bytes), unhex(str), copy(bytes), scope(name) (another running script's \
-            globals), name, dist. Connections offer inject(dir, bytes), injectPacket(dir, obj), replay(event). \
+            globals), name, dist. Connections offer inject(dir, bytes), injectPacket(dir, obj), \
+            injectPayload(dir, channel, payload) (a mod payload object, e.g. an edited e.mod.data), replay(event). \
             Packet events have the same fields and shorthands as logged events (e.mod.channel, e.frame.dir, e.owner), \
             plus e.frame.bytes, e.packet.object, e.mod.data as live objects and e.conn as the live connection, and \
-            offer drop(), replaceFrame(bytes), replacePacket(obj).""";
+            offer drop(), replaceFrame(bytes), replacePacket(obj), replacePayload(payload) (same channel). \
+            e.mod.data trees show NBT as JSON, item stacks as {item, count, components or tag}, identifiers, \
+            registry entries and holders as "ns:path", positions as {x, y, z}, text components as JSON text; \
+            the live objects are the game's own (e.g. e.mod.data.tag().copy()).""";
 
     private static final String FILTER_HELP = """
             Filter syntax (Wireshark-style; blank matches everything): \

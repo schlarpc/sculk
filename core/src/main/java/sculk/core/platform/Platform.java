@@ -74,6 +74,26 @@ public interface Platform {
         return null;
     }
 
+    /**
+     * A custom payload packet carrying {@code payload} (a decoded mod payload
+     * object, as in {@code mod.data}) on {@code channel}, travelling
+     * clientbound or serverbound: what {@code conn.injectPayload} and
+     * {@code e.replacePayload} send. Where payloads are opaque on the wire
+     * (Forge 1.20.1), the payload is encoded with the channel's own codec.
+     */
+    default Object payloadPacket(String channel, Object payload, boolean clientbound) throws Exception {
+        throw new UnsupportedOperationException(describe() + " cannot build custom payload packets");
+    }
+
+    /**
+     * Views of this game's types for {@link sculk.core.model.ObjectModel}
+     * trees (NBT, item stacks, identifiers, positions, text...), or null to
+     * show everything by reflection.
+     */
+    default sculk.core.model.ObjectModel.Renderer renderer() {
+        return null;
+    }
+
     /** Ids of all loaded mods, including "minecraft" and the loader itself. */
     Set<String> modIds();
 

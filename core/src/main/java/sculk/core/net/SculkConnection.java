@@ -152,6 +152,23 @@ public final class SculkConnection {
         sendPacket(parse(direction), packet);
     }
 
+    /**
+     * Sends a mod payload object (for example an edited copy of
+     * {@code e.mod.data}, see {@code sculk.with}) on {@code channel}, wrapped
+     * in the right custom payload packet for the direction and side, through
+     * the game's encoder (outbound) or straight to its handlers (inbound).
+     */
+    public void injectPayload(String direction, String channel, Object payload) throws Exception {
+        Direction dir = parse(direction);
+        sendPacket(dir, Sculk.get().platform().payloadPacket(channel, payload, clientbound(dir)));
+    }
+
+    /** Whether packets going {@code dir} on this connection are clientbound. */
+    public boolean clientbound(Direction dir) {
+        // A server sends clientbound packets; a client receives them.
+        return (side == Side.SERVER) == (dir == Direction.OUTBOUND);
+    }
+
     private static Direction parse(String direction) {
         return Direction.valueOf(direction.toUpperCase(Locale.ROOT));
     }

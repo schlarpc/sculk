@@ -34,4 +34,35 @@ class ObjectModelTest {
         Object edited = ObjectModel.withComponent(new Outer(2, List.of()), "count", 7.0d);
         assertEquals(new Outer(7, List.of()), edited);
     }
+
+    record Ident(String namespace, String path) {}
+
+    record Holder(Ident id, java.util.Map<Ident, Integer> levels) {}
+
+    @Test
+    void aRendererShowsGameTypesItsWayIncludingAsMapKeys() {
+        ObjectModel.setRenderer((value, depth) ->
+                value instanceof Ident i ? i.namespace() + ":" + i.path() : ObjectModel.UNHANDLED);
+        try {
+            Map<?, ?> m = (Map<?, ?>) ObjectModel.toTree(
+                    new Holder(new Ident("a", "b"), Map.of(new Ident("x", "y"), 3)), 4);
+            assertEquals("a:b", m.get("id"));
+            assertEquals(Map.of("x:y", 3), m.get("levels"));
+        } finally {
+            ObjectModel.setRenderer(null);
+        }
+    }
+
+    @Test
+    void aFailingRendererFallsBackToReflection() {
+        ObjectModel.setRenderer((value, depth) -> {
+            throw new IllegalStateException("broken");
+        });
+        try {
+            Map<?, ?> m = (Map<?, ?>) ObjectModel.toTree(new Ident("a", "b"), 4);
+            assertEquals("a", m.get("namespace"));
+        } finally {
+            ObjectModel.setRenderer(null);
+        }
+    }
 }

@@ -35,9 +35,11 @@ import sculk.shaded.org.mozilla.javascript.Scriptable;
  *
  * Packet events have the same layered fields as logged events, and the
  * same shorthands as filters: see {@link PacketEvent}. They offer
- * {@code drop()}, {@code replaceFrame(bytes)}, {@code replacePacket(obj)}.
+ * {@code drop()}, {@code replaceFrame(bytes)}, {@code replacePacket(obj)},
+ * {@code replacePayload(payload)}.
  * Connections ({@code e.conn}) expose {@code id, side, remote} and
- * {@code inject(dir, bytes)}, {@code injectPacket(dir, obj)}, {@code replay(event)}.
+ * {@code inject(dir, bytes)}, {@code injectPacket(dir, obj)},
+ * {@code injectPayload(dir, channel, payload)}, {@code replay(event)}.
  */
 public final class ScriptApi implements AutoCloseable {
     private final Sculk engine;

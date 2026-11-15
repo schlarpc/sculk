@@ -137,6 +137,7 @@ public final class Sculk {
                     captureDir, captureBytes);
         }
         Sculk sculk = new Sculk(platform, log, store);
+        ObjectModel.setRenderer(platform.renderer());
         instance = sculk;
         LOG.info("sculk core initialised on {}", platform.describe());
         LOG.info("scripting: {}", ScriptHost.selfTest());

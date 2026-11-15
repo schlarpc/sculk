@@ -137,6 +137,12 @@ public final class FakeGame {
             return new Packet(frame[0], new String(frame, 1, frame.length - 1, StandardCharsets.UTF_8));
         }
 
+        /** A custom payload's body is its "payload object" here, so the packet is just channel|body. */
+        @Override
+        public Object payloadPacket(String channel, Object payload, boolean clientbound) {
+            return new Packet(1, channel + "|" + payload);
+        }
+
         @Override public Set<String> modIds() { return Set.of("minecraft", "testmod", "othermod"); }
 
         @Override

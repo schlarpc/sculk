@@ -141,4 +141,41 @@ class WirePlumbingTest {
         assertEquals(2, seen.size());
         assertNotNull(seen.get(1).frameBytes());
     }
+
+    @Test
+    void payloadsCanBeReplacedInBothDirections() {
+        behaviour = e -> {
+            if (e.getMod() != null) {
+                try {
+                    e.replacePayload("edited " + e.getMod().getData());
+                } catch (Exception ex) {
+                    throw new RuntimeException(ex);
+                }
+            }
+        };
+        channel.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:sync|in")));
+        assertEquals(new Packet(1, "othermod:sync|edited in"), channel.readInbound());
+        channel.writeOutbound(new Packet(1, "othermod:sync|out"));
+        assertArrayEquals(FakeGame.frame(1, "othermod:sync|edited out"), ByteBufUtil.getBytes((ByteBuf) channel.readOutbound()));
+    }
+
+    @Test
+    void injectedPayloadsAreWrappedAndSent() throws Exception {
+        conn().injectPayload("outbound", "othermod:sync", "made up");
+        channel.runPendingTasks();
+        assertArrayEquals(FakeGame.frame(1, "othermod:sync|made up"), ByteBufUtil.getBytes((ByteBuf) channel.readOutbound()));
+        assertEquals("othermod", seen.get(0).getOwner());
+        assertTrue(seen.get(0).isInjected());
+        conn().injectPayload("inbound", "othermod:sync", "to the game");
+        channel.runPendingTasks();
+        assertEquals(new Packet(1, "othermod:sync|to the game"), channel.readInbound());
+    }
+
+    @Test
+    void payloadDirectionFollowsTheSide() {
+        assertFalse(conn().clientbound(Direction.OUTBOUND)); // a client sends serverbound packets
+        assertTrue(conn().clientbound(Direction.INBOUND));
+        SculkConnection server = SculkConnection.peek(FakeGame.channel(Side.SERVER));
+        assertTrue(server.clientbound(Direction.OUTBOUND));
+    }
 }

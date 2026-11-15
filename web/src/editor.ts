@@ -142,7 +142,7 @@ const highlight = HighlightStyle.define([
 /** The `sculk` API, as ScriptApi.java offers it. */
 const SCULK_API: Completion[] = [
   { label: "on", type: "method", detail: "(event, fn)", info: "sculk.on('packet', e => ...) or sculk.on('connection', c => ...).\nListeners belong to this script and go when it stops." },
-  { label: "connections", type: "method", detail: "()", info: "The open connections: {id, side, remote, inject(dir, bytes), injectPacket(dir, obj), replay(event)}." },
+  { label: "connections", type: "method", detail: "()", info: "The open connections: {id, side, remote, inject(dir, bytes), injectPacket(dir, obj), injectPayload(dir, channel, payload), replay(event)}." },
   { label: "connection", type: "method", detail: "(id)", info: "The open connection with this id (as in e.conn.id), or null." },
   { label: "payloadTypes", type: "method", detail: "()", info: "Every registered custom payload type, as payload_type events show them." },
   { label: "emit", type: "method", detail: "(obj)", info: "Writes {kind: 'script', script, data: obj} to the event log." },
@@ -161,7 +161,7 @@ const SCULK_API: Completion[] = [
 
 /** Members of packet events (e in sculk.on('packet', e => ...)). */
 const PACKET_EVENT: Completion[] = [
-  { label: "conn", type: "property", info: "The live connection: id, side, remote, inject(dir, bytes), injectPacket(dir, obj), replay(event)." },
+  { label: "conn", type: "property", info: "The live connection: id, side, remote, inject(dir, bytes), injectPacket(dir, obj), injectPayload(dir, channel, payload), replay(event)." },
   { label: "frame", type: "property", info: "{seq, dir, len, bytes, spans}: the bytes on the wire." },
   { label: "packet", type: "property", info: "{id, state, flow, type, javaClass, owner, object}: the game's packet." },
   { label: "mod", type: "property", info: "Custom payloads only: {channel, owner, registeredVia, javaClass, roundTrip, data}." },
@@ -175,6 +175,7 @@ const PACKET_EVENT: Completion[] = [
   { label: "drop", type: "method", detail: "()", info: "Drop this packet." },
   { label: "replaceFrame", type: "method", detail: "(bytes)", info: "Send these bytes instead." },
   { label: "replacePacket", type: "method", detail: "(obj)", info: "Send this packet object instead." },
+  { label: "replacePayload", type: "method", detail: "(payload)", info: "Send this mod payload object (e.g. sculk.with(e.mod.data, field, value)) on the same channel instead." },
 ];
 
 const SNIPPETS: Completion[] = [
