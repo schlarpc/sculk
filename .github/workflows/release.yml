@@ -1,0 +1,102 @@
+# Builds every platform's jar. On a v* tag, also publishes them as a GitHub
+# release; run it by hand (workflow_dispatch) to try a build without one.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The loader-agnostic engine's unit tests. Platforms compile core's sources
+  # into themselves rather than depending on :core, so their builds skip these.
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-core-${{ hashFiles('**/*.gradle', 'gradle.properties', 'platforms/*/gradle.properties') }}
+          restore-keys: gradle-core-
+      - run: nix develop -c gradle :core:test
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - neoforge-1.21.1
+          - fabric-1.21.1
+          - fabric-26.3
+          - neoforge-26.3
+          - forge-1.20.1
+          - forge-1.18.2
+          - forge-1.19.2
+    steps:
+      # The jar version comes from git (0.1.0+<rev>), so this must be a
+      # checkout of the commit, and the tree must stay clean (no .dirty).
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      # Minecraft, mappings and loader downloads are large; keep them per platform.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ matrix.platform }}-${{ hashFiles('**/*.gradle', 'gradle.properties', 'platforms/*/gradle.properties') }}
+          restore-keys: gradle-${{ matrix.platform }}-
+      - run: nix develop -c gradle :platforms:${{ matrix.platform }}:build
+      # build/libs holds the shippable jar: Loom's remapJar output for Fabric,
+      # the reobfuscated jar for Forge. Dev jars go to build/devlibs instead.
+      - name: Check the jar
+        run: |
+          shopt -s nullglob
+          jars=(platforms/${{ matrix.platform }}/build/libs/sculk-*.jar)
+          if [ ${#jars[@]} -ne 1 ]; then
+            echo "::error::expected one jar in build/libs, found: ${jars[*]:-none}"
+            exit 1
+          fi
+          case "${jars[0]}" in
+            *.dirty.jar) echo "::error::${jars[0]} was built from a dirty tree:"; git status --porcelain; exit 1 ;;
+          esac
+          echo "${jars[0]}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jar-${{ matrix.platform }}
+          path: platforms/${{ matrix.platform }}/build/libs/sculk-*.jar
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [core, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      # The jars carry mod_version, so a tag that disagrees would publish
+      # jars named for another version.
+      - name: Check the tag matches mod_version
+        run: |
+          version=$(sed -n 's/^mod_version=//p' gradle.properties)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match mod_version=$version in gradle.properties (expected v$version)"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: jar-*
+          path: jars
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" jars/*.jar --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
