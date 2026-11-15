@@ -338,6 +338,9 @@ sculk.decoder('appeng.core.network.clientbound.GuiDataSyncPacket', (obj, tree) =
 // readers: varInt varLong bool i8 u8 i16 u16 i32 i64 f32 f64 string uuid bytes(n) byteArray rest
 // skip(n) readable position, and game types read by the game's codecs (where the platform
 // supports it: 1.21.1 and 26.3): nbt identifier blockPos itemStack component
+// sculk.writer(): the same names, chained, writing (game types also take plain forms: "ns:path",
+//   {x, y, z}, SNBT text, a string for text); then toBytes(), hex(), length(). For exact bytes:
+e.replaceFrame(sculk.writer().varInt(0x19).string('ae2:me_inventory_update').bytes(patched).toBytes());
 ```
 
 A decoder runs when the tree is made: for logged events, as the packet

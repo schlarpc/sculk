@@ -107,6 +107,17 @@ public interface Platform {
         throw new IllegalArgumentException(describe() + " cannot read game type " + type + " from bytes");
     }
 
+    /**
+     * Writes one value of a game type to {@code buf} as the game's own
+     * codec does, for {@code sculk.writer}: the counterpart of
+     * {@link #readGame}, with the same types and registries. Values are
+     * the game's own objects, or the plain forms each type documents
+     * ("ns:path", {x, y, z}, SNBT text, a plain string for text).
+     */
+    default void writeGame(io.netty.buffer.ByteBuf buf, String type, Object value, io.netty.channel.Channel channel) {
+        throw new IllegalArgumentException(describe() + " cannot write game type " + type + " as bytes");
+    }
+
     /** Ids of all loaded mods, including "minecraft" and the loader itself. */
     Set<String> modIds();
 

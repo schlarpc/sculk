@@ -211,6 +211,11 @@ public final class ScriptApi implements AutoCloseable {
         return Reader.of(ScriptHost.toJava(bytes));
     }
 
+    /** A writer that builds bytes as the game writes them, for replaceFrame and inject: see {@link Writer}. */
+    public Writer writer() {
+        return new Writer();
+    }
+
     public void schedule(double delayMillis, Function fn) {
         if (closed) throw new IllegalStateException("script " + name + " was stopped");
         pending.removeIf(ScheduledFuture::isDone);

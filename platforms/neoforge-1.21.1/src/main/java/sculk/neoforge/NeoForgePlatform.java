@@ -99,7 +99,12 @@ final class NeoForgePlatform implements Platform {
 
     @Override
     public Object readGame(io.netty.buffer.ByteBuf buf, String type, Channel channel) {
-        return sculk.mc.Reads.read(buf, type, channel, dedicatedServer());
+        return sculk.mc.GameBytes.read(buf, type, channel, dedicatedServer());
+    }
+
+    @Override
+    public void writeGame(io.netty.buffer.ByteBuf buf, String type, Object value, io.netty.channel.Channel channel) {
+        sculk.mc.GameBytes.write(buf, type, value, channel, dedicatedServer());
     }
 
     @Override
