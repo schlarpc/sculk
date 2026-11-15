@@ -67,7 +67,7 @@ dependencies {
 
 processResources {
     var props = [
-        version         : mod_version,
+        version         : rootProject.sculk_version,
         mod_id          : mod_id,
         mod_name        : mod_name,
         mod_license     : mod_license,

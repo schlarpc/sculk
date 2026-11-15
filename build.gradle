@@ -8,9 +8,26 @@ plugins {
     id 'com.gradleup.shadow' version "${shadow_version}" apply false
 }
 
+// The version every jar carries: mod_version plus the commit as build
+// metadata (0.1.0+1a2b3c4), and .dirty when the tree has changes git would
+// commit or untracked files it does not ignore. Outside a git checkout, mod_version alone.
+def git = { List<String> args ->
+    try {
+        def r = providers.exec {
+            commandLine(['git', '-C', rootDir.path] + args)
+            ignoreExitValue = true
+        }
+        r.result.get().exitValue == 0 ? r.standardOutput.asText.get().trim() : null
+    } catch (Exception ignored) {
+        null // no git
+    }
+}
+def rev = git(['rev-parse', '--short=7', 'HEAD'])
+ext.sculk_version = rev ? "${mod_version}+${rev}${git(['status', '--porcelain']) ? '.dirty' : ''}" : mod_version
+
 subprojects {
     group = 'sculk'
-    version = rootProject.mod_version
+    version = rootProject.sculk_version
 
     tasks.withType(JavaCompile).configureEach {
         options.encoding = 'UTF-8'
