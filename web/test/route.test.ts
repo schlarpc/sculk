@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fromLegacyHash, href, parse } from "../src/route";
+import { href, parse } from "../src/route";
 
 test("paths parse to pages", () => {
   assert.deepEqual(parse("/"), { page: "events" });
@@ -22,10 +22,3 @@ test("hrefs round-trip, slashes in names included", () => {
   assert.equal(href({ page: "scripts" }), "/scripts");
 });
 
-test("old hash links become paths", () => {
-  assert.equal(fromLegacyHash("#scripts/a%20b.js"), "/scripts/a%20b.js");
-  assert.equal(fromLegacyHash("#scripts"), "/scripts");
-  assert.equal(fromLegacyHash("#events"), "/events");
-  assert.equal(fromLegacyHash("#token=abc&event=4"), null);
-  assert.equal(fromLegacyHash(""), null);
-});

@@ -1102,8 +1102,6 @@ def make_handler(store, game, bundle):
             url = urllib.parse.urlsplit(self.path)
             q = dict(urllib.parse.parse_qsl(url.query, keep_blank_values=True))
             path = url.path
-            if method == "GET" and (path == "/ui" or path.startswith("/ui/")):
-                return self.send(302, "text/plain", b"", {"Location": path[3:] or "/"})
             if method == "GET" and not path.startswith("/api/") and path != "/mcp":
                 name = path[1:]
                 # The page's own paths load index.html, as on the real server.

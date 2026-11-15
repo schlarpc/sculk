@@ -381,15 +381,6 @@ class ControlServerTest {
     }
 
     @Test
-    void oldUiPathsRedirectToTheRoot() throws IOException {
-        Response ui = request("GET", "/ui/", null);
-        assertEquals(302, ui.status());
-        assertEquals("/", ui.header("Location"));
-        assertEquals("/", request("GET", "/ui", null).header("Location"));
-        assertEquals("/scripts/a%20b.js", request("GET", "/ui/scripts/a%20b.js", null).header("Location"));
-    }
-
-    @Test
     void webUiServesOnlyItsOwnFiles() throws IOException {
         assertEquals(404, request("GET", "/nope.js", null).status());
         assertEquals(404, request("GET", "/../web/index.html", null).status());

@@ -541,13 +541,6 @@ public final class ControlServer {
 
     /** Serves the web UI from the classpath, at the root. */
     private void serveStatic(HttpExchange ex, String path) throws IOException {
-        if (path.equals("/ui") || path.startsWith("/ui/")) {
-            // Where the UI used to live; the browser keeps a #token= fragment across the redirect.
-            String rest = ex.getRequestURI().getRawPath().substring(3);
-            ex.getResponseHeaders().set("Location", rest.isEmpty() ? "/" : rest);
-            ex.sendResponseHeaders(302, -1);
-            return;
-        }
         String name = path.substring(1);
         // The page's own paths (see web/src/route.ts) all load index.html, which routes on the client.
         if (name.isEmpty() || name.equals("events") || name.equals("scripts") || name.startsWith("scripts/")) name = "index.html";

@@ -7,7 +7,7 @@ import { menuOpen, onMenuClose, showMenu, type MenuItem } from "./menu";
 import { frameOf } from "./views";
 import { ScriptsPage } from "./scripts";
 import { EventTable } from "./table";
-import { fromLegacyHash, href as pageHref, parse as parseRoute } from "./route";
+import { href as pageHref, parse as parseRoute } from "./route";
 
 // In localStorage, so every tab and every page path shares it; a new launch's token replaces it when the old one is refused.
 const TOKEN_KEY = "sculk.token";
@@ -29,9 +29,6 @@ const PRESETS: [string, string][] = [
 let linkedEvent: number | undefined;
 
 function readToken(): string | null {
-  // Links from before the pages had paths: #scripts/<name> and #events.
-  const legacy = fromLegacyHash(location.hash);
-  if (legacy) history.replaceState(null, "", legacy + location.search);
   const hash = new URLSearchParams(location.hash.slice(1));
   const fromHash = hash.get("token");
   const event = Number(hash.get("event"));
