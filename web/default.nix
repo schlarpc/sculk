@@ -1,16 +1,16 @@
 # The control server's web UI: TypeScript type-checked by tsc and bundled by
 # esbuild, plus Monocraft (OFL-1.1) subset to woff2. Runtime libraries
-# (CodeMirror, for the script editor) come from package-lock.json through a
-# fixed-output fetch; tsc and esbuild come from nixpkgs. After changing
-# package.json, run `npm install --package-lock-only` and update npmDepsHash
-# (the build prints the right one).
+# (CodeMirror, for the script editor) come from package-lock.json through
+# importNpmLock: each package is fetched and checked against the integrity
+# hash the lock records, so there is no aggregate hash to keep up to date.
+# tsc and esbuild come from nixpkgs. After changing package.json, run
+# `npm install --package-lock-only` and commit the lock.
 #
 #   nix build .#web
 {
   lib,
   stdenvNoCC,
-  fetchNpmDeps,
-  npmHooks,
+  importNpmLock,
   nodejs,
   esbuild,
   typescript,
@@ -45,21 +45,14 @@ stdenvNoCC.mkDerivation {
     ];
   };
 
-  npmDeps = fetchNpmDeps {
-    name = "sculk-web-npm-deps";
-    src = lib.fileset.toSource {
-      root = ./.;
-      fileset = lib.fileset.unions [
-        ./package.json
-        ./package-lock.json
-      ];
-    };
-    hash = "sha256-Oh3vqxYOSQZ7Z/colEflKeb90cAYjV4CaLNuQCvTqZk=";
+  npmDeps = importNpmLock {
+    package = lib.importJSON ./package.json;
+    packageLock = lib.importJSON ./package-lock.json;
   };
 
   nativeBuildInputs = [
     nodejs
-    npmHooks.npmConfigHook
+    importNpmLock.npmConfigHook
     esbuild
     typescript
     fonttools
