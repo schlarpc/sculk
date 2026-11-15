@@ -11,6 +11,13 @@
 //             the table did not set) changes it from the scroll side
 //   selection the selected event and its position
 //   holding   rows stand still while a menu is open over them
+//   pointing  the pointer is over the table: following stops at the newest
+//             row then (frozenEnd) until it leaves, so rows can be read and
+//             clicked; scrolling works as ever
+//
+// Rendering keeps each row's element while the row stays in view, and leaves
+// the DOM alone when the rows did not change, so hover and double-click have
+// one element to land on.
 
 import type { Api, Progress, SculkEvent } from "./api";
 import { el } from "./dom";
@@ -18,6 +25,8 @@ import { anchorFor, contentHeight, revealTop, scrollFor, topOf, windowRows, type
 import { PAGE, Query, type Delta, type Source } from "./query";
 
 const OVERSCAN = 12;
+/** How far back from the end the tail looks for loaded rows to end on, instead of showing blanks. */
+const TAIL_LOOKBACK = 5 * PAGE;
 /** Browsers stop scrolling an element somewhere past 17 million pixels (Firefox); stay well under. */
 const MAX_HEIGHT = 8_000_000;
 
@@ -52,6 +61,13 @@ export class EventTable {
   private applied = Number.NaN;
   private renderQueued = false;
   private nudgeQueued = false;
+  private pointing = false;
+  /** While pointing and following: the end the view stays at. Taken when first needed. */
+  private frozenEnd: number | null = null;
+  /** The rows in the page by event id, to reuse while they stay in view. */
+  private shown = new Map<number, HTMLTableRowElement>();
+  private readonly topSpacer = EventTable.spacer();
+  private readonly bottomSpacer = EventTable.spacer();
 
   constructor(
     private readonly wrap: HTMLDivElement,
@@ -59,6 +75,8 @@ export class EventTable {
     private readonly hooks: TableHooks,
   ) {
     wrap.addEventListener("scroll", () => this.scrolled());
+    wrap.addEventListener("pointerenter", () => this.point(true));
+    wrap.addEventListener("pointerleave", () => this.point(false));
     new ResizeObserver(() => this.queueRender()).observe(wrap);
   }
 
@@ -66,6 +84,11 @@ export class EventTable {
 
   get following(): boolean {
     return this.anchor.kind === "tail";
+  }
+
+  /** Following, but standing still while the pointer is over the rows. */
+  get held(): boolean {
+    return this.pointing && this.following;
   }
 
   get count(): number {
@@ -123,7 +146,9 @@ export class EventTable {
     this.query = q;
     this.unseen = 0;
     this.selection = null;
+    this.shown.clear();
     this.anchor = { kind: "tail" };
+    this.frozenEnd = null;
     if (opts.revealId !== undefined) await this.reveal(q, opts.revealId);
     else this.hooks.selected(null);
     this.render();
@@ -152,6 +177,7 @@ export class EventTable {
     if (!q) return;
     if (on) {
       this.anchor = { kind: "tail" };
+      this.frozenEnd = null;
       this.unseen = 0;
       this.nudge();
     } else {
@@ -189,6 +215,7 @@ export class EventTable {
     if (scroll) {
       if (pos === q.total - 1) {
         this.anchor = { kind: "tail" };
+        this.frozenEnd = null;
         this.unseen = 0;
       } else {
         const g = this.geometry(q);
@@ -260,9 +287,31 @@ export class EventTable {
 
   // ---- view ----
 
+  /**
+   * The layout. Following, the rows end at the newest one loaded rather than
+   * the newest counted, so a burst shows no blank rows while it loads; and
+   * while the pointer is over the table, at the end it had then.
+   */
   private geometry(q: Query): Geometry {
     const head = this.wrap.querySelector("thead")?.getBoundingClientRect().height ?? 0;
-    return { count: q.count, rowH: this.rowH, viewH: Math.max(this.rowH, this.wrap.clientHeight - head), maxHeight: MAX_HEIGHT };
+    let count = q.count;
+    if (this.anchor.kind === "tail") {
+      let end = q.loadedEnd(TAIL_LOOKBACK);
+      if (this.pointing) {
+        this.frozenEnd ??= end;
+        end = Math.min(end, this.frozenEnd);
+      }
+      count = Math.max(0, end - q.start);
+    }
+    return { count, rowH: this.rowH, viewH: Math.max(this.rowH, this.wrap.clientHeight - head), maxHeight: MAX_HEIGHT };
+  }
+
+  private point(on: boolean): void {
+    if (this.pointing === on) return;
+    this.pointing = on;
+    this.frozenEnd = null;
+    this.hooks.changed();
+    this.queueRender();
   }
 
   /** The user scrolled (an offset the table did not set): the anchor follows the view. */
@@ -273,7 +322,10 @@ export class EventTable {
     this.anchor = anchorFor(this.geometry(q), this.wrap.scrollTop, q.start);
     this.applied = this.wrap.scrollTop;
     if (this.anchor.kind !== before) {
-      if (this.anchor.kind === "tail") this.unseen = 0;
+      if (this.anchor.kind === "tail") {
+        this.unseen = 0;
+        this.frozenEnd = null; // scrolled to the bottom: show the newest, then hold there
+      }
       this.hooks.changed();
     }
     this.queueRender();
@@ -286,6 +338,15 @@ export class EventTable {
       this.renderQueued = false;
       this.render();
     });
+  }
+
+  /** A row standing in for the rows above or below the window; its height is set per render. */
+  private static spacer(): HTMLTableRowElement {
+    const tr = el("tr", "spacer");
+    const td = el("td");
+    td.colSpan = 8;
+    tr.append(td);
+    return tr;
   }
 
   private render(): void {
@@ -302,14 +363,16 @@ export class EventTable {
     const rows: HTMLTableRowElement[] = [];
     const missing = new Set<number>();
     const inView = new Set<number>();
+    const shown = new Map<number, HTMLTableRowElement>();
     for (let r = first; r < last; r++) {
       const pos = q.start + r;
       inView.add(Math.floor(pos / PAGE));
       const e = q.at(pos);
       let tr: HTMLTableRowElement;
       if (e) {
-        tr = this.hooks.row(e);
-        if (e.id === this.selection?.id) tr.classList.add("selected");
+        tr = this.shown.get(e.id) ?? this.hooks.row(e);
+        shown.set(e.id, tr);
+        tr.classList.toggle("selected", e.id === this.selection?.id);
       } else {
         tr = el("tr", "loading");
         const td = el("td", "c-loading", "…");
@@ -320,15 +383,12 @@ export class EventTable {
       tr.classList.toggle("odd", pos % 2 === 1);
       rows.push(tr);
     }
-    const spacer = (px: number) => {
-      const tr = el("tr", "spacer");
-      const td = el("td");
-      td.colSpan = 8;
-      td.style.height = `${Math.max(0, px)}px`;
-      tr.append(td);
-      return tr;
-    };
-    this.body.replaceChildren(spacer(y), ...rows, spacer(contentHeight(g) - y - rows.length * this.rowH));
+    this.shown = shown;
+    (this.topSpacer.firstChild as HTMLElement).style.height = `${Math.max(0, y)}px`;
+    (this.bottomSpacer.firstChild as HTMLElement).style.height = `${Math.max(0, contentHeight(g) - y - rows.length * this.rowH)}px`;
+    const kids = this.body.children;
+    const same = kids.length === rows.length + 2 && kids[0] === this.topSpacer && rows.every((tr, i) => kids[i + 1] === tr);
+    if (!same) this.body.replaceChildren(this.topSpacer, ...rows, this.bottomSpacer);
     // The content is the right height now, so the offset is not clamped short.
     if (Math.abs(this.wrap.scrollTop - scrollTop) >= 1) this.wrap.scrollTop = scrollTop;
     this.applied = this.wrap.scrollTop;

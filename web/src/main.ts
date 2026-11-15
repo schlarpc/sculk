@@ -398,7 +398,7 @@ class App {
     this.count.classList.remove("scanning");
     const n = this.table.count;
     const filtered = this.filter.value.trim() !== "";
-    this.count.textContent = `${n.toLocaleString()} ${filtered ? "matching" : "events"}`;
+    this.count.textContent = `${n.toLocaleString()} ${filtered ? "matching" : "events"}${this.table.held ? " · held while the pointer is over the rows" : ""}`;
     const showAll = byId<HTMLButtonElement>("show-all");
     showAll.hidden = this.floor === 0;
     showAll.textContent = `cleared at #${this.floor} · show all`;

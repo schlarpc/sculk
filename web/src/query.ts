@@ -9,6 +9,8 @@ import type { Page, Position, Progress, SculkEvent } from "./api";
 export const PAGE = 200;
 /** Pages kept, besides those in view. */
 const MAX_PAGES = 60;
+/** Pages one tail() fetches at most, catching up after a burst. */
+const TAIL_PAGES = 5;
 
 /**
  * What a Query needs from the server. {@code undefined} means the call was
@@ -101,13 +103,39 @@ export class Query {
     return { grew: d.grew + again.grew, dropped: d.dropped + again.dropped };
   }
 
-  /** Asks for whatever was appended past the end; one at a time, the next one sharing the request. */
+  /**
+   * Asks for whatever was appended past the end; one at a time, the next one
+   * sharing the request. When more arrived than a page holds, keeps fetching
+   * (up to TAIL_PAGES) so the newest rows are loaded, not only counted.
+   */
   tail(): Promise<Delta> {
     if (this.tailing) return this.tailing;
-    // The last partial page again, and anything after it.
-    const from = Math.max(this.start, Math.floor(this.total / PAGE) * PAGE);
-    this.tailing = this.fetch(from).finally(() => (this.tailing = null));
+    this.tailing = this.catchUp().finally(() => (this.tailing = null));
     return this.tailing;
+  }
+
+  private async catchUp(): Promise<Delta> {
+    // The last partial page again, and anything after it.
+    let from = Math.max(this.start, Math.floor(this.total / PAGE) * PAGE);
+    const sum = { grew: 0, dropped: 0 };
+    for (let i = 0; i < TAIL_PAGES; i++) {
+      const d = await this.fetch(from);
+      sum.grew += d.grew;
+      sum.dropped += d.dropped;
+      from = Math.max(this.start, from + PAGE);
+      if (this.closed || from >= this.total) break;
+    }
+    return sum;
+  }
+
+  /**
+   * One past the newest loaded row, looking back at most {@code within} rows
+   * from the end; the end itself when none of those is loaded.
+   */
+  loadedEnd(within: number): number {
+    let end = this.total;
+    while (end > this.start && this.total - end < within && this.at(end - 1) === undefined) end--;
+    return end > this.start && this.at(end - 1) !== undefined ? end : this.total;
   }
 
   /** The position of the first match at or after an event id, or undefined. */

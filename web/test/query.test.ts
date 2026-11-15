@@ -86,6 +86,32 @@ test("tail reports what was appended, and shares one request when nudged repeate
   assert.equal(q.at(479)?.id, 480);
 });
 
+test("tail catches up over several pages after a burst, so the newest rows are loaded", async () => {
+  const s = new FakeServer();
+  s.add(450);
+  const q = new Query("", s);
+  await q.open();
+  await q.tail();
+  s.add(3 * PAGE + 7);
+  const before = s.calls;
+  const d = await q.tail();
+  assert.deepEqual(d, { grew: 3 * PAGE + 7, dropped: 0 });
+  assert.equal(s.calls - before, 4);
+  assert.equal(q.at(q.total - 1)?.id, 450 + 3 * PAGE + 7);
+  assert.equal(q.loadedEnd(PAGE), q.total);
+});
+
+test("loadedEnd stops at the newest loaded row, or gives the end when none is near", async () => {
+  const s = new FakeServer();
+  s.add(450);
+  const q = new Query("", s);
+  await q.open();
+  assert.equal(q.loadedEnd(1000), 450, "nothing loaded: the end");
+  await q.load(1); // positions 200..399
+  assert.equal(q.loadedEnd(1000), 400);
+  assert.equal(q.loadedEnd(20), 450, "the loaded rows are further back than asked to look");
+});
+
 test("rows dropped from the front move the start, and their pages are forgotten", async () => {
   const s = new FakeServer();
   s.add(1000);
