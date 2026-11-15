@@ -102,10 +102,15 @@ public final class PacketEvent {
     /**
      * Replaces a custom payload packet with one carrying {@code payload} on
      * the same channel: usually an edited copy of {@code packet.data}
-     * ({@code sculk.with}).
+     * ({@code sculk.with}). The payload is encoded with the mod's own
+     * codec; on a channel whose round trip is {@code mismatch} that may
+     * not send what was decoded, so this logs a warning (once per channel).
      */
     public void replacePayload(Object payload) throws Exception {
         if (mod == null) throw new IllegalStateException("not a custom payload: " + this);
+        if ("mismatch".equals(mod.getRoundTrip())) sculk.core.Sculk.get().warnOnce("replacePayload:" + mod.getChannel(),
+                "replacePayload on " + mod.getChannel() + ", whose payloads do not re-encode faithfully (round trip: mismatch; "
+                        + mod.getRoundTripDetail() + "): what is sent may not be what you edited. replaceFrame(bytes) sends exact bytes.");
         replacePacket(sculk.core.Sculk.get().platform()
                 .payloadPacket(mod.getChannel(), payload, connection.clientbound(direction())));
     }

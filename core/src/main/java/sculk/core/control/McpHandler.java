@@ -70,7 +70,8 @@ final class McpHandler {
             injectPayload(dir, channel, payload) (a mod payload object, e.g. an edited e.packet.data), replay(event). \
             Packet events have the same fields and shorthands as logged events (e.mod.channel, e.frame.dir, e.owner), \
             plus e.frame.bytes, e.packet.object, e.packet.data (a custom payload's payload, else the packet) as live objects and e.conn as the live connection, and \
-            offer drop(), replaceFrame(bytes), replacePacket(obj), replacePayload(payload) (same channel). \
+            offer drop(), replaceFrame(bytes), replacePacket(obj), replacePayload(payload) (same channel; re-encoded \
+            with the mod's codec, so check mod.roundTrip: on mismatch, replaceFrame sends exact bytes). \
             e.packet.data trees show NBT as JSON, item stacks as {item, count, components or tag}, identifiers, \
             registry entries and holders as "ns:path", positions as {x, y, z}, text components as JSON text; \
             the live objects are the game's own (e.g. e.packet.data.tag().copy()).""";
@@ -739,7 +740,9 @@ final class McpHandler {
                         + "bytes, and the first and last of them (id and time t, epoch ms). With `by` (a field, e.g. channel, "
                         + "owner, type, kind, dir, conn.id, script, or a deeper one like packet.data.slot), one row per distinct "
                         + "value, biggest first. Use it to see what a session holds before reading events: which mods talk "
-                        + "most, when a channel first appeared, how many drops a script made. Same filter syntax as sculk_events.",
+                        + "most, when a channel first appeared, how many drops a script made. payload_type events (the registered "
+                        + "channels, listed once at startup) carry mod.channel too, so add kind == packet to count only traffic. "
+                        + "Same filter syntax as sculk_events.",
                 Map.of("filter", filter, "by", prop("string", "Field to group by; absent for one row of everything."),
                         "after", after, "before", prop("integer", "Only events with an id less than this."),
                         "limit", prop("integer", "Maximum groups to return, biggest first (default 30).")),

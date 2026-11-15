@@ -317,6 +317,8 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 // c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event); sculk.connection(id) finds one
 // c.injectPayload('outbound', channel, payload): a mod payload object, wrapped for the side and direction
 // e.replacePayload(sculk.with(e.packet.data, 'field', value)): edit a mod payload in flight, same channel
+//   (re-encoded with the mod's codec; on a channel whose round trip is mismatch this logs a
+//   warning event once, since what is sent may differ: e.replaceFrame(bytes) sends exact bytes)
 // sculk.emit(obj), sculk.schedule(ms, fn), sculk.payloadTypes(), sculk.tree(obj),
 // sculk.with(record, 'field', value), sculk.copy(bytes), sculk.hex(bytes), sculk.unhex(str)
 // sculk.log(msg) (a script_log event), sculk.chat(msg) (a chat line only the player sees; a chat event),
