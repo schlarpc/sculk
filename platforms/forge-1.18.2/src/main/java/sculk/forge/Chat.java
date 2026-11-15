@@ -1,0 +1,35 @@
+package sculk.forge;
+
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextComponent;
+import sculk.core.platform.ChatLine;
+
+/** Turns a {@link ChatLine} into the game's chat component (1.18.2: TextComponent; click and hover events take an action). */
+final class Chat {
+    private Chat() {}
+
+    static MutableComponent render(ChatLine line) {
+        MutableComponent out = new TextComponent("");
+        for (ChatLine.Part part : line.parts()) {
+            if (!part.button()) {
+                out.append(new TextComponent(part.text()));
+                continue;
+            }
+            Style style = Style.EMPTY.withColor(ChatFormatting.GREEN).withUnderlined(true)
+                    .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, part.command()));
+            if (part.hover() != null) style = style.withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, new TextComponent(part.hover())));
+            out.append(new TextComponent("[" + part.text() + "]").withStyle(style));
+        }
+        return out;
+    }
+
+    /** A line for the player's own chat: tagged as sculk's. */
+    static Component tagged(ChatLine line) {
+        return new TextComponent("[sculk] ").withStyle(ChatFormatting.DARK_AQUA).append(render(line).withStyle(ChatFormatting.WHITE));
+    }
+}

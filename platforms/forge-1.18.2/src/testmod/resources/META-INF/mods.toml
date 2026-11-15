@@ -1,0 +1,10 @@
+# The integration test mod (scripts/integ.py; dev runs with -Psculk.integ only).
+modLoader="javafml"
+loaderVersion="[40,)"
+license="MIT"
+
+[[mods]]
+modId="sculktest"
+version="0.0.0"
+displayName="Sculk integration test mod"
+description='''Sends and checks payloads with NBT, item stacks and the like, for sculk's integration test.'''
