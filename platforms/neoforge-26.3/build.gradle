@@ -1,0 +1,73 @@
+// NeoForge 26.3 (protocol era C, unobfuscated, Java 25).
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev'
+}
+
+base.archivesName = "${mod_id}-neoforge-${minecraft_version}"
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+apply from: rootProject.file('gradle/platform-common.gradle')
+
+// The integration test mod (sculktest): shared payloads and logic from
+// platforms/shared, NeoForge glue from src/testmod. Always compiled, loaded
+// in dev runs only with -Psculk.integ.
+sourceSets {
+    testmod {
+        java.srcDirs = ['src/testmod/java', rootProject.file("platforms/shared/mc-${shared_mc}/testmod/java")]
+    }
+}
+
+neoForge {
+    version = neo_version
+    runs {
+        client {
+            client()
+            gameDirectory = project.file('run/client')
+            if (sculkQuickPlay) programArguments.addAll('--quickPlayMultiplayer', sculkQuickPlay, '--width', '640', '--height', '360')
+        }
+        server {
+            server()
+            programArgument '--nogui'
+            gameDirectory = project.file('run/server')
+        }
+        configureEach {
+            sculkRunProperties.each { k, v -> systemProperty k, v }
+        }
+    }
+    mods {
+        "${mod_id}" { sourceSet sourceSets.main }
+        if (sculkInteg) sculktest { sourceSet sourceSets.testmod }
+    }
+}
+
+dependencies {
+    if (sculkInteg) {
+        // Integration test mods (Modrinth version ids). See tests/integ/.
+        runtimeOnly 'maven.modrinth:appleskin:6vok7cLb'  // 3.0.10+mc26.3
+        runtimeOnly 'maven.modrinth:balm:QcBcRJZb'       // 26.3.0.3+neoforge-26.3
+        runtimeOnly 'maven.modrinth:shogi:wFw6qDQV'      // 26.3.0.3+neoforge-26.3 (Waystones dependency)
+        runtimeOnly 'maven.modrinth:waystones:eRGJPkjU'  // 26.3.0.2+neoforge-26.3
+    }
+}
+
+neoForge.addModdingDependenciesTo(sourceSets.testmod)
+
+var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    var props = [
+        minecraft_version_range: minecraft_version_range,
+        neo_version            : neo_version,
+        loader_version_range   : loader_version_range,
+        mod_id                 : mod_id,
+        mod_name               : mod_name,
+        mod_license            : mod_license,
+        mod_version            : mod_version,
+        mod_description        : mod_description,
+    ]
+    inputs.properties props
+    expand props
+    from 'src/main/templates'
+    into layout.buildDirectory.dir('generated/sources/modMetadata')
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata

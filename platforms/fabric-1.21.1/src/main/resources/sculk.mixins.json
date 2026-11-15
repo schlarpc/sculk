@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "sculk.fabric.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ConnectionMixin",
+    "PacketDecoderMixin",
+    "PacketEncoderMixin",
+    "PayloadTypeRegistryMixin"
+  ],
+  "injectors": { "defaultRequire": 1 }
+}
