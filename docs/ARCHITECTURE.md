@@ -463,7 +463,9 @@ carries a `progressToken` (keep-alives otherwise), and stops when the client
 sends `notifications/cancelled` or goes away. Each tool carries a title and
 read-only, destructive, idempotent and open-world hints. It offers the same
 powers as tools: `sculk_status`,
-`sculk_events` (paging forward or back through the whole capture), `sculk_wait_events` (long-polls up to 5 minutes for new matches,
+`sculk_events` (paging forward or back through the whole capture;
+`fields` picks paths instead of whole events, and frame hex is left out
+unless `hex` is true), `sculk_wait_events` (long-polls up to 5 minutes for new matches,
 since tool calls cannot stream), `sculk_stats` (counts, bytes and first
 and last appearance grouped by any field, over the whole capture),
 `sculk_frame`, `sculk_eval`,

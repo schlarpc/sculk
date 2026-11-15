@@ -865,6 +865,22 @@ class ControlServerTest {
         List<JsonObject> found = lines(toolText(events));
         assertEquals(1, found.size());
         long id = found.get(0).get("id").getAsLong();
+        assertFalse(found.get(0).getAsJsonObject("frame").has("hex"), "no hex unless asked");
+        assertFalse(found.get(0).getAsJsonObject("frame").has("spans"));
+        assertTrue(found.get(0).getAsJsonObject("frame").has("len"));
+        JsonObject withHex = lines(toolText(callTool("sculk_events",
+                "{\"filter\":\"channel contains '" + marker + "'\",\"hex\":true}"))).get(0);
+        assertTrue(withHex.getAsJsonObject("frame").has("hex"));
+        assertEquals(1, lines(toolText(callTool("sculk_events",
+                "{\"filter\":\"channel contains '" + marker + "' && frame.hex contains '7c78'\"}"))).size(),
+                "filters still see the hex");
+        JsonObject picked = lines(toolText(callTool("sculk_events",
+                "{\"filter\":\"channel contains '" + marker + "'\",\"fields\":\"channel, frame.len,nope\"}"))).get(0);
+        assertEquals(Set.of("id", "channel", "frame.len", "nope"), picked.keySet());
+        assertEquals(id, picked.get("id").getAsLong());
+        assertTrue(picked.get("channel").getAsString().contains(marker));
+        assertTrue(picked.get("nope").isJsonNull());
+        assertTrue(callTool("sculk_events", "{\"fields\":\"a ==\"}").get("isError").getAsBoolean());
 
         String hex = toolText(callTool("sculk_frame", "{\"id\":" + id + "}"));
         assertEquals(Bytes.hex(FakeGame.frame(1, "othermod:" + marker + "|x")), hex);

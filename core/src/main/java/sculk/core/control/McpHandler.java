@@ -706,6 +706,10 @@ final class McpHandler {
     static List<Map<String, Object>> tools() {
         Map<String, Object> filter = prop("string", "Event filter; blank or absent matches everything.");
         Map<String, Object> after = prop("integer", "Only events with an id greater than this.");
+        Map<String, Object> fields = prop("string", "Optional: comma-separated fields to return instead of whole events, "
+                + "e.g. \"t,type,channel,mod.data\" (shorthands and dotted paths as in filters). Each event comes back as "
+                + "{\"id\": ..., \"<field>\": value, ...}.");
+        Map<String, Object> hex = prop("boolean", "Include frame.hex and frame.spans (default false).");
         List<Map<String, Object>> out = new ArrayList<>();
         out.add(tool("sculk_status",
                 "Platform, open connections, running scripts, the id of the latest event, and what the capture holds "
@@ -720,10 +724,10 @@ final class McpHandler {
                         + "packet.state run on an index and are fast over millions of events; other fields (mod.data..., "
                         + "frame.hex) read events back from disk, so narrow those with an id range or an indexed clause. "
                         + "Long scans report progress and can be cancelled. For counts and summaries, sculk_stats is "
-                        + "cheaper than paging. Frame hex in events may be cut short; use sculk_frame for the whole frame.\n\n"
+                        + "cheaper than paging. " + SHAPE_HELP + "\n\n"
                         + FILTER_HELP,
                 Map.of("filter", filter, "after", after, "before", prop("integer", "Only events with an id less than this."),
-                        "limit", prop("integer", "Maximum events to return (default 50).")),
+                        "limit", prop("integer", "Maximum events to return (default 50)."), "fields", fields, "hex", hex),
                 List.of()));
         out.add(tool("sculk_stats",
                 "Summarise the events matching a filter, over the whole session or an id range: how many, their frame "
@@ -739,10 +743,12 @@ final class McpHandler {
                 "Wait until at least one event matching the filter with an id greater than `after` exists, then return "
                         + "the matches (up to `limit`) as JSON Lines. Returns nothing if `timeoutMs` passes first. "
                         + "Long waits report progress (send a progressToken) and can be cancelled. "
-                        + "Use sculk_status or a previous result for the starting id. Same filter syntax as sculk_events.",
+                        + "Use sculk_status or a previous result for the starting id. Same filter syntax, `fields` and "
+                        + "`hex` as sculk_events.",
                 Map.of("filter", filter, "after", prop("integer", "Wait for events after this id (required)."),
                         "limit", prop("integer", "Maximum events to return (default 50)."),
-                        "timeoutMs", prop("integer", "How long to wait, at most 300000 (default 30000).")),
+                        "timeoutMs", prop("integer", "How long to wait, at most 300000 (default 30000)."),
+                        "fields", fields, "hex", hex),
                 List.of("after")));
         out.add(tool("sculk_frame",
                 "The whole frame (packet id and body, uncompressed and unencrypted) of a packet event, as hex.",
@@ -809,7 +815,7 @@ final class McpHandler {
             return switch (name) {
                 case "sculk_status" -> text(EventLog.toJson(ControlServer.status(engine, store)), false);
                 case "sculk_events" -> lines(store.query(string(args, "filter"), longArg(args, "after"), longArg(args, "before"),
-                        intArg(args, "limit", 50), scanProgress(ctx)));
+                        intArg(args, "limit", 50), scanProgress(ctx)), shape(args));
                 case "sculk_stats" -> text(EventLog.toJson(store.stats(string(args, "filter"), string(args, "by"),
                         longArg(args, "after"), longArg(args, "before"), intArg(args, "limit", 30), scanProgress(ctx))), false);
                 case "sculk_wait_events" -> waitEvents(args, ctx);
@@ -1000,7 +1006,7 @@ final class McpHandler {
                     nextTick += TICK_MILLIS;
                 }
             }
-            return lines(found);
+            return lines(found, shape(args));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return text("interrupted", true);
@@ -1011,9 +1017,54 @@ final class McpHandler {
 
     // ---- plumbing ----
 
-    private static Map<String, Object> lines(List<StoredEvent> events) {
+    static final String SHAPE_HELP = "Events leave out frame.hex and frame.spans unless `hex` is true, and `fields` "
+            + "picks just the fields wanted; both only change what comes back, not what filters see. Frame hex in events "
+            + "may be cut short; use sculk_frame for the whole frame.";
+
+    /** How events are returned: the fields to pick (null for whole events) and whether to keep the frame hex. */
+    record Shape(List<String> fields, boolean hex) {
+        static final Shape WHOLE = new Shape(null, true);
+    }
+
+    private static Shape shape(JsonObject args) {
+        String f = string(args, "fields");
+        List<String> fields = null;
+        if (f != null && !f.isBlank()) {
+            fields = new ArrayList<>();
+            for (String part : f.split(",")) {
+                String path = part.trim();
+                if (path.isEmpty() || path.equals("id")) continue;
+                EventFilter.analyze(path); // a syntax check, as for stats' `by`
+                fields.add(path);
+            }
+        }
+        boolean hex = args.has("hex") && !args.get("hex").isJsonNull() && args.get("hex").getAsBoolean();
+        return new Shape(fields, hex);
+    }
+
+    /** One event as returned under {@code shape}, as a JSON line. */
+    static String shaped(StoredEvent e, Shape shape) {
+        if (shape.fields() != null) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("id", e.id());
+            for (String path : shape.fields()) out.put(path, EventFilter.value(e.fields(), path));
+            return EventLog.toJson(out);
+        }
+        if (shape.hex() || !(e.fields().get("frame") instanceof Map<?, ?> frame)
+                || !(frame.containsKey("hex") || frame.containsKey("spans"))) {
+            return e.json();
+        }
+        Map<String, Object> out = new LinkedHashMap<>(e.fields());
+        Map<Object, Object> slim = new LinkedHashMap<>(frame);
+        slim.remove("hex");
+        slim.remove("spans");
+        out.put("frame", slim);
+        return EventLog.toJson(out);
+    }
+
+    private static Map<String, Object> lines(List<StoredEvent> events, Shape shape) {
         StringBuilder sb = new StringBuilder();
-        for (StoredEvent e : events) sb.append(e.json()).append('\n');
+        for (StoredEvent e : events) sb.append(shaped(e, shape)).append('\n');
         return text(events.isEmpty() ? "(no matching events)" : sb.toString(), false);
     }
 
