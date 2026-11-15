@@ -61,7 +61,7 @@ public final class ScriptHost {
     /** Evaluates {@code source} in {@code scope} and returns the result converted to a Java object. */
     public synchronized Object eval(Scriptable scope, String sourceName, String source) {
         try (Context cx = enter()) {
-            return toJava(cx.evaluateString(scope, source, sourceName, 1, null));
+            return toJava(cx.evaluateString(scope, loopConstsAsLet(source, cx), sourceName, 1, null));
         }
     }
 
@@ -118,6 +118,53 @@ public final class ScriptHost {
         return Context.javaToJS(v, scope, cx);
     }
 
+    /**
+     * {@code source} with each {@code const} declared inside a loop (up to
+     * the nearest function) written as {@code let}, padded to the same
+     * width so lines and columns do not move. Rhino gives a loop body's
+     * {@code const} one binding for the whole loop, initialised on the
+     * first pass only, so {@code const x = i * 2} stays 0 on every pass
+     * (mozilla/rhino#326, open since 2017); its {@code let} gets the right
+     * value each pass when it has an initialiser, which a const always has.
+     * A loop head's {@code for (const x of ...)}, which Rhino does not parse
+     * at all, becomes {@code for (let x of ...)} the same way. Source that
+     * does not parse is returned as it is, for eval to report.
+     */
+    static String loopConstsAsLet(String source, Context cx) {
+        if (!source.contains("const")) return source;
+        source = LOOP_HEAD_CONST.matcher(source).replaceAll("$1let  ");
+        List<Integer> at = new ArrayList<>();
+        try {
+            CompilerEnvirons env = new CompilerEnvirons();
+            env.initFromContext(cx);
+            sculk.shaded.org.mozilla.javascript.ast.AstRoot root = new Parser(env).parse(source, "const-check", 1);
+            root.visit(node -> {
+                if (node instanceof sculk.shaded.org.mozilla.javascript.ast.VariableDeclaration d && d.isConst() && inLoop(d)) {
+                    at.add(d.getAbsolutePosition());
+                }
+                return true;
+            });
+        } catch (RuntimeException e) {
+            return source;
+        }
+        if (at.isEmpty()) return source;
+        StringBuilder out = new StringBuilder(source);
+        for (int pos : at) {
+            if (out.indexOf("const", pos) == pos) out.replace(pos, pos + 5, "let  ");
+        }
+        return out.toString();
+    }
+
+    private static final java.util.regex.Pattern LOOP_HEAD_CONST = java.util.regex.Pattern.compile("(\\bfor\\s*\\(\\s*)const\\b");
+
+    private static boolean inLoop(sculk.shaded.org.mozilla.javascript.ast.AstNode node) {
+        for (var n = node.getParent(); n != null; n = n.getParent()) {
+            if (n instanceof sculk.shaded.org.mozilla.javascript.ast.Loop) return true;
+            if (n instanceof sculk.shaded.org.mozilla.javascript.ast.FunctionNode) return false;
+        }
+        return false;
+    }
+
     /** One problem {@link #check} found. Lines and columns count from 1. */
     public record Problem(int line, int column, String message, boolean warning) {}
 
@@ -146,7 +193,8 @@ public final class ScriptHost {
             env.setRecoverFromErrors(true);
             env.setIdeMode(true);
             env.setReservedKeywordAsIdentifier(true);
-            new Parser(env, reporter).parse(source, sourceName, 1);
+            // As eval sees it: for (const x of ...) is rewritten before Rhino parses it.
+            new Parser(env, reporter).parse(LOOP_HEAD_CONST.matcher(source).replaceAll("$1let  "), sourceName, 1);
         } catch (EvaluatorException e) {
             if (out.isEmpty()) out.add(new Problem(e.lineNumber(), Math.max(1, e.columnNumber() + 1), e.details(), false));
         } catch (RuntimeException e) {

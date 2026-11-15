@@ -304,6 +304,11 @@ Each script is **stopped** (with why: `not-started`, `user`, `disabled`,
   one poll is a rename).
 - Run always runs, whatever the mode; a script that throws while starting
   is stopped at once, so it never runs half-registered.
+- Source is evaluated with one fix-up (`ScriptHost.loopConstsAsLet`): a
+  `const` declared in a loop is written as `let`, padded to the same
+  width. Rhino gives a loop body's `const` one binding initialised on the
+  first pass only, so it keeps that value (mozilla/rhino#326), and it does
+  not parse `for (const x of ...)` at all; its `let` is right in both.
 
 The `sculk` global is that script's `ScriptApi`:
 
