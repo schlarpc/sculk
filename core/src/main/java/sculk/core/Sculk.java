@@ -226,15 +226,45 @@ public final class Sculk {
             info = new PacketInfo("?", "?", packet.getClass().getName(), null, null, null);
         }
         PacketEvent event = event(conn, dir, packet, frame, info, codec, injected);
-        for (Consumer<PacketEvent> l : packetListeners) {
-            try {
-                l.accept(event);
-            } catch (RuntimeException ex) {
-                LOG.error("packet listener failed for {}", event, ex);
+        io.netty.channel.Channel outer = CURRENT_CHANNEL.get();
+        CURRENT_CHANNEL.set(conn.channel());
+        try {
+            for (Consumer<PacketEvent> l : packetListeners) {
+                try {
+                    l.accept(event);
+                } catch (RuntimeException ex) {
+                    LOG.error("packet listener failed for {}", event, ex);
+                }
             }
+            if (logging()) log(event.toJson(info.isCustomPayload() ? LOG_FRAME_BYTES : 256, TREE_DEPTH), frame);
+        } finally {
+            CURRENT_CHANNEL.set(outer);
         }
-        if (logging()) log(event.toJson(info.isCustomPayload() ? LOG_FRAME_BYTES : 256, TREE_DEPTH), frame);
         return event;
+    }
+
+    private static final ThreadLocal<io.netty.channel.Channel> CURRENT_CHANNEL = new ThreadLocal<>();
+
+    private final java.util.Set<String> warned = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Logs a {@code warning} event ({@code {kind: "warning", text}}) and the
+     * game log line, the first time only for each {@code key}: for advice
+     * that would otherwise repeat with every packet.
+     */
+    public void warnOnce(String key, String text) {
+        if (!warned.add(key)) return;
+        LOG.warn(text);
+        log(entry("warning", Map.of("text", text)));
+    }
+
+    /**
+     * The channel of the connection whose packet this thread is handling
+     * (in listeners, decoders and logging), or null: where a reader of game
+     * types finds the registries that connection uses.
+     */
+    public static io.netty.channel.Channel currentChannel() {
+        return CURRENT_CHANNEL.get();
     }
 
     private PacketEvent event(SculkConnection conn, Direction dir, Object packet, byte[] frame, PacketInfo info,

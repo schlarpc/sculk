@@ -102,6 +102,11 @@ final class FabricPlatform implements Platform {
     }
 
     @Override
+    public Object readGame(io.netty.buffer.ByteBuf buf, String type, Channel channel) {
+        return sculk.mc.Reads.read(buf, type, channel, dedicatedServer());
+    }
+
+    @Override
     public Set<String> modIds() {
         return FabricLoader.getInstance().getAllMods().stream()
                 .map(m -> m.getMetadata().getId())

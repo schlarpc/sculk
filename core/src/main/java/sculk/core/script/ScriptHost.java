@@ -72,6 +72,38 @@ public final class ScriptHost {
         }
     }
 
+    /**
+     * Calls a decoder function with the live object and its tree, the tree
+     * as plain JavaScript objects and arrays so the function can change it
+     * in place. Returns what the function returned, or the (possibly
+     * changed) tree when it returned nothing.
+     */
+    public synchronized Object callDecoder(Function fn, Object value, Object tree) {
+        try (Context cx = enter()) {
+            Scriptable scope = ScriptableObject.getTopLevelScope(fn);
+            Object jsTree = treeToJs(tree, cx, scope);
+            Object result = fn.call(cx, scope, scope, new Object[] {Context.javaToJS(value, scope, cx), jsTree});
+            return toJava(result == Context.getUndefinedValue() ? jsTree : result);
+        }
+    }
+
+    /** An ObjectModel tree (maps, lists, strings, numbers) as JavaScript objects and arrays. */
+    private static Object treeToJs(Object v, Context cx, Scriptable scope) {
+        if (v instanceof java.util.Map<?, ?> m) {
+            Scriptable o = cx.newObject(scope);
+            for (var e : m.entrySet()) ScriptableObject.putProperty(o, String.valueOf(e.getKey()), treeToJs(e.getValue(), cx, scope));
+            return o;
+        }
+        if (v instanceof java.util.List<?> l) {
+            Object[] items = new Object[l.size()];
+            for (int i = 0; i < items.length; i++) items[i] = treeToJs(l.get(i), cx, scope);
+            return cx.newArray(scope, items);
+        }
+        if (v instanceof Number n) return n.doubleValue();
+        if (v == null || v instanceof String || v instanceof Boolean) return v;
+        return Context.javaToJS(v, scope, cx);
+    }
+
     /** One problem {@link #check} found. Lines and columns count from 1. */
     public record Problem(int line, int column, String message, boolean warning) {}
 

@@ -51,6 +51,7 @@ public final class ScriptApi implements AutoCloseable {
     private final List<Consumer<PacketEvent>> packetListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<SculkConnection>> connectionListeners = new CopyOnWriteArrayList<>();
     private final Set<ScheduledFuture<?>> pending = ConcurrentHashMap.newKeySet();
+    private final List<Runnable> decoders = new CopyOnWriteArrayList<>();
     private volatile boolean closed;
 
     ScriptApi(Sculk engine, ScriptManager manager, ScriptHost host, ScheduledExecutorService timers, String name) {
@@ -72,9 +73,9 @@ public final class ScriptApi implements AutoCloseable {
         return scope;
     }
 
-    /** Listeners this script has registered and not removed. */
+    /** Listeners (and decoders) this script has registered and not removed. */
     int listenerCount() {
-        return packetListeners.size() + connectionListeners.size();
+        return packetListeners.size() + connectionListeners.size() + decoders.size();
     }
 
     /** Timers this script has scheduled that have not run yet. */
@@ -117,6 +118,8 @@ public final class ScriptApi implements AutoCloseable {
         for (Consumer<SculkConnection> l : connectionListeners) engine.removeConnectionListener(l);
         packetListeners.clear();
         connectionListeners.clear();
+        for (Runnable remove : decoders) remove.run();
+        decoders.clear();
         for (ScheduledFuture<?> f : pending) f.cancel(false);
         pending.clear();
     }
@@ -138,6 +141,40 @@ public final class ScriptApi implements AutoCloseable {
             }
             default -> throw new IllegalArgumentException("unknown event '" + event + "' (expected packet, connection)");
         }
+    }
+
+    /**
+     * Shows objects of class {@code className} (a Java class name, also
+     * matching subclasses) the way {@code fn(obj, tree)} says, wherever
+     * sculk makes a tree: packet.data in the event log and in the web UI,
+     * sculk.tree. {@code obj} is the live object; {@code tree} is what sculk
+     * would show, as a plain object to change in place or replace. Return
+     * the tree to show (or nothing, to show {@code tree} as changed). Values
+     * in it may be live game objects (from sculk.reader, say): they show as
+     * trees too. A decoder that throws is reported as a script_error and the
+     * plain tree is shown. Runs on the network thread: keep it quick.
+     */
+    public void decoder(String className, Function fn) {
+        if (closed) throw new IllegalStateException("script " + name + " was stopped");
+        if (className == null || className.isBlank()) throw new IllegalArgumentException("decoder needs a class name");
+        decoders.add(ObjectModel.addDecoder(className, (value, tree) -> {
+            if (closed) return null;
+            try {
+                Object result = host.callDecoder(fn, value, tree);
+                return result == null ? null : ObjectModel.toTree(plain(result), DECODED_DEPTH);
+            } catch (RuntimeException e) {
+                reportError("decoder " + className, e, null);
+                return null;
+            }
+        }));
+    }
+
+    /** How deep a decoder's own tree is shown (its values are often live objects to tree in turn). */
+    private static final int DECODED_DEPTH = 8;
+
+    /** A reader over bytes (a byte array, a buffer or a hex string), for decoders: see {@link Reader}. */
+    public Reader reader(Object bytes) {
+        return Reader.of(ScriptHost.toJava(bytes));
     }
 
     public void schedule(double delayMillis, Function fn) {
@@ -235,14 +272,18 @@ public final class ScriptApi implements AutoCloseable {
         try {
             host.call(fn, args);
         } catch (RuntimeException e) {
-            Sculk.LOG.error("script {}: {} callback failed", name, what, e);
-            Map<String, Object> entry = Sculk.entry("script_error", Map.of());
-            entry.put("script", name);
-            entry.put("callback", what);
-            entry.put("error", e instanceof RhinoException re ? describe(re) : e.toString());
-            if (args.length > 0 && args[0] instanceof PacketEvent pe) entry.put("packet", pe.toString());
-            engine.log(entry);
+            reportError(what, e, args.length > 0 && args[0] instanceof PacketEvent pe ? pe : null);
         }
+    }
+
+    private void reportError(String what, RuntimeException e, PacketEvent packet) {
+        Sculk.LOG.error("script {}: {} callback failed", name, what, e);
+        Map<String, Object> entry = Sculk.entry("script_error", Map.of());
+        entry.put("script", name);
+        entry.put("callback", what);
+        entry.put("error", e instanceof RhinoException re ? describe(re) : e.toString());
+        if (packet != null) entry.put("packet", packet.toString());
+        engine.log(entry);
     }
 
     /** Converts an eval result to something {@link EventLog#toJson} can always serialise. */

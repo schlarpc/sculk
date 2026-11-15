@@ -51,6 +51,46 @@ public final class ObjectModel {
     /** What a {@link Renderer} returns for values it leaves to reflection. */
     public static final Object UNHANDLED = new Object();
 
+    /**
+     * A view of one class (and its subclasses) that a script supplies
+     * ({@code sculk.decoder}): given the live object and the tree sculk
+     * would show, the tree to show instead, or null to keep it.
+     */
+    public interface Decoder {
+        Object decode(Object value, Object tree);
+    }
+
+    /** Decoders by class name, newest last; the newest wins. */
+    private static final Map<String, List<Decoder>> DECODERS = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Objects being decoded on this thread, so a decoder that trees its own object gets the plain tree. */
+    private static final ThreadLocal<java.util.Set<Object>> DECODING =
+            ThreadLocal.withInitial(() -> java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+
+    /**
+     * Adds a decoder for objects of class {@code className} (or a subclass);
+     * the returned Runnable removes it.
+     */
+    public static Runnable addDecoder(String className, Decoder decoder) {
+        DECODERS.compute(className, (k, list) -> {
+            List<Decoder> out = list == null ? new ArrayList<>() : new ArrayList<>(list);
+            out.add(decoder);
+            return List.copyOf(out);
+        });
+        return () -> DECODERS.computeIfPresent(className, (k, list) -> {
+            List<Decoder> out = new ArrayList<>(list);
+            out.remove(decoder);
+            return out.isEmpty() ? null : List.copyOf(out);
+        });
+    }
+
+    private static Decoder decoderFor(Class<?> cls) {
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            List<Decoder> list = DECODERS.get(c.getName());
+            if (list != null && !list.isEmpty()) return list.get(list.size() - 1);
+        }
+        return null;
+    }
+
     private static volatile Renderer renderer;
 
     private ObjectModel() {}
@@ -78,6 +118,24 @@ public final class ObjectModel {
     }
 
     private static Object walk(Object value, int depth) {
+        if (!DECODERS.isEmpty() && value != null && !(value instanceof Number || value instanceof Boolean
+                || value instanceof CharSequence || value instanceof Map<?, ?> || value instanceof Collection<?>)) {
+            Decoder d = decoderFor(value.getClass());
+            java.util.Set<Object> busy = DECODING.get();
+            if (d != null && busy.add(value)) {
+                try {
+                    Object tree = plainWalk(value, depth);
+                    Object decoded = d.decode(value, tree);
+                    return decoded == null ? tree : decoded;
+                } finally {
+                    busy.remove(value);
+                }
+            }
+        }
+        return plainWalk(value, depth);
+    }
+
+    private static Object plainWalk(Object value, int depth) {
         if (value == null || value instanceof Number || value instanceof Boolean || value instanceof CharSequence) {
             return value instanceof CharSequence cs ? cs.toString() : value;
         }

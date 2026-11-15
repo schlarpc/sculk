@@ -94,6 +94,19 @@ public interface Platform {
         return null;
     }
 
+    /**
+     * Reads one value of a game type from {@code buf} as the game's own
+     * codec does, for {@code sculk.reader}: {@code nbt}, {@code identifier},
+     * {@code blockPos}, {@code itemStack}, {@code component}. Types that need
+     * the game's registries (item stacks, text) take them from the
+     * connection on {@code channel} (the one whose packet is being handled;
+     * may be null) or, failing that, from the game. Throws
+     * IllegalArgumentException for a type this platform cannot read.
+     */
+    default Object readGame(io.netty.buffer.ByteBuf buf, String type, io.netty.channel.Channel channel) {
+        throw new IllegalArgumentException(describe() + " cannot read game type " + type + " from bytes");
+    }
+
     /** Ids of all loaded mods, including "minecraft" and the loader itself. */
     Set<String> modIds();
 

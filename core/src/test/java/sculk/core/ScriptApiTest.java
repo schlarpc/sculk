@@ -54,4 +54,61 @@ class ScriptApiTest {
                 """);
         assertEquals("b", ((java.util.Map<?, ?>) result).get("text"));
     }
+
+    /** A mod payload that keeps its content as raw bytes, as AE2's GuiDataSyncPacket does. */
+    public record Blob(int id, byte[] data) {}
+
+    @Test
+    void decodersShowOpaqueBytesTheirWay() throws Exception {
+        var scripts = FakeGame.sculk().scripts();
+        scripts.load("blob-decoder.js", """
+                sculk.decoder('sculk.core.ScriptApiTest$Blob', (obj, tree) => {
+                  const r = sculk.reader(obj.data());
+                  tree.fields = [];
+                  while (r.readable() > 0) tree.fields.push({ key: r.u16(), name: r.string() });
+                  delete tree.data;
+                });
+                """);
+        try {
+            // 0x0064 "hi", 0x0065 "yo"
+            Object tree = scripts.eval("sculk.tree(new Packages.sculk.core.ScriptApiTest.Blob(5, sculk.unhex('0064026869' + '006502796f')))");
+            assertEquals("{\"$class\":\"sculk.core.ScriptApiTest$Blob\",\"id\":5,"
+                    + "\"fields\":[{\"key\":100,\"name\":\"hi\"},{\"key\":101,\"name\":\"yo\"}]}",
+                    sculk.core.log.EventLog.toJson(tree));
+            // Nested: a list of them decodes each.
+            Object nested = sculk.core.model.ObjectModel.toTree(java.util.List.of(new Blob(1, new byte[] {0, 1, 1, 'z'})), 4);
+            assertEquals("z", ((java.util.Map<?, ?>) ((java.util.List<?>) ((java.util.Map<?, ?>) ((java.util.List<?>) nested).get(0)).get("fields")).get(0)).get("name"));
+        } finally {
+            scripts.stop("blob-decoder.js");
+        }
+        Object plain = sculk.core.model.ObjectModel.toTree(new Blob(1, new byte[] {1}), 4);
+        assertEquals(java.util.Map.of("$bytes", "01"), ((java.util.Map<?, ?>) plain).get("data"), "the decoder left with its script");
+    }
+
+    @Test
+    void aFailingDecoderShowsThePlainTree() throws Exception {
+        var scripts = FakeGame.sculk().scripts();
+        scripts.load("bad-decoder.js", """
+                sculk.decoder('sculk.core.ScriptApiTest$Blob', (obj, tree) => { sculk.reader(obj.data()).i32(); });
+                """);
+        try {
+            Object tree = sculk.core.model.ObjectModel.toTree(new Blob(2, new byte[] {1}), 4);
+            assertEquals(java.util.Map.of("$bytes", "01"), ((java.util.Map<?, ?>) tree).get("data"));
+        } finally {
+            scripts.stop("bad-decoder.js");
+        }
+    }
+
+    @Test
+    void readersReadWhatTheGameWrites() {
+        var scripts = FakeGame.sculk().scripts();
+        // varint 300, i32 -2, string "é", bool, i64 2^60, varLong 1, uuid, f32 1.5
+        String hex = "ac02" + "fffffffe" + "02c3a9" + "01" + "1000000000000000" + "01"
+                + "00000000000000010000000000000002" + "3fc00000";
+        Object read = scripts.eval("""
+                (() => { const r = sculk.reader('%s');
+                  return [r.varInt(), r.i32(), r.string(), r.bool(), r.i64(), r.varLong(), r.uuid(), r.f32(), r.readable()].join(','); })()
+                """.formatted(hex));
+        assertEquals("300,-2,é,true,1152921504606846976,1,00000000-0000-0001-0000-000000000002,1.5,0", read);
+    }
 }

@@ -321,7 +321,28 @@ sculk.on('connection', c => sculk.log('connected as ' + c.side));
 // sculk.with(record, 'field', value), sculk.copy(bytes), sculk.hex(bytes), sculk.unhex(str)
 // sculk.log(msg) (a script_log event), sculk.chat(msg) (a chat line only the player sees; a chat event),
 // sculk.scope(name), sculk.name, sculk.dist ('client' or 'server')
+
+// Decoders: show a class's objects your way wherever sculk makes a tree (packet.data in the
+// log and the web UI, sculk.tree), for mod data kept as raw bytes.
+sculk.decoder('appeng.core.network.clientbound.GuiDataSyncPacket', (obj, tree) => {
+  const r = sculk.reader(obj.syncData);   // bytes, a buffer or a hex string
+  tree.fields = [];
+  while (r.readable() > 0) tree.fields.push(r.varInt());
+  delete tree.syncData;                    // change tree in place, or return a new one
+});
+// readers: varInt varLong bool i8 u8 i16 u16 i32 i64 f32 f64 string uuid bytes(n) byteArray rest
+// skip(n) readable position, and game types read by the game's codecs (where the platform
+// supports it: 1.21.1 and 26.3): nbt identifier blockPos itemStack component
 ```
+
+A decoder runs when the tree is made: for logged events, as the packet
+passes, so it shows on packets captured after it starts, not before. It
+gets the plain tree (as sculk would show it) to change or replace; live
+game objects in what it returns are shown as trees too. It matches the
+class and its subclasses, the newest decoder for a class wins, it leaves
+with its script, and one that throws logs a `script_error` and the plain
+tree is shown. Game types that need registries (item stacks, text) use
+those of the connection whose packet is being handled, else the client's.
 
 ### Events
 

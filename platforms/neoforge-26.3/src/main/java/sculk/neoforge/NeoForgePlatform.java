@@ -97,6 +97,11 @@ final class NeoForgePlatform implements Platform {
     }
 
     @Override
+    public Object readGame(io.netty.buffer.ByteBuf buf, String type, io.netty.channel.Channel channel) {
+        return sculk.mc.Reads.read(buf, type, channel, dedicatedServer());
+    }
+
+    @Override
     public Set<String> modIds() {
         return ModList.get().getMods().stream().map(m -> m.getModId()).collect(Collectors.toSet());
     }
