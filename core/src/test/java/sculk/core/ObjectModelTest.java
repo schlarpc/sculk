@@ -65,4 +65,12 @@ class ObjectModelTest {
             ObjectModel.setRenderer(null);
         }
     }
+
+    @Test
+    void buffersShowTheirReadableBytes() {
+        io.netty.buffer.ByteBuf buf = io.netty.buffer.Unpooled.wrappedBuffer(new byte[] {1, 2, 3});
+        buf.readByte();
+        assertEquals(Map.of("$bytes", "0203"), ObjectModel.toTree(buf, 2));
+        assertEquals(1, buf.readerIndex());
+    }
 }

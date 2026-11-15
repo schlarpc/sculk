@@ -286,7 +286,8 @@ public final class ScriptApi implements AutoCloseable {
             for (Object o : l) out.add(plain(ScriptHost.toJava(o)));
             return out;
         }
-        if (value instanceof Double d && d == Math.rint(d) && !Double.isInfinite(d)) return d.longValue();
+        // JS numbers are doubles; show whole ones as integers, but only where a long holds them exactly.
+        if (value instanceof Double d && d == Math.rint(d) && Math.abs(d) < 1e15) return d.longValue();
         return value;
     }
 }

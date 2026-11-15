@@ -51,6 +51,12 @@ public final class ObjectModel {
         }
         if (value instanceof Character || value instanceof Enum<?>) return value.toString();
         if (value instanceof byte[] bytes) return Map.of("$bytes", Bytes.hex(bytes, 1024));
+        // Payloads that keep a raw buffer (FriendlyByteBuf and the like): its readable bytes.
+        if (value instanceof io.netty.buffer.ByteBuf buf) {
+            byte[] bytes = new byte[Math.min(buf.readableBytes(), 1024)];
+            buf.getBytes(buf.readerIndex(), bytes);
+            return Map.of("$bytes", Bytes.hex(bytes, 1024));
+        }
         if (value instanceof Optional<?> opt) return opt.map(v -> toTree(v, depth)).orElse(null);
         Renderer r = renderer;
         if (r != null) {
