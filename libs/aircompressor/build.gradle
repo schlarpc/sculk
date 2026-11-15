@@ -1,0 +1,46 @@
+// aircompressor's pure-Java zstd, relocated to sculk.shaded.io.airlift.compress
+// and exposed as the 'shaded' configuration, for the event store's capture
+// files (core's EventStore). Relocated for the same reason as Rhino (see
+// libs/rhino): loaders pick one copy of a library across all mods.
+//
+// The 2.x line: pure Java (sun.misc.Unsafe) on Java 8+, so it runs on the
+// Java 21 of Minecraft 1.21.1; 3.x needs Java 22. On Java 24+ the JVM warns
+// once that Unsafe's memory access is deprecated.
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "io.airlift:aircompressor:${rootProject.aircompressor_version}"
+}
+
+tasks.named('jar') { enabled = false }
+
+tasks.named('shadowJar') {
+    archiveClassifier = 'shaded'
+    relocate 'io.airlift.compress', 'sculk.shaded.io.airlift.compress'
+    // zstd and the interfaces it implements; not the other codecs, nor the Hadoop streams.
+    include 'io/airlift/compress/*.class'
+    include 'io/airlift/compress/zstd/**'
+    exclude 'io/airlift/compress/zstd/*Hadoop*'
+    manifest.attributes(
+        'Sculk-Shaded-From': "io.airlift:aircompressor:${rootProject.aircompressor_version}",
+        'Sculk-Shaded-License': 'Apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)',
+    )
+}
+
+configurations {
+    shaded {
+        canBeConsumed = true
+        canBeResolved = false
+    }
+}
+
+artifacts {
+    shaded tasks.named('shadowJar')
+}

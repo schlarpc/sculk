@@ -440,7 +440,12 @@ being written (`EventStore`):
 
 - **Spool.** A writer thread appends events to 64 MiB segment files in a
   temporary capture directory (`-Dsculk.captureDir`, default the system
-  temp directory). Past the cap (`-Dsculk.captureBytes`, default 2 GiB) the
+  temp directory), in zstd-compressed blocks of about 256 KiB (JSON and
+  frames compress about ten to one; a block is written when full, when
+  the writer goes quiet, or before the hot ring would have to let its
+  events go). The index points at each event's block and its place in it;
+  reading one back unpacks its block, and the last few unpacked blocks are
+  kept for scans. Past the cap (`-Dsculk.captureBytes`, default 2 GiB) the
   oldest segment is deleted. The directory goes when the game exits, and
   ones left by a crashed game are cleaned up at the next launch. Captures
   do not persist across launches. `-Dsculk.captureBytes=0` keeps only the
@@ -707,6 +712,7 @@ build.gradle              declares loader plugins once (apply false); webUi task
 gradle.properties         shared versions; toolchains come only from JAVA*_HOME
 core/                     shared engine (Java 17, Netty + SLF4J compileOnly)
 libs/rhino/               Rhino relocated to sculk.shaded.org.mozilla (Shadow)
+libs/aircompressor/       aircompressor's pure-Java zstd relocated to sculk.shaded.io.airlift.compress
 web/                      control server web UI: TypeScript (src/), static files, default.nix
 gradle/platform-common.gradle
                           applied by every platform: compiles core in, embeds relocated libs and the web UI
@@ -745,6 +751,10 @@ Decisions:
   startup and checks the two things relocation can break: the
   ServiceLoader-provided RegExp engine and the message resource bundles.
   Rhino is MPL-2.0. The shaded jar's manifest records where it came from.
+  The capture's zstd (`libs/aircompressor`, Apache-2.0) is relocated and
+  embedded the same way: aircompressor 2.x, pure Java on Java 8+ through
+  `sun.misc.Unsafe` (3.x needs Java 22, past Minecraft 1.21.1's 21), only
+  its zstd package. Java 24+ prints a one-time warning about Unsafe.
 - **Shared source trees per Minecraft version, no Stonecutter (yet).** Two
   loaders of one version share their game code by compiling the same
   directory (`platforms/shared/mc-<version>`); what differs between

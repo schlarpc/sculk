@@ -161,6 +161,25 @@ class EventStoreTest {
     }
 
     @Test
+    void blocksAreCompressedAndReadBackWhole(@TempDir Path tmp) throws Exception {
+        List<StoredEvent> all = events(20_000, 3);
+        // A ring big enough that blocks fill by size, as in a game: many events to a block.
+        try (EventStore store = new EventStore(4096, 1 << 20, tmp.resolve("cap"), 1L << 30, 8 << 20)) {
+            for (StoredEvent e : all) store.add(e);
+            assertTrue(store.awaitWritten(20_000, 10_000));
+            Map<String, Object> d = store.describe();
+            long disk = ((Number) d.get("diskBytes")).longValue(), raw = ((Number) d.get("diskBytesUncompressed")).longValue();
+            assertTrue(disk * 2 < raw, "compressed (the test frames are random bytes, so not much): " + disk + " of " + raw);
+            for (int id : new int[] {1, 2, 9_999, 10_000, 19_999, 20_000, 777}) {
+                StoredEvent back = store.get(id);
+                assertNotNull(back, "event " + id);
+                assertEquals(all.get(id - 1).json(), back.json());
+                assertArrayEquals(all.get(id - 1).frame(), back.frame());
+            }
+        }
+    }
+
+    @Test
     void theDiskCapDropsTheOldestSegments(@TempDir Path tmp) throws Exception {
         List<StoredEvent> all = events(4000, 3);
         Path dir = tmp.resolve("cap");

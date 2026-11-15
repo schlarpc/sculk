@@ -1,7 +1,7 @@
 // Applied by every platforms/* project after its loader plugin.
 //
 // Compiles the shared core sources into this mod and embeds the relocated
-// Rhino classes as part of the mod's own output, so the same classes are used
+// libraries (Rhino, zstd) as part of the mod's own output, so the same classes are used
 // in dev runs and in the shipped jar, with no jar-in-jar involved.
 
 sourceSets.main.java.srcDir rootProject.file('core/src/main/java')
@@ -20,12 +20,14 @@ configurations {
 }
 
 dependencies {
-    shadedRhino project(path: ':libs:rhino', configuration: 'shaded')
-    compileOnly project(path: ':libs:rhino', configuration: 'shaded')
+    ['rhino', 'aircompressor'].each {
+        shadedRhino project(path: ":libs:${it}", configuration: 'shaded')
+        compileOnly project(path: ":libs:${it}", configuration: 'shaded')
+    }
 }
 
 def unpackRhino = tasks.register('unpackShadedRhino', Sync) {
-    // Declared as an input so Gradle builds :libs:rhino:shadowJar first; the
+    // Declared as an input so Gradle builds the libs' shadowJars first; the
     // lazy zipTree below would otherwise hide that dependency.
     inputs.files configurations.shadedRhino
     from { configurations.shadedRhino.collect { zipTree(it) } }

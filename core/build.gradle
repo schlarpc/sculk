@@ -30,6 +30,8 @@ dependencies {
     compileOnlyApi 'com.mojang:brigadier:1.1.8'
     // Relocated Rhino (sculk.shaded.org.mozilla); see libs/rhino.
     api project(path: ':libs:rhino', configuration: 'shaded')
+    // Relocated zstd (sculk.shaded.io.airlift.compress); see libs/aircompressor.
+    api project(path: ':libs:aircompressor', configuration: 'shaded')
 
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'

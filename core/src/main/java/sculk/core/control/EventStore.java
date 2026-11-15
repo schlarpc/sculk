@@ -128,7 +128,7 @@ public final class EventStore implements AutoCloseable {
         Spool s = null;
         if (dir != null && maxDiskBytes > 0) {
             try {
-                s = new Spool(dir, Math.max(maxDiskBytes, 2 * segmentBytes));
+                s = new Spool(dir, Math.max(maxDiskBytes, 2 * segmentBytes), ring.length / 4);
             } catch (IOException e) {
                 Sculk.LOG.error("cannot open the capture directory {}; keeping recent events in memory only", dir, e);
             }
@@ -220,6 +220,7 @@ public final class EventStore implements AutoCloseable {
         if (spool != null) {
             out.put("dir", spool.dir.toString());
             out.put("diskBytes", spool.totalBytes);
+            out.put("diskBytesUncompressed", spool.rawBytes);
             out.put("diskCap", spool.maxBytes);
             out.put("pendingWrites", spool.queue.size());
         }
@@ -778,10 +779,23 @@ public final class EventStore implements AutoCloseable {
 
     // ---- the spool: segment files on disk ----
 
+    /** Raw bytes per compressed block: big enough to compress well, small enough to unpack for one event. */
+    static final int BLOCK_BYTES = 256 << 10;
+    /** Unpacked blocks kept for reads; a scan reads one block's events in a row. */
+    private static final int CACHED_BLOCKS = 16;
+    /** A writer with nothing new for this long writes out the block it has, so it reaches the disk. */
+    private static final long IDLE_FLUSH_MILLIS = 250;
+
     /**
-     * Appends events to segment files of about 64 MiB, on a writer thread:
-     * {@code [int json length][int frame length][json][frame]}. Each event's
-     * place is kept in {@link #positions}.
+     * Appends events to segment files of about 64 MiB, on a writer thread,
+     * in zstd-compressed blocks: {@code [int raw length][int compressed
+     * length][zstd frame]}, each holding records
+     * {@code [int json length][int frame length][json][frame]}. Event JSON
+     * and frames compress about ten to one (repeated keys, class names,
+     * chunk data the wire no longer compresses once it is decoded). Each
+     * event's block is kept in {@link #positions}, and its place in the
+     * block in {@link #offsets}. Events wait in the open block, and in
+     * the hot ring, until their block is written.
      */
     private final class Spool {
         final Path dir;
@@ -791,26 +805,49 @@ public final class EventStore implements AutoCloseable {
         final Map<Integer, FileChannel> channels = new ConcurrentHashMap<>();
         /** (segment, first id) of each live segment, oldest first; guarded by itself. */
         final List<long[]> segments = new ArrayList<>();
-        /** Per id: segment << 40 | offset; length in {@link #lengths}. */
+        /** Per id: segment << 40 | offset of its block; its record's offset in the block in {@link #offsets}. */
         final ConcurrentHashMap<Long, long[]> positions = new ConcurrentHashMap<>();
-        final ConcurrentHashMap<Long, int[]> lengths = new ConcurrentHashMap<>();
+        final ConcurrentHashMap<Long, int[]> offsets = new ConcurrentHashMap<>();
         volatile long writtenUpTo;
         volatile long totalBytes;
+        /** Raw bytes before compression, for describe(). */
+        volatile long rawBytes;
         private int segment = -1;
         private long segmentFill;
         private final Thread writer;
         private volatile boolean closed;
 
-        Spool(Path dir, long maxBytes) throws IOException {
+        // The open block, owned by the writer thread.
+        private byte[] block = new byte[BLOCK_BYTES + (64 << 10)];
+        private int blockFill;
+        private long[] blockIds = new long[1024];
+        private int[] blockOffsets = new int[1024];
+        private int blockCount;
+        /** Events in the open block at most, so it is written before the hot ring must let them go. */
+        private final int maxBlockEvents;
+        private final sculk.shaded.io.airlift.compress.zstd.ZstdCompressor compressor =
+                new sculk.shaded.io.airlift.compress.zstd.ZstdCompressor();
+        private final ThreadLocal<sculk.shaded.io.airlift.compress.zstd.ZstdDecompressor> decompressor =
+                ThreadLocal.withInitial(sculk.shaded.io.airlift.compress.zstd.ZstdDecompressor::new);
+        /** Unpacked blocks by position, most recently used last; guarded by itself. */
+        private final LinkedHashMap<Long, byte[]> cache = new LinkedHashMap<>(32, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<Long, byte[]> eldest) {
+                return size() > CACHED_BLOCKS;
+            }
+        };
+
+        Spool(Path dir, long maxBytes, int maxBlockEvents) throws IOException {
             this.dir = dir.toAbsolutePath();
             this.maxBytes = maxBytes;
+            this.maxBlockEvents = Math.max(1, maxBlockEvents);
             Files.createDirectories(this.dir);
             Files.writeString(this.dir.resolve("pid"), String.valueOf(ProcessHandle.current().pid()));
             writer = new Thread(this::run, "sculk-capture-writer");
             writer.setDaemon(true);
             writer.start();
             Runtime.getRuntime().addShutdownHook(new Thread(this::close, "sculk-capture-cleanup"));
-            Sculk.LOG.info("capturing events to {} (at most {} MiB, deleted on exit)", this.dir, maxBytes >> 20);
+            Sculk.LOG.info("capturing events to {} (at most {} MiB, zstd, deleted on exit)", this.dir, maxBytes >> 20);
         }
 
         void enqueue(StoredEvent e) {
@@ -821,9 +858,14 @@ public final class EventStore implements AutoCloseable {
             List<StoredEvent> batch = new ArrayList<>();
             while (!closed) {
                 try {
-                    batch.add(queue.take());
+                    StoredEvent first = queue.poll(IDLE_FLUSH_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    if (first == null) {
+                        flushBlock(); // Quiet: put what we have on disk.
+                        continue;
+                    }
+                    batch.add(first);
                     queue.drainTo(batch, 4095);
-                    write(batch);
+                    for (StoredEvent e : batch) append(e);
                 } catch (InterruptedException e) {
                     return;
                 } catch (IOException | RuntimeException e) {
@@ -835,42 +877,47 @@ public final class EventStore implements AutoCloseable {
             }
         }
 
-        private void write(List<StoredEvent> batch) throws IOException {
-            int i = 0;
-            while (i < batch.size()) {
-                if (segment < 0 || segmentFill >= EventStore.this.segmentBytes) rotate(batch.get(i).id());
-                FileChannel ch = channels.get(segment);
-                // As many records as fit this segment, in one write.
-                List<byte[]> parts = new ArrayList<>();
-                long start = segmentFill, size = 0;
-                int j = i;
-                for (; j < batch.size() && (j == i || start + size < EventStore.this.segmentBytes); j++) {
-                    StoredEvent e = batch.get(j);
-                    byte[] json = e.json().getBytes(StandardCharsets.UTF_8);
-                    byte[] frame = e.frame() == null ? new byte[0] : e.frame();
-                    parts.add(json);
-                    parts.add(frame);
-                    size += 8 + json.length + frame.length;
-                }
-                ByteBuffer buf = ByteBuffer.allocate((int) size);
-                long offset = start;
-                for (int k = i; k < j; k++) {
-                    byte[] json = parts.get(2 * (k - i)), frame = parts.get(2 * (k - i) + 1);
-                    buf.putInt(json.length).putInt(frame.length).put(json).put(frame);
-                    setPosition(batch.get(k).id(), ((long) segment << 40) | offset, 8 + json.length + frame.length);
-                    offset += 8 + json.length + frame.length;
-                }
-                buf.flip();
-                while (buf.hasRemaining()) ch.write(buf, start + buf.position());
-                segmentFill += size;
-                totalBytes += size;
-                enforceCap();
-                writtenUpTo = batch.get(j - 1).id();
-                i = j;
+        private void append(StoredEvent e) throws IOException {
+            byte[] json = e.json().getBytes(StandardCharsets.UTF_8);
+            byte[] frame = e.frame() == null ? new byte[0] : e.frame();
+            int size = 8 + json.length + frame.length;
+            if (blockFill + size > block.length) block = java.util.Arrays.copyOf(block, Math.max(block.length * 2, blockFill + size));
+            if (blockCount == blockIds.length) {
+                blockIds = java.util.Arrays.copyOf(blockIds, blockCount * 2);
+                blockOffsets = java.util.Arrays.copyOf(blockOffsets, blockCount * 2);
             }
+            blockIds[blockCount] = e.id();
+            blockOffsets[blockCount] = blockFill;
+            blockCount++;
+            ByteBuffer.wrap(block, blockFill, size).putInt(json.length).putInt(frame.length).put(json).put(frame);
+            blockFill += size;
+            if (blockFill >= BLOCK_BYTES || blockCount >= maxBlockEvents) flushBlock();
         }
 
-        private void setPosition(long id, long pos, int len) {
+        /** Compresses the open block and appends it to the current segment. */
+        private void flushBlock() throws IOException {
+            if (blockCount == 0) return;
+            if (segment < 0 || segmentFill >= EventStore.this.segmentBytes) rotate(blockIds[0]);
+            FileChannel ch = channels.get(segment);
+            int max = compressor.maxCompressedLength(blockFill);
+            byte[] out = new byte[8 + max];
+            int packed = compressor.compress(block, 0, blockFill, out, 8, max);
+            ByteBuffer.wrap(out, 0, 8).putInt(blockFill).putInt(packed);
+            ByteBuffer buf = ByteBuffer.wrap(out, 0, 8 + packed);
+            long start = segmentFill;
+            while (buf.hasRemaining()) ch.write(buf, start + buf.position());
+            long pos = ((long) segment << 40) | start;
+            for (int k = 0; k < blockCount; k++) setPosition(blockIds[k], pos, blockOffsets[k]);
+            segmentFill += 8 + packed;
+            totalBytes += 8 + packed;
+            rawBytes += blockFill;
+            writtenUpTo = blockIds[blockCount - 1];
+            blockFill = 0;
+            blockCount = 0;
+            enforceCap();
+        }
+
+        private void setPosition(long id, long pos, int offset) {
             long chunk = id >>> Index.SHIFT;
             int i = (int) (id & Index.MASK);
             positions.computeIfAbsent(chunk, k -> {
@@ -878,7 +925,7 @@ public final class EventStore implements AutoCloseable {
                 java.util.Arrays.fill(a, -1);
                 return a;
             })[i] = pos;
-            lengths.computeIfAbsent(chunk, k -> new int[Index.SIZE])[i] = len;
+            offsets.computeIfAbsent(chunk, k -> new int[Index.SIZE])[i] = offset;
         }
 
         private void rotate(long firstIdInSegment) throws IOException {
@@ -904,48 +951,68 @@ public final class EventStore implements AutoCloseable {
                 dropBefore(next[1]);
                 long keep = next[1] >>> Index.SHIFT;
                 positions.keySet().removeIf(k -> k < keep);
-                lengths.keySet().removeIf(k -> k < keep);
+                offsets.keySet().removeIf(k -> k < keep);
                 FileChannel ch = channels.remove((int) oldest[0]);
                 Path file = dir.resolve(String.format("segment-%06d.bin", (int) oldest[0]));
                 long size = ch.size();
                 ch.close();
                 Files.deleteIfExists(file);
                 totalBytes -= size;
+                synchronized (cache) {
+                    cache.keySet().removeIf(p -> (p >>> 40) == oldest[0]);
+                }
             }
         }
 
         /** Reads an event back; null if it is not on disk (yet, or any more). */
         StoredEvent read(long id) {
             long[] pos = positions.get(id >>> Index.SHIFT);
-            int[] len = lengths.get(id >>> Index.SHIFT);
-            if (pos == null || len == null) return null;
+            int[] off = offsets.get(id >>> Index.SHIFT);
+            if (pos == null || off == null) return null;
             int i = (int) (id & Index.MASK);
             long p = pos[i];
-            int n = len[i];
-            if (p < 0 || n <= 0) return null;
-            FileChannel ch = channels.get((int) (p >>> 40));
-            if (ch == null) return null;
-            ByteBuffer buf = ByteBuffer.allocate(n);
-            try {
-                long offset = p & ((1L << 40) - 1);
-                while (buf.hasRemaining()) {
-                    if (ch.read(buf, offset + buf.position()) < 0) return null;
-                }
-            } catch (IOException e) {
-                return null; // Deleted under us: the event is gone.
-            }
-            buf.flip();
+            if (p < 0) return null;
+            byte[] raw = block(p);
+            if (raw == null) return null;
+            ByteBuffer buf = ByteBuffer.wrap(raw);
+            buf.position(off[i]);
             int jsonLen = buf.getInt(), frameLen = buf.getInt();
-            byte[] json = new byte[jsonLen];
-            buf.get(json);
-            byte[] frame = null;
-            if (frameLen > 0) {
-                frame = new byte[frameLen];
-                buf.get(frame);
-            }
-            String line = new String(json, StandardCharsets.UTF_8);
+            String line = new String(raw, buf.position(), jsonLen, StandardCharsets.UTF_8);
+            byte[] frame = frameLen > 0 ? java.util.Arrays.copyOfRange(raw, buf.position() + jsonLen, buf.position() + jsonLen + frameLen) : null;
             Map<String, Object> fields = READ.fromJson(line, MAP);
             return new StoredEvent(id, fields, line, frame);
+        }
+
+        /** The unpacked block at {@code p} (segment << 40 | offset), from the cache or the disk; null if gone. */
+        private byte[] block(long p) {
+            synchronized (cache) {
+                byte[] hit = cache.get(p);
+                if (hit != null) return hit;
+            }
+            FileChannel ch = channels.get((int) (p >>> 40));
+            if (ch == null) return null;
+            long offset = p & ((1L << 40) - 1);
+            byte[] raw;
+            try {
+                ByteBuffer head = ByteBuffer.allocate(8);
+                while (head.hasRemaining()) {
+                    if (ch.read(head, offset + head.position()) < 0) return null;
+                }
+                head.flip();
+                int rawLen = head.getInt(), packedLen = head.getInt();
+                ByteBuffer packed = ByteBuffer.allocate(packedLen);
+                while (packed.hasRemaining()) {
+                    if (ch.read(packed, offset + 8 + packed.position()) < 0) return null;
+                }
+                raw = new byte[rawLen];
+                decompressor.get().decompress(packed.array(), 0, packedLen, raw, 0, rawLen);
+            } catch (IOException | RuntimeException e) {
+                return null; // Deleted under us: the events are gone.
+            }
+            synchronized (cache) {
+                cache.put(p, raw);
+            }
+            return raw;
         }
 
         synchronized void close() {
