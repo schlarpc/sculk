@@ -20,3 +20,5 @@ __pycache__/
 sculk-control.json
 # web UI dependencies (web/default.nix fetches them from package-lock.json)
 node_modules/
+# MCP client configuration (scripts/sculkctl.py mcp-config)
+.mcp.json
