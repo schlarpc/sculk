@@ -257,7 +257,7 @@ public final class ScriptApi implements AutoCloseable {
 
     /** A plain tree view of any object (records, mod payloads, packets). */
     public Object tree(Object value) {
-        return ObjectModel.toTree(ScriptHost.toJava(value), 6);
+        return ScriptHost.jsTree(ObjectModel.toTree(ScriptHost.toJava(value), 6), scope);
     }
 
     /** A copy of a record with one component replaced, for editing decoded payloads. */

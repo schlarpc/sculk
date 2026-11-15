@@ -90,6 +90,17 @@ public final class ScriptHost {
         }
     }
 
+    /**
+     * An ObjectModel tree as JavaScript objects and arrays, for a value a
+     * {@code sculk} method hands back to the script calling it (Rhino shows
+     * a Java Map's keys to JSON.stringify but not as properties).
+     */
+    static Object jsTree(Object tree, Scriptable scope) {
+        Context cx = Context.getCurrentContext();
+        if (cx == null) return tree; // Called from Java, not from a script.
+        return treeToJs(tree, cx, scope);
+    }
+
     /** An ObjectModel tree (maps, lists, strings, numbers) as JavaScript objects and arrays. */
     private static Object treeToJs(Object v, Context cx, Scriptable scope) {
         if (v instanceof java.util.Map<?, ?> m) {

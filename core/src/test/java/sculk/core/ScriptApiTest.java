@@ -71,10 +71,10 @@ class ScriptApiTest {
                 """);
         try {
             // 0x0064 "hi", 0x0065 "yo"
-            Object tree = scripts.eval("sculk.tree(new Packages.sculk.core.ScriptApiTest.Blob(5, sculk.unhex('0064026869' + '006502796f')))");
+            Object tree = scripts.eval("JSON.stringify(sculk.tree(new Packages.sculk.core.ScriptApiTest.Blob(5, sculk.unhex('0064026869' + '006502796f'))))");
             assertEquals("{\"$class\":\"sculk.core.ScriptApiTest$Blob\",\"id\":5,"
                     + "\"fields\":[{\"key\":100,\"name\":\"hi\"},{\"key\":101,\"name\":\"yo\"}]}",
-                    sculk.core.log.EventLog.toJson(tree));
+                    tree);
             // Nested: a list of them decodes each.
             Object nested = sculk.core.model.ObjectModel.toTree(java.util.List.of(new Blob(1, new byte[] {0, 1, 1, 'z'})), 4);
             assertEquals("z", ((java.util.Map<?, ?>) ((java.util.List<?>) ((java.util.Map<?, ?>) ((java.util.List<?>) nested).get(0)).get("fields")).get(0)).get("name"));
@@ -110,5 +110,12 @@ class ScriptApiTest {
                   return [r.varInt(), r.i32(), r.string(), r.bool(), r.i64(), r.varLong(), r.uuid(), r.f32(), r.readable()].join(','); })()
                 """.formatted(hex));
         assertEquals("300,-2,é,true,1152921504606846976,1,00000000-0000-0001-0000-000000000002,1.5,0", read);
+    }
+
+    @Test
+    void treesAreScriptObjects() {
+        Object r = FakeGame.sculk().scripts().eval(
+                "const t = sculk.tree(new Packages.sculk.core.FakeGame.Packet(1, 'a')); [t.text, t.id + 1, Object.keys(t).length].join('|')");
+        assertEquals("a|2|3", r);
     }
 }
