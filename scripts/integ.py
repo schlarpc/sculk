@@ -7,13 +7,16 @@ process runs a test script from tests/integ/ and writes a JSON Lines event
 log. The client joins the server via Quick Play; when its script reports
 "done", both are stopped and the logs are checked.
 
-Usage: scripts/integ.py <platform> [--timeout SECONDS] [--stress]
+Usage: scripts/integ.py <platform> [--timeout SECONDS] [--stress] [--prop KEY=VALUE ...]
 Run inside `nix develop`.
 
 --stress adds popular mods with heavy networking (Create, AE2, Sophisticated
 Backpacks, JEI, Jade, ... where the platform has them; see each
 platforms/*/build.gradle), replays one payload per mod channel from each side
 (tests/integ/stress.js), and prints a per-mod summary.
+
+--prop passes a Gradle property to both runs, e.g. --prop neo_version=21.1.1
+to try the oldest loader a target's version range accepts.
 """
 import argparse
 import collections
@@ -462,8 +465,14 @@ def main():
     ap.add_argument("platform")
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--stress", action="store_true", help="add heavy-networking mods and replay a payload per channel")
+    ap.add_argument("--prop", action="append", default=[], metavar="KEY=VALUE", help="a Gradle property for both runs")
     args = ap.parse_args()
     extra = {"sculk.integStress": "true"} if args.stress else {}
+    for kv in args.prop:
+        k, sep, v = kv.partition("=")
+        if not sep:
+            ap.error(f"--prop wants KEY=VALUE, not {kv!r}")
+        extra[k] = v
     scripts = lambda name: os.pathsep.join(
         str(ROOT / "tests/integ" / f) for f in ([name, "stress.js"] if args.stress else [name]))
 
