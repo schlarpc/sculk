@@ -1,10 +1,14 @@
-# Builds every platform's jar. On a v* tag, also publishes them as a GitHub
-# release; run it by hand (workflow_dispatch) to try a build without one.
-name: Release
+# Builds every platform's jar on every push and pull request. A push to main
+# also replaces the "nightly" prerelease with its jars; a v* tag publishes
+# them as a real release. Pull requests and manual runs only build (the jars
+# are the run's artifacts).
+name: Build
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -100,3 +104,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" jars/*.jar --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  # A rolling prerelease of main: deleted and made again at this commit, so
+  # it holds only the newest jars and never shows as the latest release.
+  nightly:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [core, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Two pushes in quick succession must not interleave delete and create.
+    concurrency:
+      group: nightly
+      cancel-in-progress: true
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: jar-*
+          path: jars
+          merge-multiple: true
+      - name: Replace the nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly jars/*.jar --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "Nightly (${GITHUB_SHA::7})" \
+            --notes "Built from main at $GITHUB_SHA. Replaced on every push; for a stable build, use a versioned release."
