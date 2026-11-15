@@ -60,7 +60,7 @@ public final class Transpiler {
     }
 
     private final CompletableFuture<Babel> babel;
-    private final Path cacheDir;
+    private volatile Path cacheDir;
     private final String version;
     private final Map<String, String> memo = new LinkedHashMap<>(64, 0.75f, true) {
         @Override
@@ -89,6 +89,7 @@ public final class Transpiler {
     /** Starts loading Babel in the background, keeping results under {@code cacheDir} (null: memory only). */
     public static synchronized Transpiler preload(Path cacheDir) {
         if (shared == null) shared = new Transpiler(cacheDir);
+        else if (shared.cacheDir == null) shared.cacheDir = cacheDir; // started early, by a script before init said where
         return shared;
     }
 

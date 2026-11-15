@@ -1,0 +1,1 @@
+({ a: [1, 'two', null], b: { c: true } });

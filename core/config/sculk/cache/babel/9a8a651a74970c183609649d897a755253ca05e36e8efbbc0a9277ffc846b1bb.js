@@ -1,0 +1,1 @@
+JSON.parse('[1,2]').length + Math.max(1, 1);

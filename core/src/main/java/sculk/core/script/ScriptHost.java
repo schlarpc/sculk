@@ -66,6 +66,18 @@ public final class ScriptHost {
      * is thrown as Rhino's would be, at the script's own line.
      */
     public Object eval(Scriptable scope, String sourceName, String source) {
+        return eval(scope, sourceName, source, true);
+    }
+
+    /** {@link #eval}, through Babel or (for checks of Rhino itself) not. */
+    private Object eval(Scriptable scope, String sourceName, String source, boolean transpile) {
+        if (!transpile) {
+            synchronized (this) {
+                try (Context cx = enter()) {
+                    return toJava(cx.evaluateString(scope, source, sourceName, 1, null));
+                }
+            }
+        }
         String code;
         try {
             code = Transpiler.shared().transform(source);
@@ -199,13 +211,14 @@ public final class ScriptHost {
     public static String selfTest() {
         ScriptHost host = new ScriptHost();
         Scriptable scope = host.newScope();
-        Object regexp = host.eval(scope, "selftest", "/s(c)ulk/.exec('sculk')[1]");
+        // Rhino as it is, not through Babel: this checks Rhino, and must not wait for Babel to load.
+        Object regexp = host.eval(scope, "selftest", "/s(c)ulk/.exec('sculk')[1]", false);
         if (!"c".equals(regexp)) {
             throw new IllegalStateException("Rhino RegExp self-test returned " + regexp);
         }
         String message;
         try {
-            host.eval(scope, "selftest", "(");
+            host.eval(scope, "selftest", "(", false);
             throw new IllegalStateException("Rhino accepted invalid syntax");
         } catch (RhinoException e) {
             message = e.details();

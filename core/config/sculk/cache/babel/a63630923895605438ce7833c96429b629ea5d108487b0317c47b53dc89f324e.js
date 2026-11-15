@@ -1,0 +1,1 @@
+var f = (s) => `${prefix}${s}`;f('ok');

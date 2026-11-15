@@ -1,0 +1,1 @@
+replValue * 2;

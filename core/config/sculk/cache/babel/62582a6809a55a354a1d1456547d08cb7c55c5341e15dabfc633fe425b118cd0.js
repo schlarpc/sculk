@@ -1,0 +1,1 @@
+JSON.stringify(sculk.tree(new Packages.sculk.core.ScriptApiTest.Blob(5, sculk.unhex('0064026869' + '006502796f'))));

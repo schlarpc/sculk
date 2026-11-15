@@ -140,6 +140,8 @@ public final class Sculk {
                     Long.getLong("sculk.controlFrameBytes", 128L << 20),
                     captureDir, captureBytes);
         }
+        // Babel takes Rhino a second or two to load: start it first, while the game loads.
+        Transpiler.preload(platform.configDir().resolve("sculk").resolve("cache").resolve("babel"));
         Sculk sculk = new Sculk(platform, log, store);
         ObjectModel.setRenderer(platform.renderer());
         instance = sculk;
@@ -158,8 +160,6 @@ public final class Sculk {
                 if (!p.isBlank()) extra.add(Path.of(p.trim()));
             }
         }
-        // Babel takes Rhino a couple of seconds to load: start now, while the game loads.
-        Transpiler.preload(platform.configDir().resolve("sculk").resolve("cache").resolve("babel"));
         String dir = System.getProperty("sculk.scriptDir");
         Path scriptDir = dir != null && !dir.isBlank() ? Path.of(dir.trim()) : platform.configDir().resolve("sculk").resolve("scripts");
         sculk.scripts = new ScriptManager(sculk, scriptDir, extra);
