@@ -70,7 +70,7 @@ neoForge.addModdingDependenciesTo(sourceSets.testmod)
 var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
     var props = [
         minecraft_version_range: minecraft_version_range,
-        neo_version            : neo_version,
+        neo_version_range      : neo_version_range,
         loader_version_range   : loader_version_range,
         mod_id                 : mod_id,
         mod_name               : mod_name,
