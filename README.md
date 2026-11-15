@@ -15,7 +15,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for goals, design and roadmap.
 
 ## Status
 
-Early, but working on all three targets: capture, drop, replace and inject
+Early, but working on all five targets: capture, drop, replace and inject
 frames and packets in both directions on both sides; attribute payloads to
 the mod that owns them; decode them with the mod's own codec; script all of
 it in JavaScript; and drive it live from a local control server (CLI, web UI,
@@ -27,7 +27,9 @@ next.
 |---|---|---|---|---|
 | `platforms/forge-1.20.1` | Forge 47 | 1.20.1 | 17 | largest modpack install base |
 | `platforms/neoforge-1.21.1` | NeoForge 21.1 | 1.21.1 | 21 | largest active mod ecosystem |
+| `platforms/fabric-1.21.1` | Fabric 0.20 | 1.21.1 | 21 | the same mods' Fabric builds; intermediary names |
 | `platforms/fabric-26.3` | Fabric 0.20 | 26.3 | 25 | latest release, unobfuscated |
+| `platforms/neoforge-26.3` | NeoForge 26.3 | 26.3 | 25 | latest release on NeoForge |
 
 ## Web UI
 
@@ -76,6 +78,7 @@ gradle :platforms:neoforge-1.21.1:runClient
 gradle :platforms:neoforge-1.21.1:runServer
 
 scripts/smoke-server.sh forge-1.20.1   # boot a server, connect, check the hook fired
+scripts/integ.py fabric-1.21.1         # real server + headless client + real mods + sculk's test mod
 
 # control server: query and tail events, run code in the live game
 gradle :platforms:neoforge-1.21.1:runServer -Psculk.control=0
@@ -110,7 +113,8 @@ toolchains.
 ```
 core/         shared engine, no Minecraft dependencies (~90% of the code, eventually)
 libs/         third-party libraries, relocated so they cannot clash with other mods
-platforms/    one thin adapter per (loader, Minecraft version)
+platforms/    one thin adapter per (loader, Minecraft version); shared/ holds game code
+              common to every loader of one version, and the integration test mod
 scripts/      dev tooling
 web/          control server web UI (TypeScript, built by Nix)
 docs/         architecture and design notes

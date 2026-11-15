@@ -138,7 +138,7 @@ zero-length frame that every supported decoder ignores.
 |---|---|---|
 | Forge 1.20.1 | Mojang class names, SRG member names | Mixins are remapped through a refmap (handled by the build). The script name bridge needs SRG tables. |
 | NeoForge 1.21.1 | Mojang | none |
-| Fabric ≤ 1.21.11 | Intermediary | The script name bridge needs intermediary tables. |
+| Fabric ≤ 1.21.11 (sculk: 1.21.1) | Intermediary | Loom's remapping plugin (`net.fabricmc.fabric-loom-remap`) builds against Mojang names and remaps the jar. Dev runs use Mojang names. Trees of types the renderer does not know show `class_1234`/`field_5678` names in production; the script name bridge needs intermediary tables. |
 | All of 26.x | Unobfuscated | none |
 
 Compiled adapter code always uses Mojang names; the build remaps where
@@ -151,12 +151,45 @@ mapping tables.
 "Codec" below is the game's own `PacketDecoder`/`PacketEncoder` instance,
 which carries the protocol state.
 
-| Method | Era C (NeoForge 1.21.1, Fabric 26.3) | Era A (Forge 1.20.1) |
+| Method | Era C (1.21.1 and 26.3, both loaders) | Era A (Forge 1.20.1) |
 |---|---|---|
 | `describe(packet, codec)` | `ProtocolInfo` from the codec; payload already decoded | protocol from the packet class; payload bytes decoded via `payloadCodec` |
 | `encode` / `decode` | `ProtocolInfo.codec()` | `ConnectionProtocol` + `Packet.write` / `createPacket` (state from the channel) |
 | `payloadCodec(channel)` | not needed | the SimpleChannel's own decoder, chosen by discriminator byte |
-| `modOf(class)` | NeoForge: JPMS module → mod file. Fabric: mod container containing the class file | JPMS module → mod file |
+| `payloadPacket(channel, payload, clientbound)` | wraps the payload object in a `Clientbound`/`ServerboundCustomPayloadPacket` | encodes it with the channel's codec (discriminator first), wraps the bytes |
+| `renderer()` | `sculk.mc.GameTrees` (below) | the same, with NBT-tagged item stacks |
+| `modOf(class)` | NeoForge 1.21.1: JPMS module → mod file. NeoForge 26.3 (FML 12, no per-mod modules) and Fabric: the mod file that contains the class file | JPMS module → mod file |
+
+The era C protocol methods are the same code for both loaders of a
+version: `platforms/shared/mc-<version>/main` (`sculk.mc.Protocols`,
+`GameTrees`, `Chat`), compiled into each platform named by its
+`shared_mc` property. The platform classes keep only what is the
+loader's own: mod lists, config, commands, chat delivery, registration
+mixins.
+
+### Game types in trees
+
+`mod.data` (and `sculk.tree`) turns payload objects into trees by
+reflection, which shows game types badly: an NBT compound is a hash map of
+tag objects, an item stack drags in its item's whole class graph, and an
+identifier is `{namespace, path}`. Each platform's renderer
+(`Platform.renderer`, `sculk.mc.GameTrees`) shows them the way a person
+would write them; it also applies to map keys:
+
+| Type | Tree |
+|---|---|
+| NBT | JSON: compounds as objects with keys sorted, lists and int/long arrays as lists, byte arrays as `{"$bytes": hex}`, numbers and strings as themselves. Its own depth budget (32), whatever the tree depth. |
+| item stack | `{item, count, components}` (1.20.5+: each component as its codec writes it, as in `/give`; by reflection where the codec needs registries; `"!id": null` for a removed default) or `{item, count, tag}` (1.20.1) |
+| identifier, resource key, registered holder, anything in a built-in registry (item, block, entity type, ...) | `"ns:path"` |
+| block position, vector | `{x, y, z}` |
+| block state | `"ns:block[prop=value,...]"` |
+| text component | JSON text (`{"text": ..., "color": ...}`, or a plain string) |
+| Netty `ByteBuf` (core) | `{"$bytes": hex}` of its readable bytes |
+
+The tree is a view: types are lost (an NBT byte and int are both
+numbers). Scripts keep the live objects: `e.mod.data.tag().copy()` is the
+game's own `CompoundTag`. A renderer that throws falls back to
+reflection for that value.
 
 Each platform also has one mixin on its loader's payload registration entry
 point (`NetworkRegistry.register`, `PayloadTypeRegistryImpl.register`,
@@ -545,13 +578,14 @@ property (`-Psculk.control=0`).
 | Unit | `gradle :core:test` | Netty plumbing against a fake game: pairing, drop/replace, all four injection paths, replay, attribution, scripting; control server and MCP over real HTTP, including token, Host and Origin checks; event filters |
 | Web UI | `nix build .#web` (or `npm ci`, then `esbuild` and `node --test` as in `web/default.nix`) | the events table's geometry and its per-filter data (`web/test`): scaling, anchoring as rows are dropped, stale answers after a filter change |
 | Smoke | `scripts/smoke-server.sh <target>` | the mod loads, Rhino works, the connection hook fires on a real server, the control server answers `sculkctl.py` and MCP and serves the web UI from the mod |
-| Integration | `scripts/integ.py <target>` | a real server and a real headless client with real mods (below) |
+| Integration | `scripts/integ.py <target>` | a real server and a real headless client with real mods and sculk's test mod (below) |
 
 The integration test starts a dev server and a dev client (Xvfb plus Mesa
 software GL, joining via Quick Play), both with sculk, AppleSkin, Waystones
-and Balm (`-Psculk.integ`). `tests/integ/server.js` replays a captured
-AppleSkin payload as raw bytes. `tests/integ/client.js` injects a real
-movement frame with X nudged by one ulp. It then checks the two event logs:
+and Balm, and sculk's own test mod, `sculktest` (`-Psculk.integ`).
+`tests/integ/server.js` replays a captured AppleSkin payload as raw bytes.
+`tests/integ/client.js` injects a real movement frame with X nudged by one
+ulp. It then checks the two event logs:
 
 - connections seen on both sides;
 - registry lists AppleSkin and Waystones payloads, with Waystones attributed
@@ -560,6 +594,34 @@ movement frame with X nudged by one ulp. It then checks the two event logs:
   byte-for-byte, and no custom payload `mismatch`;
 - every payload frame the client received was sent by the server;
 - both injections arrived and were decoded by the other side.
+
+Real mods send whatever they send, so the test mod covers the structures
+mod payloads are built from, with values known in advance. Its payloads
+(`platforms/shared/mc-<version>/testmod`; per loader, only registration
+and events in `platforms/<target>/src/testmod`):
+
+- `Sink`, clientbound, sent two seconds after a player joins: an NBT
+  compound with every tag type (edge values, unicode, nested compounds,
+  lists of lists, empty ones), item stacks (named, enchanted, with custom
+  data; a stack of 64; the empty stack), a block position at the world
+  border, a UUID, an identifier, styled text, varints at their limits,
+  present and empty optionals, an enum, a byte array and an ordered map.
+  The client's test mod compares it with the expected value field by
+  field and logs the result.
+- `Report`, serverbound: the client's verdict, with the sink echoed back,
+  so the server side decodes the same structures.
+
+`tests/integ/server.js` copies the sink's NBT with the game's API, edits
+it, and injects the copy with `conn.injectPayload`; `client.js` rewrites
+the report about it in flight with `e.replacePayload`. `integ.py` checks:
+
+- the sink's tree in the event log, and as a script sees it, equals the
+  expected tree in `integ.py` (`EXPECTED_SINK`) on every platform, item
+  stacks apart (era-specific);
+- every test payload re-encodes byte for byte;
+- the edited sink reached the client's mod with the edits and nothing
+  else changed; the replaced report reached the server's mod;
+- the server decoded both reports and their echoed sinks.
 
 The integration test runs the dev environment (Mojang names). It does not yet
 cover the reobfuscated Forge jar.
@@ -583,7 +645,13 @@ gradle/platform-common.gradle
 platforms/
   forge-1.20.1/           MDG Legacy, SRG reobf + mixin refmap, Java 17
   neoforge-1.21.1/        MDG, Java 21
+  fabric-1.21.1/          Loom (remapping: Mojang names in source, intermediary jar), Java 21
   fabric-26.3/            Loom (non-remapping), Java 25
+  neoforge-26.3/          MDG, Java 25
+  <target>/src/testmod/   the integration test mod's loader glue (-Psculk.integ)
+  shared/mc-<version>/    game code common to every loader of a version (shared_mc in a
+                          target's gradle.properties): main/ is compiled into sculk,
+                          testmod/ into the test mod
 scripts/
   smoke-server.sh         boot a dev server, connect once, check that sculk hooked it
   sculkctl.py             command-line client for the control server
@@ -607,9 +675,12 @@ Decisions:
   startup and checks the two things relocation can break: the
   ServiceLoader-provided RegExp engine and the message resource bundles.
   Rhino is MPL-2.0. The shaded jar's manifest records where it came from.
-- **No Stonecutter (yet).** Adapters are separate source trees for now. Add
-  Stonecutter-style preprocessing once two targets of the same era share
-  enough adapter code to be worth it (for example, NeoForge 1.21.1 and 26.x).
+- **Shared source trees per Minecraft version, no Stonecutter (yet).** Two
+  loaders of one version share their game code by compiling the same
+  directory (`platforms/shared/mc-<version>`); what differs between
+  versions stays in separate copies. Mixins stay per target (their
+  package is the target's). Add Stonecutter-style preprocessing if the
+  copies between versions grow past small adapters.
 - **UI out of process.** In-game GUI APIs change between versions, and a
   Burp-style UI wants a real window, so the UI is a web page served by the
   control server. The control server binds to localhost
@@ -624,9 +695,12 @@ Decisions:
 1. Copy the closest `platforms/<loader>-<version>/` and adjust its
    `gradle.properties` and plugin. Keep the
    `apply from: rootProject.file('gradle/platform-common.gradle')` line.
+   Set `shared_mc`: reuse `platforms/shared/mc-<version>` if another
+   loader already targets that version, else copy the closest one.
 2. Add it to `settings.gradle`.
-3. Make the mixins and `Platform` implementation compile against that version.
-4. `scripts/smoke-server.sh <name>` must pass.
+3. Make the mixins, `Platform` implementation and test mod glue compile
+   against that version.
+4. `scripts/smoke-server.sh <name>` and `scripts/integ.py <name>` must pass.
 
 ## Roadmap
 
@@ -635,7 +709,7 @@ Done:
 - Codec hooks: capture every frame with its packet, both directions, both
   sides; drop, replace, and replace-frame verdicts.
 - Injection: frames and packets, inbound and outbound; replay.
-- Payload registry and attribution (owner, registeredVia), on all three
+- Payload registry and attribution (owner, registeredVia), on all
   targets.
 - Decoding mod payloads with the mods' own codecs, including Forge
   SimpleChannel; round-trip checks.
@@ -643,7 +717,12 @@ Done:
 - Control server: query, filter and tail events, whole frames, eval in the
   live script scope, script reload; MCP server; `sculkctl.py`; web UI
   (event table, frame hex dump, REPL).
-- Unit, smoke and real-mod integration tests for all three targets.
+- Unit, smoke and real-mod integration tests for all targets, plus a test
+  mod whose NBT, item stack and other payloads must decode to known trees
+  and survive script edits in both directions.
+- Targets: Forge 1.20.1, NeoForge 1.21.1 and 26.3, Fabric 1.21.1 and 26.3.
+- Game types (NBT, item stacks, identifiers, ...) shown as readable trees;
+  `injectPayload` / `replacePayload` for edited payload objects.
 
 Next:
 
@@ -655,4 +734,5 @@ Next:
 5. **UI:** injection, editing and replay from the web UI (needs endpoints for
    them).
 6. **Production jar tests**, especially the reobfuscated Forge jar.
-7. **More targets:** Fabric 1.21.1 / 1.20.1, NeoForge 26.x.
+7. **More targets:** Fabric 1.20.1 (raw-buffer receivers: needs the
+   dissector, as nothing decodes those payloads but the receiver itself).
