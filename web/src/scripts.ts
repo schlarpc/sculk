@@ -7,6 +7,7 @@ import { newState, newView, type EditorHooks, type EditorState, type EditorView 
 import { showMenu, type MenuItem } from "./menu";
 import * as buf from "./script-state";
 import { statusView, stoppable } from "./script-state";
+import { href } from "./route";
 
 export interface Env {
   /** Runs an API call with the current token; undefined when the token was refused (a new one is being asked for). */
@@ -92,7 +93,7 @@ export class ScriptsPage {
         if (info) void this.setEnabled(info, !info.enabled);
         return;
       }
-      void this.select(item.dataset.name);
+      void this.select(item.dataset.name, "push");
     });
     this.listEl.addEventListener("keydown", (e) => {
       if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -121,10 +122,10 @@ export class ScriptsPage {
 
   show(name?: string): void {
     this.visible = true;
+    // The URL is the selection: /ui/scripts alone selects nothing (the Scripts tab links to the last script).
     void this.refresh().then(() => {
-      const want = name ?? this.selected ?? store.get("sculk.script") ?? undefined;
-      if (want && this.info(want)) void this.select(want);
-      else if (!this.selected) this.showEmpty();
+      if (name && this.info(name)) void this.select(name);
+      else this.showEmpty();
     });
     clearInterval(this.pollTimer);
     this.pollTimer = window.setInterval(() => void this.refresh(), POLL_MS);
@@ -256,7 +257,13 @@ export class ScriptsPage {
   // ---- the editor ----
 
   private showEmpty(): void {
+    // Keep the outgoing editor's state (undo history, selection) for when it comes back.
+    if (this.selected && this.view) {
+      const b = this.buffers.get(this.selected);
+      if (b) b.state = this.view.state;
+    }
     this.selected = null;
+    if (this.visible && location.pathname !== href({ page: "scripts" })) history.replaceState(null, "", href({ page: "scripts" }));
     this.view?.destroy();
     this.view = null;
     this.empty.hidden = false;
@@ -266,7 +273,13 @@ export class ScriptsPage {
     this.outFor.textContent = "";
   }
 
-  async select(name: string): Promise<void> {
+  /** Opens a script in the editor. "push" makes it a new history entry (a click); otherwise the URL is only corrected. */
+  async select(name: string, nav: "push" | "replace" = "replace"): Promise<void> {
+    const url = href({ page: "scripts", name });
+    if (location.pathname !== url) {
+      if (nav === "push") history.pushState(null, "", url);
+      else history.replaceState(null, "", url);
+    }
     if (this.selected !== name || !this.view) {
       // Keep the outgoing editor's state (undo history, selection) for when it comes back.
       if (this.selected && this.view) {
@@ -275,7 +288,7 @@ export class ScriptsPage {
       }
       this.selected = name;
       store.set("sculk.script", name);
-      history.replaceState(null, "", `#scripts/${encodeURIComponent(name)}`);
+      byId<HTMLAnchorElement>("tab-scripts").href = url;
       if (!this.buffers.has(name) && !(await this.loadFromDisk(name))) {
         this.renderList();
         this.renderHeader();
@@ -475,7 +488,7 @@ export class ScriptsPage {
     const r = await this.act("create", (api) => api.saveScript(name, TEMPLATE(title), ""));
     if (!r) return;
     await this.refresh();
-    await this.select(name);
+    await this.select(name, "push");
     // Put the cursor inside the listener.
     const doc = this.view?.state.doc.toString() ?? "";
     const at = doc.indexOf("  // e.dir");
@@ -491,7 +504,7 @@ export class ScriptsPage {
     if (src === undefined) return;
     if (await this.act("duplicate", (api) => api.saveScript(name, src, ""))) {
       await this.refresh();
-      await this.select(name);
+      await this.select(name, "push");
     }
   }
 

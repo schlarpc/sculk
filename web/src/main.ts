@@ -7,7 +7,9 @@ import { menuOpen, onMenuClose, showMenu, type MenuItem } from "./menu";
 import { frameOf } from "./views";
 import { ScriptsPage } from "./scripts";
 import { EventTable } from "./table";
+import { fromLegacyHash, href as pageHref, parse as parseRoute } from "./route";
 
+// In localStorage, so every tab and every page path shares it; a new launch's token replaces it when the old one is refused.
 const TOKEN_KEY = "sculk.token";
 
 const PRESETS: [string, string][] = [
@@ -27,13 +29,16 @@ const PRESETS: [string, string][] = [
 let linkedEvent: number | undefined;
 
 function readToken(): string | null {
+  // Links from before the pages had paths: #scripts/<name> and #events.
+  const legacy = fromLegacyHash(location.hash);
+  if (legacy) history.replaceState(null, "", legacy + location.search);
   const hash = new URLSearchParams(location.hash.slice(1));
   const fromHash = hash.get("token");
   const event = Number(hash.get("event"));
   if (Number.isInteger(event) && event > 0) linkedEvent = event;
   if (fromHash) {
     try {
-      sessionStorage.setItem(TOKEN_KEY, fromHash);
+      localStorage.setItem(TOKEN_KEY, fromHash);
     } catch {
       // The token then lasts only until the page reloads.
     }
@@ -43,7 +48,7 @@ function readToken(): string | null {
   }
   if (linkedEvent !== undefined) history.replaceState(null, "", location.pathname + location.search);
   try {
-    return sessionStorage.getItem(TOKEN_KEY);
+    return localStorage.getItem(TOKEN_KEY);
   } catch {
     return null;
   }
@@ -62,7 +67,7 @@ function askForToken(reason: string): Promise<string> {
       const token = input.value.trim();
       if (!token) return;
       try {
-        sessionStorage.setItem(TOKEN_KEY, token);
+        localStorage.setItem(TOKEN_KEY, token);
       } catch {
         // See readToken.
       }
@@ -227,16 +232,27 @@ class App {
     else void this.applyFilter();
     void this.refreshStatus();
     setInterval(() => void this.refreshStatus(), 5000);
-    window.addEventListener("hashchange", () => this.route());
+    window.addEventListener("popstate", () => this.route());
+    const last = store.get("sculk.script");
+    if (last) byId<HTMLAnchorElement>("tab-scripts").href = pageHref({ page: "scripts", name: last });
+    // The tabs are real links (open in a new tab works); a plain click stays in this page.
+    for (const tab of document.querySelectorAll<HTMLAnchorElement>(".tabs a")) {
+      tab.addEventListener("click", (e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        if (tab.pathname !== location.pathname) history.pushState(null, "", tab.pathname);
+        this.route();
+      });
+    }
     this.route();
   }
 
   // ---- pages ----
 
-  /** #scripts or #scripts/<name> shows the script editor; anything else the events. */
+  /** /ui/scripts or /ui/scripts/<name> shows the script editor; anything else the events. */
   private route(): void {
-    const hash = location.hash.slice(1);
-    const scripts = hash === "scripts" || hash.startsWith("scripts/");
+    const route = parseRoute(location.pathname);
+    const scripts = route.page === "scripts";
     byId("page-events").hidden = scripts;
     byId("page-scripts").hidden = !scripts;
     for (const tab of document.querySelectorAll<HTMLAnchorElement>(".tabs a")) {
@@ -245,9 +261,8 @@ class App {
       if (on) tab.setAttribute("aria-current", "page");
       else tab.removeAttribute("aria-current");
     }
-    if (scripts) {
-      const name = hash.startsWith("scripts/") ? decodeURIComponent(hash.slice("scripts/".length)) : undefined;
-      this.scripts.show(name || undefined);
+    if (route.page === "scripts") {
+      this.scripts.show(route.name || undefined);
     } else {
       this.scripts.hide();
     }

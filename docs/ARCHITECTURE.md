@@ -533,7 +533,11 @@ so:
 
 `scripts/sculkctl.py ui` opens `http://127.0.0.1:PORT/ui/#token=...`. The
 page moves the token from the fragment, which is never sent to the server,
-into session storage and removes it from the address bar. Without a token it
+into local storage (shared by every tab, replaced when a new launch's token
+is entered) and removes it from the address bar. The pages have real paths,
+`/ui/events`, `/ui/scripts` and `/ui/scripts/<name>`, which the server answers
+with `index.html` and the page routes with the History API, so back, forward,
+reload and open-in-new-tab all work. Without a token it
 asks for one. It shows the live event table (filter, presets, pause,
 double-click a cell to narrow the filter), an inspector, and a REPL with
 history. The inspector leads with what matters for the event's kind: for a

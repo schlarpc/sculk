@@ -76,7 +76,8 @@ import sculk.core.util.Bytes;
  *   POST /scripts/enable?name=&amp;enabled=true|false
  *   POST /mcp       body: JSON-RPC          Model Context Protocol (Streamable HTTP); see {@link McpHandler}
  *   DELETE /mcp                             ends an MCP session (Mcp-Session-Id)
- *   GET  /ui/...                            the web UI (static files from sculk/web/ on the classpath)
+ *   GET  /ui/...                            the web UI (static files from sculk/web/ on the classpath;
+ *                                           /ui/events, /ui/scripts[/name] load its index.html)
  * </pre>
  *
  * The web UI's static files are the only thing served without the token:
@@ -543,7 +544,8 @@ public final class ControlServer {
             return;
         }
         String name = path.substring("/ui/".length());
-        if (name.isEmpty()) name = "index.html";
+        // The page's own paths (see web/src/route.ts) all load index.html, which routes on the client.
+        if (name.isEmpty() || name.equals("events") || name.equals("scripts") || name.startsWith("scripts/")) name = "index.html";
         byte[] bytes = null;
         if (ASSET.matcher(name).matches()) {
             try (InputStream in = ControlServer.class.getResourceAsStream(WEB_ROOT + name)) {

@@ -372,6 +372,11 @@ class ControlServerTest {
         assertEquals(200, index.status());
         assertTrue(index.body().contains("sculk test ui"), index.body());
         assertEquals(200, request("GET", "/ui/app.js", null).status());
+        for (String page : List.of("/ui/events", "/ui/scripts", "/ui/scripts/my%20script.js", "/ui/scripts/a%2Fb.js")) {
+            Response r = request("GET", page, null);
+            assertEquals(200, r.status(), page);
+            assertTrue(r.body().contains("sculk test ui"), page + ": " + r.body());
+        }
 
         assertEquals(403, request("GET", "/ui/", null, "Host: evil.example:" + server().port()).status());
         assertEquals(403, request("GET", "/ui/", null, "Origin: http://evil.example").status());

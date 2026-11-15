@@ -1105,7 +1105,11 @@ def make_handler(store, game, bundle):
             if method == "GET" and path in ("/", "/ui"):
                 return self.send(302, "text/plain", b"", {"Location": "/ui/"})
             if method == "GET" and path.startswith("/ui/"):
-                return self.static(path[4:] or "index.html")
+                name = path[4:]
+                # The page's own paths load index.html, as on the real server.
+                if name in ("", "events", "scripts") or name.startswith("scripts/"):
+                    name = "index.html"
+                return self.static(name)
             body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
             if self.headers.get("Authorization", "") != f"Bearer {TOKEN}":
                 return self.json(401, {"error": "missing or wrong bearer token"})
