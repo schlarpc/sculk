@@ -251,6 +251,15 @@ public final class ScriptApi implements AutoCloseable {
         engine.log(e);
     }
 
+    /** What the packets have said about the game: entities, menus, who we are. See {@link Game}. */
+    public Game getGame() {
+        Game g = game;
+        if (g == null) game = g = new Game(engine, scope);
+        return g;
+    }
+
+    private volatile Game game;
+
     /** This script's name, as the script list shows it. */
     public String getName() {
         return name;

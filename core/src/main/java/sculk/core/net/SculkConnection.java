@@ -44,6 +44,7 @@ public final class SculkConnection {
 
     private final int id = IDS.incrementAndGet();
     private final Channel channel;
+    private final sculk.core.game.GameState gameState = new sculk.core.game.GameState();
     private final Side side;
     private final Set<Object> injectedOutbound = Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
     private boolean injectingInbound;
@@ -70,6 +71,8 @@ public final class SculkConnection {
     }
 
     public int getId() { return id; }
+    /** What this connection's packets have said about the game: see {@code sculk.game}. */
+    public sculk.core.game.GameState gameState() { return gameState; }
     /** Which side we are; scripts see it as the string {@code side}. */
     public Side sideEnum() { return side; }
     public String getSide() { return side.id(); }

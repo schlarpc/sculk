@@ -152,6 +152,7 @@ const SCULK_API: Completion[] = [
   { label: "tree", type: "method", detail: "(obj)", info: "A plain object tree of any value: records, mod payloads, packets." },
   { label: "with", type: "method", detail: "(record, field, value)", info: "A copy of a record with one component replaced, for editing decoded payloads." },
   { label: "decoder", type: "method", detail: "(className, (obj, tree) => tree)", info: "Shows objects of a Java class (and subclasses) your way wherever sculk makes a tree: change tree in place or return a new one." },
+  { label: "game", type: "property", info: "What packets have said about the game: game.entity(id) {id, type, uuid, spawnPos, name, self}, game.menu(containerId) {containerId, type, title}, game.menus(), game.summary(). Each takes an optional connection." },
   { label: "writer", type: "method", detail: "()", info: "Builds bytes as the game writes them, for replaceFrame and inject; chains: sculk.writer().varInt(id).string(s).i32(n).toBytes(). The same names as reader, plus hex() and length()." },
   { label: "reader", type: "method", detail: "(bytes)", info: "Reads bytes as the game does: varInt, string, i32, i64, bool, uuid, bytes(n), rest(), nbt(), itemStack(), component(), identifier(), blockPos(); readable() says what is left." },
   { label: "hex", type: "method", detail: "(bytes)", info: "Bytes as a hex string." },

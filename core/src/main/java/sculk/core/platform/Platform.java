@@ -118,6 +118,15 @@ public interface Platform {
         throw new IllegalArgumentException(describe() + " cannot write game type " + type + " as bytes");
     }
 
+    /**
+     * Feeds {@code state} from one packet (spawned and removed entities,
+     * listed players, opened and closed menus, the login), before scripts
+     * see it. Called for every packet in either direction; the platform
+     * picks the ones that say something. Must be quick and never throw
+     * for packets it does not know.
+     */
+    default void observe(Object packet, PacketInfo info, sculk.core.game.GameState state) {}
+
     /** Ids of all loaded mods, including "minecraft" and the loader itself. */
     Set<String> modIds();
 

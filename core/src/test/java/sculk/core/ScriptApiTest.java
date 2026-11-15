@@ -166,4 +166,18 @@ class ScriptApiTest {
         assertEquals("ac02fffffffe02c3a901100000000000000001000000000000000100000000000000023fc0000002cafeffff,44,"
                 + "300,-2,é,true,1152921504606846976,1,00000000-0000-0001-0000-000000000002,1.5,cafe,-1,0", out);
     }
+
+    @Test
+    void scriptsAskTheGameWhatIdsStandFor() {
+        EmbeddedChannel ch = FakeGame.channel(Side.CLIENT);
+        var conn = sculk.core.net.SculkConnection.peek(ch);
+        conn.gameState().addEntity(42, "u-1", "minecraft:zombie", 1, 2, 3);
+        conn.gameState().openMenu(3, "minecraft:generic_9x3", "Chest");
+        Object out = FakeGame.sculk().scripts().eval("""
+                (() => { const c = sculk.connection(%d);
+                  const e = sculk.game.entity(42, c), m = sculk.game.menu(3, c);
+                  return [e.type, e.spawnPos.y, m.title, sculk.game.entity(43, c), sculk.game.menu(4, c)].join(','); })()
+                """.formatted(conn.getId()));
+        assertEquals("minecraft:zombie,2,Chest,,", out);
+    }
 }

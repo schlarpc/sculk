@@ -102,6 +102,16 @@ final class NeoForgePlatform implements Platform {
     }
 
     @Override
+    public void observe(Object packet, PacketInfo info, sculk.core.game.GameState state) {
+        sculk.mc.GameObserver.observe(packet, state);
+        // Mods open menus with extra data (AE2 does) through NeoForge's own payload, not the vanilla packet.
+        if (info.payload() instanceof net.neoforged.neoforge.network.payload.AdvancedOpenScreenPayload p) {
+            state.openMenu(p.windowId(), sculk.mc.GameObserver.key(net.minecraft.core.registries.BuiltInRegistries.MENU, p.menuType()),
+                    p.name().getString());
+        }
+    }
+
+    @Override
     public void writeGame(io.netty.buffer.ByteBuf buf, String type, Object value, io.netty.channel.Channel channel) {
         sculk.mc.GameBytes.write(buf, type, value, channel, dedicatedServer());
     }

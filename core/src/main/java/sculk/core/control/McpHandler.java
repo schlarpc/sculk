@@ -65,7 +65,9 @@ final class McpHandler {
             objects your way wherever sculk makes a tree, e.g. packet.data: for mod data kept as raw bytes; change \
             tree in place or return a new one), reader(bytes) (reads as the game does: varInt varLong bool i8 u8 i16 u16 \
             i32 i64 f32 f64 string uuid bytes(n) byteArray rest skip readable, and nbt itemStack component identifier \
-            blockPos), writer() (the same names, chained, writing; then toBytes() or hex(): bytes for replaceFrame \
+            blockPos), game (what the packets have said: game.entity(id) {id, type, uuid, spawnPos, name, self}, \
+            game.menu(containerId) {containerId, type, title}, game.menus(), game.summary(); each takes an optional \
+            connection, else the one whose packet is being handled, else the client's), writer() (the same names, chained, writing; then toBytes() or hex(): bytes for replaceFrame \
             and inject), \
             with(record, field, value), hex(bytes), unhex(str), copy(bytes), scope(name) (another running script's \
             globals), name, dist. Connections offer inject(dir, bytes), injectPacket(dir, obj), \

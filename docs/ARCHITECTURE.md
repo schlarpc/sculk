@@ -341,7 +341,20 @@ sculk.decoder('appeng.core.network.clientbound.GuiDataSyncPacket', (obj, tree) =
 // sculk.writer(): the same names, chained, writing (game types also take plain forms: "ns:path",
 //   {x, y, z}, SNBT text, a string for text); then toBytes(), hex(), length(). For exact bytes:
 e.replaceFrame(sculk.writer().varInt(0x19).string('ae2:me_inventory_update').bytes(patched).toBytes());
+
+// What the packets have said about the game, so ids in packets mean something:
+sculk.game.entity(37850)   // {id, type: 'minecraft:zombie', uuid, spawnPos, name (players), self (ours)} or null
+sculk.game.menu(5)         // {containerId, type: 'ae2:pattern_provider', title} or null
+sculk.game.menus(), sculk.game.summary()   // each lookup also takes a connection
 ```
+
+Each connection keeps a `GameState` (`sculk.core.game`), fed before
+scripts see a packet by `Platform.observe`, from what packets mean
+rather than their direction (a server-side connection learns from what
+it sends): spawned and removed entities, the player list, opened and
+closed menus (vanilla, and NeoForge's `advanced_open_screen`, which mods
+like AE2 use), the login and respawns. A lookup without a connection asks
+the one whose packet is being handled, else the game client's own.
 
 A decoder runs when the tree is made: for logged events, as the packet
 passes, so it shows on packets captured after it starts, not before. It

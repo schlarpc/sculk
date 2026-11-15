@@ -107,6 +107,11 @@ final class FabricPlatform implements Platform {
     }
 
     @Override
+    public void observe(Object packet, PacketInfo info, sculk.core.game.GameState state) {
+        sculk.mc.GameObserver.observe(packet, state);
+    }
+
+    @Override
     public void writeGame(io.netty.buffer.ByteBuf buf, String type, Object value, io.netty.channel.Channel channel) {
         sculk.mc.GameBytes.write(buf, type, value, channel, dedicatedServer());
     }

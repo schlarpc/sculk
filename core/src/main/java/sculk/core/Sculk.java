@@ -226,6 +226,13 @@ public final class Sculk {
             info = new PacketInfo("?", "?", packet.getClass().getName(), null, null, null);
         }
         PacketEvent event = event(conn, dir, packet, frame, info, codec, injected);
+        if (packet != null) {
+            try {
+                platform.observe(packet, info, conn.gameState());
+            } catch (RuntimeException | LinkageError e) {
+                LOG.debug("could not follow game state from {}", packet.getClass().getName(), e);
+            }
+        }
         io.netty.channel.Channel outer = CURRENT_CHANNEL.get();
         CURRENT_CHANNEL.set(conn.channel());
         try {
