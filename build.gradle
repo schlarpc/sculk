@@ -48,13 +48,13 @@ tasks.register('webUi', Exec) {
             'build', '.#web', '--out-link', 'build/web-ui'
 }
 
-// @babel/standalone for the script transpiler (nix/babel.nix): `nix build .#babel`.
+// @babel/standalone for the script transpiler (nix/babel): `nix build .#babel`.
 // Each platform packs it into its jar under sculk/babel/, and core's tests
 // get it on their classpath. -Psculk.babelDir=<dir> uses a copy already at hand.
 tasks.register('babel', Exec) {
     description = 'Fetches @babel/standalone with Nix into build/babel.'
     workingDir = rootDir
-    inputs.files('nix/babel.nix', 'flake.nix', 'flake.lock')
+    inputs.files('nix/babel/default.nix', 'nix/babel/package.json', 'nix/babel/package-lock.json', 'flake.nix', 'flake.lock')
     outputs.upToDateWhen { false } // Nix does its own caching, and the out-link is a symlink.
     commandLine 'nix', '--extra-experimental-features', 'nix-command flakes',
             'build', '.#babel', '--out-link', 'build/babel'

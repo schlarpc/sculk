@@ -263,7 +263,7 @@ Babel's block scoping gives each pass its own binding (a function per pass
 where a closure needs one, as Rhino's maintainers suggest) and lowers the
 rest. `retainLines` keeps every line where it was, so errors and the
 syntax check point at the script's own lines. Babel (`@babel/standalone`,
-fetched by Nix from npm's tarball with its integrity hash, nix/babel.nix,
+pinned by an npm lockfile in nix/babel/ and fetched by Nix's importNpmLock,
 packed under `sculk/babel/`) takes Rhino about two seconds and 18 MiB to
 load: it loads once, on a background thread at startup, in a sealed scope.
 Output is kept by a hash of the source, in memory and under

@@ -1,0 +1,9 @@
+{
+  "name": "sculk-babel",
+  "private": true,
+  "description": "Babel for sculk's script transpiler (core's Transpiler), packed into each jar under sculk/babel/ by nix/babel/default.nix. To update: npm install --package-lock-only @babel/standalone@<a release at least two weeks old>",
+  "license": "MIT",
+  "dependencies": {
+    "@babel/standalone": "7.29.12"
+  }
+}

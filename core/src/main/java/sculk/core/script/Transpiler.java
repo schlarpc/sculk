@@ -28,7 +28,7 @@ import sculk.shaded.org.mozilla.javascript.ScriptableObject;
  * keeps every line where it was, so errors point at the script's own lines.
  *
  * <p>Babel ({@code @babel/standalone}, packed under {@code sculk/babel/},
- * see nix/babel.nix) is 3 MB of JavaScript that takes Rhino about two
+ * see nix/babel/) is 3 MB of JavaScript that takes Rhino about two
  * seconds to load, so it loads once per game, on a background thread from
  * {@link #preload} at startup, in its own sealed scope (no Java access).
  * Results are kept by a hash of the source, in memory and, given a cache
