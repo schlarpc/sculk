@@ -43,7 +43,7 @@
         <button type="button" id="pause">Pause</button>
         <button type="button" id="clear">Clear</button>
       </form>
-      <div id="presets" class="presets"></div>
+      <div class="presets-row"><div id="presets" class="presets"></div><span class="table-count"><button id="show-all" class="link" type="button" hidden></button><span id="count">0 events</span></span></div>
       <div id="filter-error" class="filter-error" role="alert" hidden></div>
       <div id="table-wrap" class="table-wrap" tabindex="0">
         <table class="events-table">
@@ -56,7 +56,6 @@
           <tbody id="rows"></tbody>
         </table>
       </div>
-      <div class="table-foot"><span><span id="count">0 events</span> <button id="show-all" class="link" type="button" hidden></button></span><span class="hint">double-click a cell to filter on it · right-click for more · ↑/↓ PgUp/PgDn Home/End to step</span></div>
     </section>
 
     <section class="panel detail" aria-label="Event detail">

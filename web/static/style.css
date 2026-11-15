@@ -255,6 +255,10 @@ input.invalid { border-color: var(--red); }
 .filter input { flex: 1; }
 
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+/* The presets, then the event count right-aligned on their last line; it never wraps, so the table never moves. */
+.presets-row { display: flex; align-items: flex-end; gap: 12px; }
+.presets-row .presets { flex: 1; }
+.table-count { display: flex; justify-content: flex-end; min-width: 24ch; gap: 8px; white-space: nowrap; font-size: 12px; color: var(--text-dim); }
 .chip {
   font-size: 12px;
   padding: 1px 8px 3px;
@@ -369,15 +373,8 @@ button.link:hover { color: var(--glow-hot); background: none; }
 .a-drop .c-dir { color: var(--red); }
 .a-drop .c-summary { color: var(--red); text-decoration: line-through; text-decoration-thickness: 2px; }
 
-.table-foot > span:first-child { white-space: nowrap; }
 #count.scanning { color: var(--glow); }
-.table-foot {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--text-dim);
-}
+#count.held::after { content: " · held"; }
 
 /* ---- detail ---- */
 

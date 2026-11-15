@@ -204,7 +204,7 @@ class App {
       progress: (p) => this.showProgress(p),
       row: (e) => this.row(e),
       selected: (e) => this.showDetail(e),
-      changed: () => this.updateFoot(),
+      changed: () => this.updateCount(),
       pulse: () => this.pulse(),
       live: (on) => this.setLive(on),
     });
@@ -376,7 +376,7 @@ class App {
     }
     this.filterError.hidden = true;
     this.filter.classList.remove("invalid");
-    this.updateFoot();
+    this.updateCount();
   }
 
   private scanning: { done: number; total: number } | null = null;
@@ -384,10 +384,10 @@ class App {
   /** A filter scan on the server: "filtering… 1.2M of 3.4M" in the foot, until it is done. */
   private showProgress(p: { done: number; total: number } | null): void {
     this.scanning = p;
-    this.updateFoot();
+    this.updateCount();
   }
 
-  private updateFoot(): void {
+  private updateCount(): void {
     if (this.scanning) {
       const { done, total } = this.scanning;
       const short = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
@@ -398,7 +398,9 @@ class App {
     this.count.classList.remove("scanning");
     const n = this.table.count;
     const filtered = this.filter.value.trim() !== "";
-    this.count.textContent = `${n.toLocaleString()} ${filtered ? "matching" : "events"}${this.table.held ? " · held while the pointer is over the rows" : ""}`;
+    this.count.textContent = `${n.toLocaleString()} ${filtered ? "matching" : "events"}`;
+    this.count.classList.toggle("held", this.table.held);
+    this.count.title = this.table.held ? "held still while the pointer is over the rows" : "";
     const showAll = byId<HTMLButtonElement>("show-all");
     showAll.hidden = this.floor === 0;
     showAll.textContent = `cleared at #${this.floor} · show all`;
