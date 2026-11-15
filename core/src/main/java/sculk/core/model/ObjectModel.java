@@ -32,8 +32,23 @@ public final class ObjectModel {
     /** Shortest run of printable ASCII that {@code $text} keeps, as {@code strings(1)} does. */
     static final int MIN_RUN = 4;
 
-    /** Hex bytes left in the tree being built on this thread; null outside {@link #toTree}. */
+    /**
+     * Values (objects, lists, maps and leaves) in one whole tree at most;
+     * past it, what is left shows as {@link #CUT}. Keeps one packet (a mod
+     * syncing a 3D array of block matchers) from logging megabytes.
+     */
+    public static final int TREE_NODES = 4096;
+    /** What stands for the values a tree had no room left for. */
+    public static final String CUT = "…";
+
+    /** Hex bytes, then values, left in the tree being built on this thread; null outside {@link #toTree}. */
     private static final ThreadLocal<int[]> BYTES_LEFT = new ThreadLocal<>();
+
+    /** True once the tree being built has used up its values: callers stop adding and leave a {@link #CUT}. */
+    private static boolean full() {
+        int[] left = BYTES_LEFT.get();
+        return left != null && left[1] <= 0;
+    }
 
     /**
      * Game-specific views of game types (NBT, item stacks, identifiers,
@@ -109,7 +124,7 @@ public final class ObjectModel {
      */
     public static Object toTree(Object value, int depth) {
         if (BYTES_LEFT.get() != null) return walk(value, depth);
-        BYTES_LEFT.set(new int[] {TREE_BYTES});
+        BYTES_LEFT.set(new int[] {TREE_BYTES, TREE_NODES});
         try {
             return walk(value, depth);
         } finally {
@@ -118,6 +133,8 @@ public final class ObjectModel {
     }
 
     private static Object walk(Object value, int depth) {
+        int[] left = BYTES_LEFT.get();
+        if (left != null && left[1]-- <= 0) return CUT;
         if (!DECODERS.isEmpty() && value != null && !(value instanceof Number || value instanceof Boolean
                 || value instanceof CharSequence || value instanceof Map<?, ?> || value instanceof Collection<?>)) {
             Decoder d = decoderFor(value.getClass());
@@ -162,13 +179,23 @@ public final class ObjectModel {
         if (value.getClass().isArray()) {
             List<Object> out = new ArrayList<>();
             int n = java.lang.reflect.Array.getLength(value);
-            for (int i = 0; i < Math.min(n, MAX_ELEMENTS); i++) out.add(toTree(java.lang.reflect.Array.get(value, i), depth - 1));
+            for (int i = 0; i < Math.min(n, MAX_ELEMENTS); i++) {
+                if (full()) {
+                    out.add(CUT);
+                    break;
+                }
+                out.add(toTree(java.lang.reflect.Array.get(value, i), depth - 1));
+            }
             return out;
         }
         if (value instanceof Collection<?> c) {
             List<Object> out = new ArrayList<>();
             for (Object o : c) {
                 if (out.size() >= MAX_ELEMENTS) break;
+                if (full()) {
+                    out.add(CUT);
+                    break;
+                }
                 out.add(toTree(o, depth - 1));
             }
             return out;
@@ -177,22 +204,31 @@ public final class ObjectModel {
             Map<String, Object> out = new LinkedHashMap<>();
             for (Map.Entry<?, ?> e : m.entrySet()) {
                 if (out.size() >= MAX_ELEMENTS) break;
+                if (full()) {
+                    out.put(CUT, CUT);
+                    break;
+                }
                 out.put(key(e.getKey()), toTree(e.getValue(), depth - 1));
             }
             return out;
         }
-        // Guava multimaps (the game ships Guava; core does not depend on it): as their map of lists,
-        // not their linked internals, which repeat every value (a GameProfile's properties).
-        java.lang.reflect.Method asMap = MULTIMAP_AS_MAP.get(value.getClass());
-        if (asMap != null) {
+        // Guava multimaps and tables (the game ships Guava; core does not depend on it): as their
+        // map view, not their internals, which repeat every value (a GameProfile's properties).
+        java.lang.reflect.Method view = GUAVA_VIEW.get(value.getClass());
+        if (view != null) {
             try {
-                return walk(asMap.invoke(value), depth);
+                return walk(view.invoke(value), depth);
             } catch (ReflectiveOperationException | RuntimeException e) {
                 // Fall through to reflection.
             }
         }
         Class<?> cls = value.getClass();
-        if (cls.getName().startsWith("java.")) return value.toString();
+        // A lambda's fields are what it captured, not data: name what it is instead.
+        if (cls.isHidden() || cls.getName().contains("$$Lambda")) {
+            Class<?>[] is = cls.getInterfaces();
+            return "(lambda) " + (is.length > 0 ? is[0].getSimpleName() : cls.getName().replaceFirst("\\$\\$Lambda.*", ""));
+        }
+        if (isJdk(cls.getName())) return value.toString();
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("$class", cls.getName());
         try {
@@ -229,17 +265,25 @@ public final class ObjectModel {
         }
     };
 
-    /** For classes that implement Guava's Multimap, its asMap(), made accessible; else null. */
-    private static final ClassValue<java.lang.reflect.Method> MULTIMAP_AS_MAP = new ClassValue<>() {
+    /** JDK classes, shown by toString: their fields are implementation, and modules may refuse reflection. */
+    private static boolean isJdk(String name) {
+        return name.startsWith("java.") || name.startsWith("javax.") || name.startsWith("jdk.")
+                || name.startsWith("sun.") || name.startsWith("com.sun.");
+    }
+
+    /** Guava's map views: a Multimap's asMap(), a Table's rowMap(); null for other classes. */
+    private static final ClassValue<java.lang.reflect.Method> GUAVA_VIEW = new ClassValue<>() {
         @Override
         protected java.lang.reflect.Method computeValue(Class<?> cls) {
-            Class<?> multimap = findInterface(cls, "com.google.common.collect.Multimap");
-            if (multimap == null) return null;
             try {
-                return multimap.getMethod("asMap");
+                Class<?> multimap = findInterface(cls, "com.google.common.collect.Multimap");
+                if (multimap != null) return multimap.getMethod("asMap");
+                Class<?> table = findInterface(cls, "com.google.common.collect.Table");
+                if (table != null) return table.getMethod("rowMap");
             } catch (NoSuchMethodException e) {
-                return null;
+                // Not the Guava we know: reflection it is.
             }
+            return null;
         }
     };
 

@@ -1,6 +1,7 @@
 package sculk.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Map;
@@ -119,5 +120,43 @@ class ObjectModelTest {
         assertEquals(Map.of("textures", List.of(Map.of("$class", Property.class.getName(), "name", "textures",
                 "value", "ewog", "signature", "sig"))), tree.get("properties"));
         assertEquals("schlarpc", tree.get("name"));
+    }
+
+    @Test
+    void guavaTablesShowAsTheirRows() {
+        com.google.common.collect.Table<String, String, Integer> t = com.google.common.collect.HashBasedTable.create();
+        t.put("worldGen", "enabled", 1);
+        t.put("teleports", "cost", 3);
+        record Schema(com.google.common.collect.Table<String, String, Integer> properties) {}
+        Map<?, ?> tree = (Map<?, ?>) ObjectModel.toTree(new Schema(t), 6);
+        assertEquals(Map.of("worldGen", Map.of("enabled", 1), "teleports", Map.of("cost", 3)), tree.get("properties"));
+    }
+
+    record Holder2(java.util.function.Function<Integer, Integer> serializer, int value) {}
+
+    @Test
+    void lambdasAreNamedNotWalked() {
+        int captured = 7;
+        Map<?, ?> tree = (Map<?, ?>) ObjectModel.toTree(new Holder2(x -> x + captured, 2), 6);
+        assertEquals("(lambda) Function", tree.get("serializer"));
+        assertEquals(2, tree.get("value"));
+    }
+
+    @Test
+    void oneTreeHasOnlySoManyValues() {
+        // 64 x 64 x 64 would be 262,144 leaves.
+        Object[][][] cube = new Object[64][64][64];
+        for (Object[][] plane : cube) for (Object[] row : plane) java.util.Arrays.fill(row, "stone");
+        String json = sculk.core.log.EventLog.toJson(ObjectModel.toTree(cube, 8));
+        assertTrue(json.length() < ObjectModel.TREE_NODES * 12, "bounded: " + json.length());
+        assertTrue(json.contains(ObjectModel.CUT));
+        // ...and the budget is per tree.
+        assertEquals("stone", ((List<?>) ((List<?>) ((List<?>) ObjectModel.toTree(cube, 8)).get(0)).get(0)).get(0));
+    }
+
+    @Test
+    void jdkClassesShowAsTheirString() {
+        var key = new javax.crypto.spec.SecretKeySpec(new byte[] {1, 2}, "AES");
+        assertTrue(ObjectModel.toTree(key, 4) instanceof String);
     }
 }
