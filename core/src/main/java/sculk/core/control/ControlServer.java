@@ -38,7 +38,7 @@ import sculk.core.util.Bytes;
  * script code, manage installed scripts.
  *
  * <p>Whoever can call this server can run code in the game process and inject
- * packets, so it is off unless {@code -Dsculk.control=<port>} is set, and:
+ * packets. It is on unless {@code -Dsculk.control=off}, so:
  * <ul>
  *   <li>it listens on the loopback addresses only: 127.0.0.1 and, when the
  *       system has it, ::1, on the same port;</li>
@@ -87,6 +87,12 @@ import sculk.core.util.Bytes;
  */
 public final class ControlServer {
     private static final int MAX_BODY = 4 << 20;
+    /**
+     * Where the server listens when no port is asked for: the first of these
+     * that is free (another game on this machine may hold one), else any free
+     * port. A fixed port lets an MCP client keep its URL across launches.
+     */
+    public static final int[] DEFAULT_PORTS = {25580, 25581, 25582, 25583, 25584, 25585, 25586, 25587, 25588, 25589, 0};
     private static final String WEB_ROOT = "/sculk/web/";
     private static final java.util.regex.Pattern ASSET = java.util.regex.Pattern.compile("[A-Za-z0-9_-][A-Za-z0-9._-]*");
     private static final Map<String, String> TYPES = Map.of(
@@ -118,6 +124,11 @@ public final class ControlServer {
      *              fixed token lets MCP clients keep a static configuration.
      */
     public ControlServer(Sculk engine, EventStore store, int port, Path file, String token) throws IOException {
+        this(engine, store, new int[] {port}, file, token);
+    }
+
+    /** @param ports the ports to try, in order; the first one free is used. */
+    public ControlServer(Sculk engine, EventStore store, int[] ports, Path file, String token) throws IOException {
         this.engine = engine;
         this.store = store;
         this.file = file.toAbsolutePath();
@@ -130,7 +141,7 @@ public final class ControlServer {
         }
         this.token = token;
 
-        int bound = bind(port);
+        int bound = bind(ports);
         this.port = bound;
         Set<String> names = new java.util.HashSet<>(Set.of("127.0.0.1:" + bound, "localhost:" + bound));
         if (servers.size() > 1) names.add("[::1]:" + bound);
@@ -163,8 +174,21 @@ public final class ControlServer {
      * getLoopbackAddress() picks one family, and Forge and NeoForge dev runs
      * set -Djava.net.preferIPv6Addresses=system, which makes it ::1. Without
      * IPv6 loopback, serves IPv4 only. With port 0, retries when another
-     * process holds the chosen port on ::1.
+     * process holds the chosen port on ::1. Of several ports, takes the first
+     * that is free on 127.0.0.1.
      */
+    private int bind(int[] candidates) throws IOException {
+        for (int i = 0; ; i++) {
+            try {
+                int bound = bind(candidates[i]);
+                if (i > 0) Sculk.LOG.info("control server: port {} is taken; using {}", candidates[0], bound);
+                return bound;
+            } catch (java.net.BindException e) {
+                if (i + 1 >= candidates.length) throw e;
+            }
+        }
+    }
+
     private int bind(int requested) throws IOException {
         InetAddress v4 = InetAddress.getByAddress("localhost", new byte[] {127, 0, 0, 1});
         InetAddress v6 = InetAddress.getByAddress("localhost", new byte[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1});

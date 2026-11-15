@@ -377,9 +377,13 @@ Shorthands, in filters and in scripts: `dir` (`frame.dir`), `len`
 
 ## Control server
 
-`-Dsculk.control=PORT` (dev runs: `-Psculk.control=0` for a free port)
-starts one HTTP listener for tools, agents and the web UI: a filterable
-live event log, a REPL, a script editor, and an MCP server.
+The control server is one HTTP listener for tools, agents and the web UI: a
+filterable live event log, a REPL, a script editor, and an MCP server. It
+is on by default, on port 25580; when another game on the machine holds
+that, the next free one up to 25589, else any free port. The port it got is
+in `sculk-control.json` and the game log, and `/sculk ui` opens it.
+`-Dsculk.control=PORT` asks for exactly that port (0: any free one) and
+`-Dsculk.control=off` turns the server off (dev runs: `-Psculk.control=...`).
 
 It captures every event of the session with its whole frame (the event log
 cuts long frames short), whether or not `sculk.eventLog` is set, so queries
@@ -474,8 +478,9 @@ and script API.
 An MCP client gets in one of two ways:
 
 - **Pairing** (`scripts/sculkctl.py mcp-config`): the client's configuration
-  holds only the URL, so it never changes; run the game with a fixed port
-  (`-Dsculk.control=<port>`). A client that connects without the token gets
+  holds only the URL, so it never changes; the default port stays the same
+  across launches unless another game holds it (`-Dsculk.control=<port>`
+  pins one). A client that connects without the token gets
   a session that waits for the player: it can initialize and list tools,
   but every tool call answers with what to type, `/sculk mcp accept <n>`,
   for its model to pass on. The player approves it in game (or at a
@@ -515,7 +520,7 @@ A layer name alone (`mod`) asks whether the event has that layer. Operators are 
 Anyone who can call this server can run code in the game and inject packets,
 so:
 
-- it is off by default, and listens on loopback only: 127.0.0.1 and `::1`
+- it listens on loopback only (`-Dsculk.control=off` turns it off): 127.0.0.1 and `::1`
   on the same port, bound explicitly (Forge and NeoForge dev runs make the
   JVM prefer IPv6, so "the" loopback address would be `::1` alone). Without
   IPv6 loopback it serves IPv4 only;

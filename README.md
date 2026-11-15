@@ -82,16 +82,16 @@ gradle :platforms:neoforge-1.21.1:runServer
 scripts/smoke-server.sh forge-1.20.1   # boot a server, connect, check the hook fired
 scripts/integ.py fabric-1.21.1         # real server + headless client + real mods + sculk's test mod
 
-# control server: query and tail events, run code in the live game
-gradle :platforms:neoforge-1.21.1:runServer -Psculk.control=0
+# control server (on by default, port 25580): query and tail events, run code in the live game
+gradle :platforms:neoforge-1.21.1:runServer
 scripts/sculkctl.py tail 'kind == packet && owner != minecraft'
 scripts/sculkctl.py repl
 scripts/sculkctl.py ui              # the web UI, signed in
 scripts/sculkctl.py mcp-config      # connect an MCP client (e.g. Claude Code) to the live game
 ```
 
-MCP clients pair instead of holding the token: add the server once, with a
-fixed port (`-Psculk.control=25580`), and when the agent first calls a tool
+MCP clients pair instead of holding the token: add the server once (its
+URL keeps port 25580 while no other game holds it), and when the agent first calls a tool
 it asks you to type `/sculk mcp accept <n>` in game (sculk also says so in
 your chat, with an **[accept]** button). Approval lasts until the
 game exits; after a restart the client reconnects and asks again, with no

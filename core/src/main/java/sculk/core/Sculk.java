@@ -55,8 +55,11 @@ import sculk.core.util.Bytes;
  *   <li>{@code sculk.watch}: whether to poll the script files for changes
  *       made outside sculk and apply them (default true), every
  *       {@code sculk.watchMillis} (default 500);</li>
- *   <li>{@code sculk.control}: port for the loopback control server (0 picks
- *       a free port); off when unset. See {@link ControlServer};</li>
+ *   <li>{@code sculk.control}: port for the loopback control server, which
+ *       is on by default: unset, it takes the first free port of
+ *       {@link ControlServer#DEFAULT_PORTS}, else any free port; a number asks
+ *       for exactly that port (0: any free port); {@code off} turns it off.
+ *       See {@link ControlServer};</li>
  *   <li>{@code sculk.controlFile}: where the control server writes its port
  *       and token (default {@code sculk-control.json});</li>
  *   <li>{@code sculk.controlToken}: a fixed bearer token (16 characters or
@@ -118,8 +121,8 @@ public final class Sculk {
                 LOG.error("cannot open event log {}", logPath, e);
             }
         }
-        String controlPort = System.getProperty("sculk.control");
-        boolean controlOn = controlPort != null && !controlPort.isBlank();
+        String controlPort = System.getProperty("sculk.control", "").trim();
+        boolean controlOn = !java.util.Set.of("off", "false", "no", "none").contains(controlPort.toLowerCase(java.util.Locale.ROOT));
         EventStore store = null;
         if (controlOn) {
             long captureBytes = Long.getLong("sculk.captureBytes", 2L << 30);
@@ -165,10 +168,11 @@ public final class Sculk {
             try {
                 Path file = Path.of(System.getProperty("sculk.controlFile", "sculk-control.json"));
                 String token = System.getProperty("sculk.controlToken");
-                sculk.control = new ControlServer(sculk, store, Integer.parseInt(controlPort.trim()), file,
+                int[] ports = controlPort.isEmpty() ? ControlServer.DEFAULT_PORTS : new int[] {Integer.parseInt(controlPort)};
+                sculk.control = new ControlServer(sculk, store, ports, file,
                         token == null || token.isBlank() ? null : token.trim());
             } catch (IOException | RuntimeException e) {
-                LOG.error("cannot start control server on port {}", controlPort, e);
+                LOG.error("cannot start control server on {}", controlPort.isEmpty() ? "any port" : "port " + controlPort, e);
             }
         }
         return sculk;

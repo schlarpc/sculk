@@ -229,7 +229,7 @@ public final class SculkCommand {
         Sculk sculk = Sculk.get();
         ControlServer control = sculk == null ? null : sculk.control();
         if (control == null) {
-            reply.fail(source, "the control server is off; start the game with -Dsculk.control=<port>");
+            reply.fail(source, "the control server is off (-Dsculk.control=off) or failed to start; see the game log");
             return 0;
         }
         try {

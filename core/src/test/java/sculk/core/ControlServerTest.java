@@ -361,6 +361,24 @@ class ControlServerTest {
         }
     }
 
+    @Test
+    void aTakenPortFallsThroughToTheNext() throws IOException {
+        try (var taken = new java.net.ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            int busy = taken.getLocalPort();
+            var file = Files.createTempFile("sculk-control", ".json");
+            ControlServer second = new ControlServer(Sculk.get(), server().store(), new int[] {busy, 0}, file, null);
+            try {
+                assertTrue(second.port() != busy && second.port() > 0, "bound " + second.port());
+                assertTrue(Files.readString(file).contains("\"port\":" + second.port()), Files.readString(file));
+            } finally {
+                second.stop();
+                Files.deleteIfExists(file);
+            }
+            assertThrows(java.net.BindException.class,
+                    () -> new ControlServer(Sculk.get(), server().store(), busy, file, null), "an exact port that is taken fails");
+        }
+    }
+
     // ---- web UI ----
 
     @Test

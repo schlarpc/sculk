@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Command-line client for sculk's control server (-Dsculk.control=PORT).
+"""Command-line client for sculk's control server (on by default, port 25580).
 
 Finds the server through the control file it writes (port and per-launch
 token): --file, else $SCULK_CONTROL, else ./sculk-control.json, else the dev
@@ -54,7 +54,7 @@ def find_control_file(explicit, target):
     if len(found) == 1:
         return found[0]
     if not found:
-        sys.exit("sculkctl: no control file found; is the game running with -Dsculk.control=PORT? (or pass --file)")
+        sys.exit("sculkctl: no control file found; is the game running, with the control server on? (or pass --file)")
     sys.exit("sculkctl: several control files; choose one with --target or --file:\n  "
              + "\n  ".join(str(f) for f in found))
 
@@ -254,7 +254,7 @@ def cmd_mcp_config(c, a):
     print(f"claude mcp add --transport http {a.name} {c.mcp_url}")
     print("\n# The client connects without the token and waits until you type /sculk mcp accept in game"
           "\n# (or at the server console). Approval lasts until the game exits. The URL must stay the same,"
-          f"\n# so run the game with a fixed port: -Dsculk.control={c.port} (or -Psculk.control={c.port}).", file=sys.stderr)
+          f"\n# so pin the port if other games may take 25580 first: -Dsculk.control={c.port} (or -Psculk.control={c.port}).", file=sys.stderr)
 
 
 def main():
