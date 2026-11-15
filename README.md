@@ -90,12 +90,41 @@ scripts/sculkctl.py ui              # the web UI, signed in
 scripts/sculkctl.py mcp-config      # connect an MCP client (e.g. Claude Code) to the live game
 ```
 
-MCP clients pair instead of holding the token: add the server once (its
-URL keeps port 25580 while no other game holds it), and when the agent first calls a tool
-it asks you to type `/sculk mcp accept <n>` in game (sculk also says so in
-your chat, with an **[accept]** button). Approval lasts until the
-game exits; after a restart the client reconnects and asks again, with no
-change to its configuration.
+### Connecting an MCP client
+
+The MCP endpoint is `http://127.0.0.1:25580/mcp`. The port stays 25580
+unless another game already holds it. Add the server once:
+
+```
+claude mcp add --transport http sculk http://127.0.0.1:25580/mcp
+```
+
+or put it in `.mcp.json` (or another client's configuration):
+
+```json
+{
+  "mcpServers": {
+    "sculk": { "type": "http", "url": "http://127.0.0.1:25580/mcp" }
+  }
+}
+```
+
+The path must be `/mcp`. Any other path (the bare `http://127.0.0.1:25580/`
+too) answers 401 without the token. Claude Code takes that 401 to mean the
+server wants OAuth and fails with "Dynamic Client Registration rejected (HTTP
+401)". `scripts/sculkctl.py mcp-config` prints the right configuration for
+the running game.
+
+Clients pair instead of holding the token. When the agent first calls a
+tool, it asks you to type `/sculk mcp accept <n>` in game (sculk also says so
+in your chat, with an **[accept]** button). Approval lasts until the game
+exits. After a restart the client reconnects and asks again, with no change
+to its configuration.
+
+To skip pairing, start the game with `-Dsculk.controlToken=<16+ chars>` and
+send that token in an `Authorization: Bearer <token>` header;
+`scripts/sculkctl.py mcp-config --token` prints that configuration. Anyone
+who can read the configuration can then drive the game.
 
 `gradle build` also runs `nix build .#web` for the control server's web UI
 (`web/`); pass `-Psculk.webDir=<dir>` to use a prebuilt one instead.
