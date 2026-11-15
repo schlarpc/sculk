@@ -40,6 +40,7 @@ dependencies {
     testImplementation 'io.netty:netty-codec:4.1.97.Final'
     testImplementation 'com.google.code.gson:gson:2.10.1'
     testImplementation 'com.mojang:brigadier:1.1.8'
+    testImplementation 'com.google.guava:guava:32.1.2-jre'
     testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.9'
 }
 

@@ -100,4 +100,24 @@ class ObjectModelTest {
         assertEquals(Map.of("$bytes", "0203"), ObjectModel.toTree(buf, 2));
         assertEquals(1, buf.readerIndex());
     }
+
+    record Property(String name, String value, String signature) {}
+
+    /** Shaped like authlib's GameProfile: plain fields, properties in a Guava multimap. */
+    static final class Profile {
+        private final String id = "d959";
+        private final String name = "schlarpc";
+        private final com.google.common.collect.Multimap<String, Property> properties =
+                com.google.common.collect.LinkedHashMultimap.create();
+    }
+
+    @Test
+    void guavaMultimapsShowAsTheirMapOfLists() {
+        Profile p = new Profile();
+        p.properties.put("textures", new Property("textures", "ewog", "sig"));
+        Map<?, ?> tree = (Map<?, ?>) ObjectModel.toTree(p, 6);
+        assertEquals(Map.of("textures", List.of(Map.of("$class", Property.class.getName(), "name", "textures",
+                "value", "ewog", "signature", "sig"))), tree.get("properties"));
+        assertEquals("schlarpc", tree.get("name"));
+    }
 }

@@ -181,6 +181,16 @@ public final class ObjectModel {
             }
             return out;
         }
+        // Guava multimaps (the game ships Guava; core does not depend on it): as their map of lists,
+        // not their linked internals, which repeat every value (a GameProfile's properties).
+        java.lang.reflect.Method asMap = MULTIMAP_AS_MAP.get(value.getClass());
+        if (asMap != null) {
+            try {
+                return walk(asMap.invoke(value), depth);
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                // Fall through to reflection.
+            }
+        }
         Class<?> cls = value.getClass();
         if (cls.getName().startsWith("java.")) return value.toString();
         Map<String, Object> out = new LinkedHashMap<>();
@@ -218,6 +228,31 @@ public final class ObjectModel {
             return out;
         }
     };
+
+    /** For classes that implement Guava's Multimap, its asMap(), made accessible; else null. */
+    private static final ClassValue<java.lang.reflect.Method> MULTIMAP_AS_MAP = new ClassValue<>() {
+        @Override
+        protected java.lang.reflect.Method computeValue(Class<?> cls) {
+            Class<?> multimap = findInterface(cls, "com.google.common.collect.Multimap");
+            if (multimap == null) return null;
+            try {
+                return multimap.getMethod("asMap");
+            } catch (NoSuchMethodException e) {
+                return null;
+            }
+        }
+    };
+
+    private static Class<?> findInterface(Class<?> cls, String name) {
+        for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
+            for (Class<?> i : c.getInterfaces()) {
+                if (i.getName().equals(name)) return i;
+                Class<?> deeper = findInterface(i, name);
+                if (deeper != null) return deeper;
+            }
+        }
+        return null;
+    }
 
     /** A class's instance fields, its own first and then its superclasses', made accessible; as {@link #ACCESSORS}. */
     private static final ClassValue<Field[]> FIELDS = new ClassValue<>() {
