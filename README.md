@@ -109,11 +109,8 @@ or put it in `.mcp.json` (or another client's configuration):
 }
 ```
 
-The path must be `/mcp`. Any other path (the bare `http://127.0.0.1:25580/`
-too) answers 401 without the token. Claude Code takes that 401 to mean the
-server wants OAuth and fails with "Dynamic Client Registration rejected (HTTP
-401)". `scripts/sculkctl.py mcp-config` prints the right configuration for
-the running game.
+`scripts/sculkctl.py mcp-config` prints the right configuration for the
+running game.
 
 Clients pair instead of holding the token. When the agent first calls a
 tool, it asks you to type `/sculk mcp accept <n>` in game (sculk also says so
