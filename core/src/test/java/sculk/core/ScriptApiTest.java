@@ -118,4 +118,36 @@ class ScriptApiTest {
                 "const t = sculk.tree(new Packages.sculk.core.FakeGame.Packet(1, 'a')); [t.text, t.id + 1, Object.keys(t).length].join('|')");
         assertEquals("a|2|3", r);
     }
+
+    @Test
+    void listenersCanTakeAFilter() throws Exception {
+        var scripts = FakeGame.sculk().scripts();
+        scripts.load("filtered.js", """
+                var seen = [];
+                sculk.on('packet', 'channel == "othermod:filtered" && packet.data != skip && dir == inbound', e => seen.push(String(e.packet.data)));
+                var conns = 0;
+                sculk.on('connection', 'conn.side == server', c => conns++);
+                """);
+        try {
+            EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
+            for (String text : new String[] {"keep", "skip", "also"}) {
+                ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:filtered|" + text)));
+            }
+            ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:other|nope")));
+            FakeGame.channel(Side.CLIENT);
+            assertEquals("keep,also|1", scripts.eval("sculk.scope('filtered.js').seen.join(',') + '|' + sculk.scope('filtered.js').conns"));
+            assertTrue(assertThrowsMessage(() -> scripts.load("bad-filter.js", "sculk.on('packet', 'kind ==', e => {})")).contains("expected a value"));
+        } finally {
+            scripts.stop("filtered.js");
+        }
+    }
+
+    private static String assertThrowsMessage(Runnable r) {
+        try {
+            r.run();
+        } catch (RuntimeException e) {
+            return String.valueOf(e.getMessage());
+        }
+        throw new AssertionError("expected an exception");
+    }
 }

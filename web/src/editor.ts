@@ -141,7 +141,7 @@ const highlight = HighlightStyle.define([
 
 /** The `sculk` API, as ScriptApi.java offers it. */
 const SCULK_API: Completion[] = [
-  { label: "on", type: "method", detail: "(event, fn)", info: "sculk.on('packet', e => ...) or sculk.on('connection', c => ...).\nListeners belong to this script and go when it stops." },
+  { label: "on", type: "method", detail: "(event, [filter], fn)", info: "sculk.on('packet', e => ...) or sculk.on('connection', c => ...).\nAn optional filter, as in the events view, picks which: sculk.on('packet', 'channel ~ \"^ae2:\" && dir == inbound', e => ...).\nListeners belong to this script and go when it stops." },
   { label: "connections", type: "method", detail: "()", info: "The open connections: {id, side, remote, inject(dir, bytes), injectPacket(dir, obj), injectPayload(dir, channel, payload), replay(event)}." },
   { label: "connection", type: "method", detail: "(id)", info: "The open connection with this id (as in e.conn.id), or null." },
   { label: "payloadTypes", type: "method", detail: "()", info: "Every registered custom payload type, as payload_type events show them." },

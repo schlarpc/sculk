@@ -142,6 +142,40 @@ public final class PacketEvent {
         return m;
     }
 
+    /**
+     * The event as a filter sees it ({@link #toJson} without an id), but
+     * leaving out what costs most unless asked: the decoded tree
+     * ({@code packet.data}), the frame hex and the round trip.
+     */
+    public Map<String, Object> filterView(boolean data, boolean hex, boolean roundTrip, int treeDepth) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("kind", "packet");
+        m.put("t", timestampMillis);
+        m.put("conn", connection.toJson());
+        Map<String, Object> f = new LinkedHashMap<>();
+        f.put("seq", frame.getSeq());
+        f.put("dir", frame.getDir());
+        f.put("len", frame.getLen());
+        if (hex) f.put("hex", frame.getHex());
+        m.put("frame", f);
+        m.put("packet", packet.toJson(treeDepth, data));
+        if (mod != null) {
+            Map<String, Object> md = new LinkedHashMap<>();
+            md.put("channel", mod.getChannel());
+            md.put("owner", mod.getOwner());
+            md.put("registeredVia", mod.getRegisteredVia());
+            md.put("javaClass", mod.getJavaClass());
+            if (roundTrip) {
+                md.put("roundTrip", mod.getRoundTrip());
+                if (mod.getRoundTripDetail() != null) md.put("roundTripDetail", mod.getRoundTripDetail());
+            }
+            m.put("mod", md);
+        }
+        m.put("injected", injected);
+        m.put("action", getAction());
+        return m;
+    }
+
     @Override
     public String toString() {
         return connection.getSide() + " " + frame.getDir() + " " + packet.getState() + " " + packet.getType()

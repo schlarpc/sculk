@@ -43,6 +43,11 @@ public final class PacketLayer {
 
     /** The layer as logged, with {@code data} as an {@link ObjectModel} tree at most {@code treeDepth} deep. */
     public Map<String, Object> toJson(int treeDepth) {
+        return toJson(treeDepth, true);
+    }
+
+    /** The layer, with or without {@code data} (the costly part). */
+    public Map<String, Object> toJson(int treeDepth, boolean withData) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", getId());
         m.put("state", getState());
@@ -50,6 +55,7 @@ public final class PacketLayer {
         m.put("type", getType());
         m.put("javaClass", getJavaClass());
         m.put("owner", owner);
+        if (!withData) return m;
         Object data = getData();
         m.put("data", data == null ? null : ObjectModel.toTree(data, treeDepth));
         return m;

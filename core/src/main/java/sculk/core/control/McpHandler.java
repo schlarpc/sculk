@@ -58,7 +58,8 @@ final class McpHandler {
             // @run         startup   (startup: runs at launch and on reload, when enabled; manual: only when run)
             // @dist        client    (optional; client or server: only in a game client, or only in a dedicated server)
             // ==/Sculk==
-            The `sculk` global offers: on('packet'|'connection', fn), connections(), connection(id), payloadTypes(), \
+            The `sculk` global offers: on('packet'|'connection', [filter], fn) (filter: the sculk_events filter \
+            language, checked before the script runs), connections(), connection(id), payloadTypes(), \
             emit(obj) (a `script` event), log(msg) (a `script_log` event), chat(msg) (a chat line only the player sees; \
             a `chat` event), schedule(ms, fn), tree(obj), decoder(className, (obj, tree) => tree) (show a Java class's \
             objects your way wherever sculk makes a tree, e.g. packet.data: for mod data kept as raw bytes; change \

@@ -314,6 +314,9 @@ sculk.on('packet', e => {
   if (e.channel === 'somemod:sync') sculk.emit(sculk.tree(e.packet.data)); // shorthands work here too
 });
 sculk.on('connection', c => sculk.log('connected as ' + c.side));
+// sculk.on('packet', 'channel ~ "^ae2:" && dir == inbound', e => ...): a filter (the events
+//   filter language) picks events before the script runs; it builds packet.data, frame.hex
+//   and mod.roundTrip only if it reads them. Events have no id yet when listeners run.
 // c.inject('outbound', bytes), c.injectPacket('inbound', obj), c.replay(event); sculk.connection(id) finds one
 // c.injectPayload('outbound', channel, payload): a mod payload object, wrapped for the side and direction
 // e.replacePayload(sculk.with(e.packet.data, 'field', value)): edit a mod payload in flight, same channel

@@ -12,6 +12,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import sculk.core.Sculk;
+import sculk.core.control.EventFilter;
 import sculk.core.log.EventLog;
 import sculk.core.model.ObjectModel;
 import sculk.core.net.SculkConnection;
@@ -127,20 +128,53 @@ public final class ScriptApi implements AutoCloseable {
     // ---- script-visible API ----
 
     public void on(String event, Function fn) {
+        on(event, null, fn);
+    }
+
+    /**
+     * Calls {@code fn} for each event of a kind ({@code packet} or
+     * {@code connection}), or, with a {@code filter} in the language of
+     * sculk_events and the web UI, only for those it matches: the same
+     * fields and shorthands as logged events. A filter is checked before
+     * the script runs, and only builds the costly fields it reads
+     * ({@code packet.data}, {@code frame.hex}, {@code mod.roundTrip}).
+     * There is no {@code id} yet when listeners run.
+     */
+    public void on(String event, String filter, Function fn) {
         if (closed) throw new IllegalStateException("script " + name + " was stopped");
+        EventFilter.Compiled f = EventFilter.analyze(filter);
+        boolean all = f.matchesAll();
         switch (event) {
             case "packet" -> {
-                Consumer<PacketEvent> l = e -> invoke("packet", fn, e);
+                boolean data = reads(f, "packet.data"), hex = reads(f, "frame.hex"), roundTrip = reads(f, "mod.roundTrip");
+                Consumer<PacketEvent> l = e -> {
+                    if (all || f.predicate().test(e.filterView(data, hex, roundTrip, FILTER_TREE_DEPTH))) invoke("packet", fn, e);
+                };
                 packetListeners.add(l);
                 engine.addPacketListener(l);
             }
             case "connection" -> {
-                Consumer<SculkConnection> l = c -> invoke("connection", fn, c);
+                Consumer<SculkConnection> l = c -> {
+                    if (all || f.predicate().test(Map.of("kind", "connection", "conn", c.toJson()))) invoke("connection", fn, c);
+                };
                 connectionListeners.add(l);
                 engine.addConnectionListener(l);
             }
             default -> throw new IllegalArgumentException("unknown event '" + event + "' (expected packet, connection)");
         }
+    }
+
+    /** As deep as the event log's trees, so a filter matches here what it matches there. */
+    private static final int FILTER_TREE_DEPTH = 6;
+
+    /** Whether a filter reads {@code path}: the path itself, a field under it, or a whole layer above it. */
+    private static boolean reads(EventFilter.Compiled f, String path) {
+        for (EventFilter.Ref r : f.refs()) {
+            String p = r.path();
+            if (p.equals(path) || p.startsWith(path + ".")) return true;
+            if (!r.presence() && path.startsWith(p + ".")) return true; // `packet contains x` reads all of packet
+        }
+        return false;
     }
 
     /**
