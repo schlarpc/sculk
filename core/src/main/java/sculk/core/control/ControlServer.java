@@ -237,6 +237,12 @@ public final class ControlServer {
     public List<Map<String, Object>> mcpClients() { return mcp.clients(); }
     /** Approves the waiting MCP client {@code number}, or the only one when null; throws IllegalArgumentException otherwise. */
     public Map<String, Object> mcpAccept(Integer number) { return mcp.accept(number); }
+    /** How long an MCP tool call from a client awaiting approval is held for the player; returns the old value. For tests. */
+    public static long mcpApprovalWait(long millis) {
+        long old = McpHandler.approvalWaitMillis;
+        McpHandler.approvalWaitMillis = millis;
+        return old;
+    }
     /** Ends a paired MCP client's session; throws IllegalArgumentException if there is none. */
     public Map<String, Object> mcpRevoke(int number) { return mcp.revoke(number); }
 

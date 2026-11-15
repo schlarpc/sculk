@@ -114,7 +114,9 @@ running game.
 
 Clients pair instead of holding the token. When the agent first calls a
 tool, it asks you to type `/sculk mcp accept <n>` in game (sculk also says so
-in your chat, with an **[accept]** button). Approval lasts until the game
+in your chat, with an **[accept]** button). That first call waits for you,
+up to five minutes, and runs as soon as you accept, so the agent does not
+have to try again. Approval lasts until the game
 exits. After a restart the client reconnects and asks again, with no change
 to its configuration.
 

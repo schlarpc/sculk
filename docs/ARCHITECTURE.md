@@ -482,8 +482,10 @@ An MCP client gets in one of two ways:
   across launches unless another game holds it (`-Dsculk.control=<port>`
   pins one). A client that connects without the token gets
   a session that waits for the player: it can initialize and list tools,
-  but every tool call answers with what to type, `/sculk mcp accept <n>`,
-  for its model to pass on. The player approves it in game (or at a
+  but a tool call is held until the player approves it (up to 5 minutes,
+  reporting progress that names what to type, `/sculk mcp accept <n>`) and
+  then runs; if the wait runs out it answers with what to type, for its
+  model to pass on. The player approves it in game (or at a
   dedicated server's console); `/sculk mcp list` and `revoke <n>` manage
   approvals, which last until the game exits. After a game restart the
   client finds its session gone (404) and initializes again, often two or

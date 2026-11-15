@@ -712,6 +712,11 @@ class ControlServerTest {
 
     // ---- MCP pairing: clients without the token wait for the player ----
 
+    static {
+        // Tool calls from waiting clients are held for the player; most tests want the quick refusal.
+        ControlServer.mcpApprovalWait(300);
+    }
+
     private static final String TOOL_CALL = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"sculk_status\",\"arguments\":{}}}";
 
     /** Initializes without the token; returns {session id, pairing number}. */
@@ -754,6 +759,52 @@ class ControlServerTest {
         server().mcpRevoke(number);
         assertEquals(404, inSession(session, TOOL_CALL).status(), "revoked: the client must pair again");
         assertThrows(IllegalArgumentException.class, () -> server().mcpRevoke(number));
+    }
+
+    @Test
+    void aWaitingClientsToolCallRunsOnceThePlayerApproves() throws Exception {
+        String[] p = pair("held-" + System.nanoTime());
+        long saved = ControlServer.mcpApprovalWait(20_000);
+        try {
+            var held = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                try {
+                    return inSession(p[0], TOOL_CALL);
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            });
+            Thread.sleep(300);
+            assertFalse(held.isDone(), "the call waits for the player");
+            server().mcpAccept(Integer.parseInt(p[1]));
+            JsonObject result = held.get(5, java.util.concurrent.TimeUnit.SECONDS).json().getAsJsonObject("result");
+            assertFalse(result.get("isError").getAsBoolean(), result.toString());
+            assertTrue(toolText(result).contains("\"platform\""));
+        } finally {
+            ControlServer.mcpApprovalWait(saved);
+            server().mcpRevoke(Integer.parseInt(p[1]));
+        }
+    }
+
+    @Test
+    void aHeldCallEndsWhenTheClientIsRevoked() throws Exception {
+        String[] p = pair("held-revoked-" + System.nanoTime());
+        long saved = ControlServer.mcpApprovalWait(20_000);
+        try {
+            var held = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                try {
+                    return inSession(p[0], TOOL_CALL);
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            });
+            Thread.sleep(300);
+            server().mcpRevoke(Integer.parseInt(p[1]));
+            JsonObject result = held.get(5, java.util.concurrent.TimeUnit.SECONDS).json().getAsJsonObject("result");
+            assertTrue(result.get("isError").getAsBoolean());
+            assertTrue(toolText(result).contains("turned away"), toolText(result));
+        } finally {
+            ControlServer.mcpApprovalWait(saved);
+        }
     }
 
     @Test

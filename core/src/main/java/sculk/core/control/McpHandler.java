@@ -343,14 +343,6 @@ final class McpHandler {
             ControlServer.json(ex, 200, error(null, -32600, "a client waiting for approval sends one message at a time"));
             return;
         }
-        if (waiting && "tools/call".equals(method) && id != null) {
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("jsonrpc", "2.0");
-            out.put("id", id);
-            out.put("result", text(waiting(session), true));
-            ControlServer.json(ex, 200, out);
-            return;
-        }
         if ("tools/call".equals(method) && id != null) {
             String accept = String.valueOf(ex.getRequestHeaders().getFirst("Accept"));
             JsonObject params = msg.has("params") && msg.get("params").isJsonObject() ? msg.getAsJsonObject("params") : new JsonObject();
@@ -364,7 +356,16 @@ final class McpHandler {
             try {
                 Map<String, Object> response;
                 try {
-                    response = message(msg, call);
+                    if (waiting && !awaitApproval(sessionId, session, call)) {
+                        response = new LinkedHashMap<>();
+                        response.put("jsonrpc", "2.0");
+                        response.put("id", id);
+                        response.put("result", text(session(sessionId) == null
+                                ? "This MCP client's request to use sculk was turned away; initialize again to ask the player anew."
+                                : waiting(session), true));
+                    } else {
+                        response = message(msg, call);
+                    }
                 } catch (java.util.concurrent.CancellationException e) {
                     response = null;
                 }
@@ -408,11 +409,45 @@ final class McpHandler {
         return s != null ? s : pending.get(id);
     }
 
+    /** How long a waiting client's tool call is held for the player before it gives up; tests shorten it. */
+    static volatile long approvalWaitMillis = MAX_WAIT_MILLIS;
+
+    /**
+     * Holds a waiting client's tool call until the player approves it, so
+     * the call simply runs once they do and the model need not be told to
+     * try again. Streams progress (the command to type) meanwhile. Returns
+     * true once approved; false when the wait ran out or the session was
+     * revoked or pushed out. Throws CancellationException if the client
+     * cancelled the call.
+     */
+    private boolean awaitApproval(String sessionId, Session session, Call call) {
+        long start = System.currentTimeMillis(), deadline = start + approvalWaitMillis, nextTick = start;
+        String note = "waiting for the player to approve this client: /sculk mcp accept " + session.number;
+        while (!session.approved) {
+            if (session(sessionId) != session) return false; // revoked or pushed out (revoking also cancels: say why)
+            if (call.cancelled()) throw new java.util.concurrent.CancellationException();
+            long now = System.currentTimeMillis();
+            if (now >= deadline) return false;
+            if (now >= nextTick) {
+                call.progress(now - start, deadline - start, note);
+                nextTick = now + TICK_MILLIS;
+            }
+            try {
+                Thread.sleep(Math.min(100, deadline - now));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** What a waiting client is told, for its model to pass on. */
     private static String waiting(Session s) {
         return "This MCP client is waiting for the player's approval, so sculk's tools do not run yet. "
-                + "Ask the user to type `/sculk mcp accept " + s.number + "` in Minecraft (or at the server console), "
-                + "then try again.";
+                + "Ask the user to type `/sculk mcp accept " + s.number + "` in Minecraft (or at the server console). "
+                + "A tool call made meanwhile waits for the approval (up to " + approvalWaitMillis / 1000
+                + " s) and then runs, so there is no need to call again unless it gave up.";
     }
 
     /** The name and version the client gave in initialize, cut to something fit for chat. */
