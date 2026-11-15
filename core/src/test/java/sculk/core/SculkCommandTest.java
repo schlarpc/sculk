@@ -223,7 +223,7 @@ class SculkCommandTest {
     void uiOpensTheSignedInPageWithoutPuttingTheTokenInChat() throws Exception {
         String token = FakeGame.sculk().control().token();
         assertEquals(1, run("sculk ui"));
-        assertEquals(List.of(FakeGame.sculk().control().url() + "/ui/#token=" + token), opened);
+        assertEquals(List.of(FakeGame.sculk().control().url() + "/#token=" + token), opened);
         assertFalse(String.join("\n", replies).contains(token));
     }
 

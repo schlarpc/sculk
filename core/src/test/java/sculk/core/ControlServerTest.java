@@ -119,18 +119,18 @@ class ControlServerTest {
 
     @Test
     void refusesMissingOrWrongToken() throws IOException {
-        assertEquals(401, request("GET", "/status", null).status());
-        assertEquals(401, request("GET", "/status", null, "Authorization: Bearer nope").status());
-        assertEquals(401, request("GET", "/status", null, "Authorization: Basic " + server().token()).status());
-        assertEquals(401, request("POST", "/eval", "1", "Authorization: Bearer x" + server().token()).status());
+        assertEquals(401, request("GET", "/api/status", null).status());
+        assertEquals(401, request("GET", "/api/status", null, "Authorization: Bearer nope").status());
+        assertEquals(401, request("GET", "/api/status", null, "Authorization: Basic " + server().token()).status());
+        assertEquals(401, request("POST", "/api/eval", "1", "Authorization: Bearer x" + server().token()).status());
     }
 
     @Test
     void refusesForeignHostHeader() throws IOException {
         // DNS rebinding: a page on evil.example resolves its own name to 127.0.0.1.
-        assertEquals(403, request("GET", "/status", null, auth(), "Host: evil.example:" + server().port()).status());
-        assertEquals(403, request("GET", "/status", null, auth(), "Host: 127.0.0.1:1").status());
-        assertEquals(200, request("GET", "/status", null, auth(), "Host: localhost:" + server().port()).status());
+        assertEquals(403, request("GET", "/api/status", null, auth(), "Host: evil.example:" + server().port()).status());
+        assertEquals(403, request("GET", "/api/status", null, auth(), "Host: 127.0.0.1:1").status());
+        assertEquals(200, request("GET", "/api/status", null, auth(), "Host: localhost:" + server().port()).status());
     }
 
     @Test
@@ -139,21 +139,21 @@ class ControlServerTest {
         InetAddress v6 = InetAddress.getByName("::1");
         try (Socket socket = new Socket(v6, server().port())) {
             socket.setSoTimeout(10_000);
-            socket.getOutputStream().write(("GET /status HTTP/1.1\r\nHost: [::1]:" + server().port() + "\r\n" + auth()
+            socket.getOutputStream().write(("GET /api/status HTTP/1.1\r\nHost: [::1]:" + server().port() + "\r\n" + auth()
                     + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
             String raw = new String(socket.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             assertTrue(raw.startsWith("HTTP/1.1 200"), raw);
         }
-        assertEquals(403, request("GET", "/status", null, auth(), "Host: [::2]:" + server().port()).status());
-        assertEquals(200, request("POST", "/eval", "1", auth(), "Origin: http://[::1]:" + server().port()).status());
+        assertEquals(403, request("GET", "/api/status", null, auth(), "Host: [::2]:" + server().port()).status());
+        assertEquals(200, request("POST", "/api/eval", "1", auth(), "Origin: http://[::1]:" + server().port()).status());
     }
 
     /** Every API endpoint, so a new one that skips the checks fails here. */
     private static final List<String> ENDPOINTS = List.of(
-            "GET /status", "GET /events", "GET /events/stats", "GET /events/page", "GET /events/position?id=1", "GET /frame?id=1", "POST /eval", "POST /reload", "POST /mcp",
-            "GET /scripts", "GET /scripts/source?name=x.js", "POST /scripts/save?name=x.js", "POST /scripts/check",
-            "POST /scripts/run?name=x.js", "POST /scripts/stop?name=x.js", "POST /scripts/delete?name=x.js",
-            "POST /scripts/rename?name=x.js&to=y.js", "POST /scripts/enable?name=x.js&enabled=false");
+            "GET /api/status", "GET /api/events", "GET /api/events/stats", "GET /api/events/page", "GET /api/events/position?id=1", "GET /api/frame?id=1", "POST /api/eval", "POST /api/reload", "POST /mcp",
+            "GET /api/scripts", "GET /api/scripts/source?name=x.js", "POST /api/scripts/save?name=x.js", "POST /api/scripts/check",
+            "POST /api/scripts/run?name=x.js", "POST /api/scripts/stop?name=x.js", "POST /api/scripts/delete?name=x.js",
+            "POST /api/scripts/rename?name=x.js&to=y.js", "POST /api/scripts/enable?name=x.js&enabled=false");
 
     @Test
     void everyEndpointNeedsTokenHostAndOrigin() throws IOException {
@@ -173,17 +173,17 @@ class ControlServerTest {
 
     @Test
     void refusesCrossOriginRequests() throws IOException {
-        assertEquals(403, request("POST", "/eval", "1", auth(), "Origin: http://evil.example").status());
-        assertEquals(403, request("POST", "/eval", "1", auth(), "Origin: null").status());
-        assertEquals(403, request("POST", "/eval", "1", auth(), "Origin: http://127.0.0.1:" + server().port() + ".evil.example").status());
-        assertEquals(200, request("POST", "/eval", "1", auth(), "Origin: http://" + host()).status());
+        assertEquals(403, request("POST", "/api/eval", "1", auth(), "Origin: http://evil.example").status());
+        assertEquals(403, request("POST", "/api/eval", "1", auth(), "Origin: null").status());
+        assertEquals(403, request("POST", "/api/eval", "1", auth(), "Origin: http://127.0.0.1:" + server().port() + ".evil.example").status());
+        assertEquals(200, request("POST", "/api/eval", "1", auth(), "Origin: http://" + host()).status());
     }
 
     @Test
     void stateChangesNeedPost() throws IOException {
-        assertEquals(405, get("/eval").status());
-        assertEquals(405, get("/reload").status());
-        assertEquals(405, post("/status", "").status());
+        assertEquals(405, get("/api/eval").status());
+        assertEquals(405, get("/api/reload").status());
+        assertEquals(405, post("/api/status", "").status());
         assertEquals(404, get("/nope").status());
     }
 
@@ -191,7 +191,7 @@ class ControlServerTest {
 
     @Test
     void status() throws IOException {
-        JsonObject status = get("/status").json();
+        JsonObject status = get("/api/status").json();
         assertEquals("fake 0", status.get("platform").getAsString().substring(0, 6));
         assertEquals(FakeGame.STARTUP_SCRIPT.toString(), status.getAsJsonArray("scripts").get(0).getAsString());
         assertTrue(status.get("lastEventId").getAsLong() > 0);
@@ -206,7 +206,7 @@ class ControlServerTest {
         for (int i = 0; i < 3; i++) ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|" + i)));
 
         String filter = "kind == packet && channel contains " + marker;
-        Response all = get("/events?filter=" + enc(filter));
+        Response all = get("/api/events?filter=" + enc(filter));
         assertEquals(200, all.status());
         List<JsonObject> events = lines(all.body());
         assertEquals(3, events.size(), all.body());
@@ -218,15 +218,15 @@ class ControlServerTest {
             assertEquals("server", e.getAsJsonObject("conn").get("side").getAsString());
         }
 
-        List<JsonObject> last = lines(get("/events?limit=1&filter=" + enc(filter)).body());
+        List<JsonObject> last = lines(get("/api/events?limit=1&filter=" + enc(filter)).body());
         assertEquals(List.of(events.get(2).get("id")), last.stream().map(e -> e.get("id")).toList());
 
         long first = events.get(0).get("id").getAsLong();
-        List<JsonObject> next = lines(get("/events?limit=1&after=" + first + "&filter=" + enc(filter)).body());
+        List<JsonObject> next = lines(get("/api/events?limit=1&after=" + first + "&filter=" + enc(filter)).body());
         assertEquals(events.get(1).get("id"), next.get(0).get("id"));
 
-        assertEquals(400, get("/events?filter=" + enc("kind ==")).status());
-        assertEquals(400, get("/events?limit=many").status());
+        assertEquals(400, get("/api/events?filter=" + enc("kind ==")).status());
+        assertEquals(400, get("/api/events?limit=many").status());
     }
 
     @Test
@@ -234,7 +234,7 @@ class ControlServerTest {
         String marker = "ctl-ids-" + System.nanoTime();
         EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|x")));
-        JsonObject served = lines(get("/events?filter=" + enc("channel contains " + marker)).body()).get(0);
+        JsonObject served = lines(get("/api/events?filter=" + enc("channel contains " + marker)).body()).get(0);
         String expected = "{\"id\":" + served.get("id").getAsLong() + ",\"kind\":\"packet\"";
         long deadline = System.currentTimeMillis() + 5000;
         String log = "";
@@ -251,92 +251,92 @@ class ControlServerTest {
         String body = "x".repeat(10_000);
         EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|" + body)));
-        JsonObject event = lines(get("/events?filter=" + enc("channel contains " + marker)).body()).get(0);
+        JsonObject event = lines(get("/api/events?filter=" + enc("channel contains " + marker)).body()).get(0);
         assertTrue(event.getAsJsonObject("frame").get("hex").getAsString().length() < 2 * 10_000, "the log entry's hex is cut short");
 
-        JsonObject frame = get("/frame?id=" + event.get("id").getAsLong()).json();
+        JsonObject frame = get("/api/frame?id=" + event.get("id").getAsLong()).json();
         byte[] expected = FakeGame.frame(1, "othermod:" + marker + "|" + body);
         assertEquals(expected.length, frame.get("len").getAsInt());
         assertEquals(Bytes.hex(expected), frame.get("hex").getAsString());
 
-        long start = lines(get("/events?filter=kind==start").body()).get(0).get("id").getAsLong();
-        assertEquals(404, get("/frame?id=" + start).status());
-        assertEquals(404, get("/frame?id=999999999").status());
-        assertEquals(400, get("/frame").status());
+        long start = lines(get("/api/events?filter=kind==start").body()).get(0).get("id").getAsLong();
+        assertEquals(404, get("/api/frame?id=" + start).status());
+        assertEquals(404, get("/api/frame?id=999999999").status());
+        assertEquals(400, get("/api/frame").status());
     }
 
     @Test
     void evalRunsInTheLiveScope() throws IOException {
-        JsonObject r = post("/eval", "var replValue = 20; replValue + 22").json();
+        JsonObject r = post("/api/eval", "var replValue = 20; replValue + 22").json();
         assertTrue(r.get("ok").getAsBoolean(), r.toString());
         assertEquals(42, r.get("result").getAsInt());
 
-        r = post("/eval", "replValue * 2").json();
+        r = post("/api/eval", "replValue * 2").json();
         assertEquals(40, r.get("result").getAsInt());
 
-        r = post("/eval", "({a: [1, 'two', null], b: {c: true}})").json();
+        r = post("/api/eval", "({a: [1, 'two', null], b: {c: true}})").json();
         assertEquals("{\"a\":[1,\"two\",null],\"b\":{\"c\":true}}", r.get("result").toString());
 
-        r = post("/eval", "sculk.connections()").json();
+        r = post("/api/eval", "sculk.connections()").json();
         assertTrue(r.get("ok").getAsBoolean(), r.toString());
         assertTrue(r.get("result").isJsonArray());
 
-        r = post("/eval", "(function f() {})").json();
+        r = post("/api/eval", "(function f() {})").json();
         assertEquals("[function]", r.get("result").getAsString());
 
-        r = post("/eval", "undefined").json();
+        r = post("/api/eval", "undefined").json();
         assertTrue(r.get("ok").getAsBoolean());
         assertTrue(r.get("result").isJsonNull());
 
-        r = post("/eval", "0/0").json();
+        r = post("/api/eval", "0/0").json();
         assertEquals("NaN", r.get("result").getAsString());
     }
 
     @Test
     void evalReportsErrors() throws IOException {
-        JsonObject r = post("/eval", "(").json();
+        JsonObject r = post("/api/eval", "(").json();
         assertFalse(r.get("ok").getAsBoolean());
         assertTrue(r.get("error").getAsString().contains("console"), r.toString());
 
-        r = post("/eval", "throw new Error('kaput')").json();
+        r = post("/api/eval", "throw new Error('kaput')").json();
         assertFalse(r.get("ok").getAsBoolean());
         assertTrue(r.get("error").getAsString().contains("kaput"), r.toString());
 
-        r = post("/eval", "java.lang.Integer.parseInt('x')").json();
+        r = post("/api/eval", "java.lang.Integer.parseInt('x')").json();
         assertFalse(r.get("ok").getAsBoolean());
     }
 
     @Test
     void evalIsLogged() throws IOException {
         String marker = "ctl-eval-" + System.nanoTime();
-        post("/eval", "'" + marker + "'");
-        assertEquals(1, lines(get("/events?filter=" + enc("kind == eval && source contains " + marker)).body()).size());
+        post("/api/eval", "'" + marker + "'");
+        assertEquals(1, lines(get("/api/events?filter=" + enc("kind == eval && source contains " + marker)).body()).size());
     }
 
     @Test
     void reloadDropsScriptStateAndListeners() throws Exception {
         String marker = "ctl-reload-" + System.nanoTime();
-        post("/eval", """
+        post("/api/eval", """
                 var leftover = 1;
                 sculk.on('packet', e => { if (e.channel && e.channel.indexOf('%s') >= 0) sculk.emit({ heard: '%s' }); });
                 """.formatted(marker, marker));
         EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|a")));
         String heard = "kind == script && data.heard == " + marker;
-        assertEquals(1, lines(get("/events?filter=" + enc(heard)).body()).size());
+        assertEquals(1, lines(get("/api/events?filter=" + enc(heard)).body()).size());
         String runs = "sculk.scope('" + FakeGame.STARTUP_SCRIPT.toString().replace("\\", "\\\\") + "').startupRuns";
-        long runsBefore = post("/eval", runs).json().get("result").getAsLong();
+        long runsBefore = post("/api/eval", runs).json().get("result").getAsLong();
         assertTrue(runsBefore >= 1);
 
-        JsonObject r = post("/reload", "").json();
+        JsonObject r = post("/api/reload", "").json();
         assertTrue(r.get("ok").getAsBoolean(), r.toString());
         assertEquals(FakeGame.STARTUP_SCRIPT.toString(), r.getAsJsonArray("loaded").get(0).getAsString());
 
-        assertEquals("undefined", post("/eval", "typeof leftover").json().get("result").getAsString());
-        assertEquals(1, post("/eval", runs).json().get("result").getAsLong(), "startup scripts ran in a fresh scope");
+        assertEquals("undefined", post("/api/eval", "typeof leftover").json().get("result").getAsString());
+        assertEquals(1, post("/api/eval", runs).json().get("result").getAsLong(), "startup scripts ran in a fresh scope");
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|b")));
-        assertEquals(1, lines(get("/events?filter=" + enc(heard)).body()).size(), "the old listener is gone");
-        assertEquals(1, lines(get("/events?filter=kind==script_reload&limit=1").body()).size());
+        assertEquals(1, lines(get("/api/events?filter=" + enc(heard)).body()).size(), "the old listener is gone");
+        assertEquals(1, lines(get("/api/events?filter=kind==script_reload&limit=1").body()).size());
     }
 
     @Test
@@ -347,7 +347,7 @@ class ControlServerTest {
         String filter = enc("channel contains " + marker);
         try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), server().port())) {
             socket.setSoTimeout(10_000);
-            socket.getOutputStream().write(("GET /events/stream?after=0&filter=" + filter + " HTTP/1.1\r\nHost: " + host()
+            socket.getOutputStream().write(("GET /api/events/stream?after=0&filter=" + filter + " HTTP/1.1\r\nHost: " + host()
                     + "\r\n" + auth() + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
             InputStream in = socket.getInputStream();
             String text = readUntil(in, "\"data\":\"old\"");
@@ -365,38 +365,54 @@ class ControlServerTest {
 
     @Test
     void webUiNeedsNoTokenButKeepsTheHostCheck() throws IOException {
-        Response root = request("GET", "/", null);
-        assertEquals(302, root.status());
-
-        Response index = request("GET", "/ui/", null);
+        Response index = request("GET", "/", null);
         assertEquals(200, index.status());
         assertTrue(index.body().contains("sculk test ui"), index.body());
-        assertEquals(200, request("GET", "/ui/app.js", null).status());
-        for (String page : List.of("/ui/events", "/ui/scripts", "/ui/scripts/my%20script.js", "/ui/scripts/a%2Fb.js")) {
+        assertEquals(200, request("GET", "/app.js", null).status());
+        for (String page : List.of("/events", "/scripts", "/scripts/my%20script.js", "/scripts/a%2Fb.js")) {
             Response r = request("GET", page, null);
             assertEquals(200, r.status(), page);
             assertTrue(r.body().contains("sculk test ui"), page + ": " + r.body());
         }
 
-        assertEquals(403, request("GET", "/ui/", null, "Host: evil.example:" + server().port()).status());
-        assertEquals(403, request("GET", "/ui/", null, "Origin: http://evil.example").status());
-        assertEquals(401, request("GET", "/status", null, "Origin: http://" + host()).status(), "the API still needs the token");
+        assertEquals(403, request("GET", "/", null, "Host: evil.example:" + server().port()).status());
+        assertEquals(403, request("GET", "/", null, "Origin: http://evil.example").status());
+        assertEquals(401, request("GET", "/api/status", null, "Origin: http://" + host()).status(), "the API still needs the token");
+    }
+
+    @Test
+    void oldUiPathsRedirectToTheRoot() throws IOException {
+        Response ui = request("GET", "/ui/", null);
+        assertEquals(302, ui.status());
+        assertEquals("/", ui.header("Location"));
+        assertEquals("/", request("GET", "/ui", null).header("Location"));
+        assertEquals("/scripts/a%20b.js", request("GET", "/ui/scripts/a%20b.js", null).header("Location"));
     }
 
     @Test
     void webUiServesOnlyItsOwnFiles() throws IOException {
-        assertEquals(404, request("GET", "/ui/nope.js", null).status());
-        assertEquals(404, request("GET", "/ui/../web/index.html", null).status());
-        assertEquals(404, request("GET", "/ui/%2e%2e%2fControlServer.class", null).status());
-        assertEquals(404, request("GET", "/ui/.hidden", null).status());
-        assertEquals(404, request("GET", "/ui/sub/index.html", null).status());
-        assertEquals(401, request("POST", "/ui/index.html", "", "Origin: http://" + host()).status());
+        assertEquals(404, request("GET", "/nope.js", null).status());
+        assertEquals(404, request("GET", "/../web/index.html", null).status());
+        assertEquals(404, request("GET", "/%2e%2e%2fControlServer.class", null).status());
+        assertEquals(404, request("GET", "/.hidden", null).status());
+        assertEquals(404, request("GET", "/sub/index.html", null).status());
+        assertEquals(401, request("POST", "/index.html", "", "Origin: http://" + host()).status());
+    }
+
+    @Test
+    void apiPathsAreNotTheUi() throws IOException {
+        // Without /api, an endpoint's old path is the UI's (or nothing), never the endpoint.
+        assertEquals(404, request("POST", "/eval", "1", auth()).status());
+        assertEquals(404, request("GET", "/status", null, auth()).status());
+        assertEquals(404, request("GET", "/api/nope", null, auth()).status());
+        assertEquals(404, request("POST", "/api/mcp", "{}", auth()).status());
+        assertEquals(401, request("GET", "/api/nope", null).status(), "unknown API paths still need the token");
     }
 
     @Test
     void webUiHeaders() throws IOException {
         try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), server().port())) {
-            socket.getOutputStream().write(("GET /ui/ HTTP/1.1\r\nHost: " + host() + "\r\nConnection: close\r\n\r\n")
+            socket.getOutputStream().write(("GET / HTTP/1.1\r\nHost: " + host() + "\r\nConnection: close\r\n\r\n")
                     .getBytes(StandardCharsets.UTF_8));
             String raw = new String(socket.getInputStream().readAllBytes(), StandardCharsets.UTF_8).toLowerCase();
             assertTrue(raw.contains("content-type: text/html"), raw);
@@ -719,7 +735,7 @@ class ControlServerTest {
 
         assertTrue(server().mcpClients().stream().anyMatch(c -> c.get("number").equals(number)
                 && "pair-test 9".equals(c.get("client")) && Boolean.FALSE.equals(c.get("approved"))));
-        assertEquals(1, lines(get("/events?filter=" + enc("kind == mcp_client && action == requested && client.number == " + number)).body()).size());
+        assertEquals(1, lines(get("/api/events?filter=" + enc("kind == mcp_client && action == requested && client.number == " + number)).body()).size());
 
         server().mcpAccept(number);
         JsonObject approved = inSession(session, TOOL_CALL).json().getAsJsonObject("result");
@@ -840,7 +856,7 @@ class ControlServerTest {
     // ---- installed scripts ----
 
     private static JsonObject scriptInfo(String name) throws IOException {
-        for (var e : get("/scripts").json().getAsJsonArray("scripts")) {
+        for (var e : get("/api/scripts").json().getAsJsonArray("scripts")) {
             if (e.getAsJsonObject().get("name").getAsString().equals(name)) return e.getAsJsonObject();
         }
         return null;
@@ -851,7 +867,7 @@ class ControlServerTest {
     }
 
     private static int heard(String marker) throws IOException {
-        return lines(get("/events?filter=" + enc("kind == script && data.heard == " + marker)).body()).size();
+        return lines(get("/api/events?filter=" + enc("kind == script && data.heard == " + marker)).body()).size();
     }
 
     @Test
@@ -869,25 +885,25 @@ class ControlServerTest {
                 mine + 1
                 """.formatted(marker, marker, marker);
 
-        JsonObject saved = post("/scripts/save?name=" + enc(name) + "&base=", source).json();
+        JsonObject saved = post("/api/scripts/save?name=" + enc(name) + "&base=", source).json();
         assertTrue(saved.get("created").getAsBoolean(), saved.toString());
         assertEquals("Listener", saved.get("title").getAsString());
         assertEquals("startup", saved.get("run").getAsString());
         assertEquals("running", status(saved).get("state").getAsString(), "a new startup script starts");
         assertTrue(saved.getAsJsonObject("restart").get("ok").getAsBoolean(), saved.toString());
         assertTrue(Files.isRegularFile(FakeGame.SCRIPT_DIR.resolve(name)));
-        assertEquals(409, post("/scripts/save?name=" + enc(name) + "&base=", source).status(), "base '' means new");
+        assertEquals(409, post("/api/scripts/save?name=" + enc(name) + "&base=", source).status(), "base '' means new");
 
-        JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
+        JsonObject run = post("/api/scripts/run?name=" + enc(name), "").json();
         assertTrue(run.get("ok").getAsBoolean(), run.toString());
         assertEquals(42, run.get("result").getAsInt());
         assertEquals("running", status(run).get("state").getAsString());
         assertEquals(1, status(run).get("listeners").getAsInt());
-        assertEquals(2, lines(get("/events?filter=" + enc("kind == script_log && script == " + name)).body()).size(), "created, then run");
+        assertEquals(2, lines(get("/api/events?filter=" + enc("kind == script_log && script == " + name)).body()).size(), "created, then run");
 
         // Its globals are its own; the console reaches them only through sculk.scope.
-        assertEquals("undefined", post("/eval", "typeof mine").json().get("result").getAsString());
-        assertEquals(41, post("/eval", "sculk.scope('" + name + "').mine").json().get("result").getAsInt());
+        assertEquals("undefined", post("/api/eval", "typeof mine").json().get("result").getAsString());
+        assertEquals(41, post("/api/eval", "sculk.scope('" + name + "').mine").json().get("result").getAsInt());
 
         EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|a")));
@@ -895,40 +911,40 @@ class ControlServerTest {
 
         // Saving a running script restarts it, from the hash it was edited from.
         String hash = saved.get("hash").getAsString();
-        assertEquals(409, post("/scripts/save?name=" + enc(name) + "&base=nothash", source).status());
-        JsonObject resaved = post("/scripts/save?name=" + enc(name) + "&base=" + hash, source + "\n").json();
+        assertEquals(409, post("/api/scripts/save?name=" + enc(name) + "&base=nothash", source).status());
+        JsonObject resaved = post("/api/scripts/save?name=" + enc(name) + "&base=" + hash, source + "\n").json();
         assertTrue(resaved.getAsJsonObject("restart").get("ok").getAsBoolean(), resaved.toString());
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|b")));
         assertEquals(2, heard(marker), "one listener after the restart, not two");
 
         // Disabling stops it and renames the file.
-        JsonObject off = post("/scripts/enable?name=" + enc(name) + "&enabled=false", "").json();
+        JsonObject off = post("/api/scripts/enable?name=" + enc(name) + "&enabled=false", "").json();
         assertFalse(off.get("enabled").getAsBoolean());
         assertEquals("disabled", status(off).get("why").getAsString());
         assertTrue(Files.isRegularFile(FakeGame.SCRIPT_DIR.resolve(name + ".disabled")));
         ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|c")));
         assertEquals(2, heard(marker));
-        assertFalse(post("/reload", "").json().getAsJsonArray("loaded").toString().contains(name), "reload skips it");
+        assertFalse(post("/api/reload", "").json().getAsJsonArray("loaded").toString().contains(name), "reload skips it");
 
         // Enabling a startup script starts it.
-        JsonObject on = post("/scripts/enable?name=" + enc(name) + "&enabled=true", "").json();
+        JsonObject on = post("/api/scripts/enable?name=" + enc(name) + "&enabled=true", "").json();
         assertTrue(on.get("enabled").getAsBoolean());
         assertEquals("running", status(on).get("state").getAsString());
 
         // Renaming keeps it running under the new name.
         String renamed = marker + "-b.js";
-        JsonObject moved = post("/scripts/rename?name=" + enc(name) + "&to=" + enc(renamed), "").json();
+        JsonObject moved = post("/api/scripts/rename?name=" + enc(name) + "&to=" + enc(renamed), "").json();
         assertEquals(renamed, moved.get("name").getAsString());
         assertEquals("running", status(moved).get("state").getAsString());
-        assertEquals(404, get("/scripts/source?name=" + enc(name)).status());
-        assertEquals(source + "\n", get("/scripts/source?name=" + enc(renamed)).json().get("source").getAsString());
+        assertEquals(404, get("/api/scripts/source?name=" + enc(name)).status());
+        assertEquals(source + "\n", get("/api/scripts/source?name=" + enc(renamed)).json().get("source").getAsString());
 
-        assertTrue(post("/scripts/stop?name=" + enc(renamed), "").json().get("ok").getAsBoolean());
-        assertEquals(409, post("/scripts/stop?name=" + enc(renamed), "").status());
-        assertTrue(post("/scripts/delete?name=" + enc(renamed), "").json().get("ok").getAsBoolean());
+        assertTrue(post("/api/scripts/stop?name=" + enc(renamed), "").json().get("ok").getAsBoolean());
+        assertEquals(409, post("/api/scripts/stop?name=" + enc(renamed), "").status());
+        assertTrue(post("/api/scripts/delete?name=" + enc(renamed), "").json().get("ok").getAsBoolean());
         assertEquals(null, scriptInfo(renamed));
         assertFalse(Files.exists(FakeGame.SCRIPT_DIR.resolve(renamed)));
-        assertEquals(6, lines(get("/events?filter=" + enc("kind == script_file && script matches \"^" + marker + "\"")).body()).size(),
+        assertEquals(6, lines(get("/api/events?filter=" + enc("kind == script_file && script matches \"^" + marker + "\"")).body()).size(),
                 "create, save, disable, enable, rename, delete");
     }
 
@@ -936,73 +952,73 @@ class ControlServerTest {
     void manualScriptsRunOnlyWhenAsked() throws Exception {
         String name = "ctl-manual-" + System.nanoTime() + ".js";
         String source = "// ==Sculk==\n// @run manual\n// ==/Sculk==\nsculk.connections().length + 100\n";
-        assertEquals(200, post("/scripts/save?name=" + enc(name), source).status());
-        JsonObject reload = post("/reload", "").json();
+        assertEquals(200, post("/api/scripts/save?name=" + enc(name), source).status());
+        JsonObject reload = post("/api/reload", "").json();
         assertFalse(reload.getAsJsonArray("loaded").toString().contains(name));
         assertEquals("not-started", status(scriptInfo(name)).get("why").getAsString(), "a new manual script waits");
-        JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
+        JsonObject run = post("/api/scripts/run?name=" + enc(name), "").json();
         assertTrue(run.get("ok").getAsBoolean());
         assertTrue(run.get("result").getAsInt() >= 100);
         assertEquals(0, status(run).get("listeners").getAsInt(), "a one-shot leaves nothing registered");
-        post("/scripts/delete?name=" + enc(name), "");
+        post("/api/scripts/delete?name=" + enc(name), "");
     }
 
     @Test
     void scriptsForTheOtherDistAreSkipped() throws Exception {
         String name = "ctl-dist-" + System.nanoTime() + ".js";
-        assertEquals(200, post("/scripts/save?name=" + enc(name), "// ==Sculk==\n// @dist server\n// ==/Sculk==\n1\n").status());
+        assertEquals(200, post("/api/scripts/save?name=" + enc(name), "// ==Sculk==\n// @dist server\n// ==/Sculk==\n1\n").status());
         assertEquals("only for a dedicated server", scriptInfo(name).get("skip").getAsString());
-        JsonObject reload = post("/reload", "").json();
+        JsonObject reload = post("/api/reload", "").json();
         assertTrue(reload.getAsJsonArray("skipped").toString().contains(name), reload.toString());
-        post("/scripts/delete?name=" + enc(name), "");
+        post("/api/scripts/delete?name=" + enc(name), "");
     }
 
     @Test
     void failingScriptsAreStoppedAndReported() throws Exception {
         String name = "ctl-fail-" + System.nanoTime() + ".js";
-        JsonObject saved = post("/scripts/save?name=" + enc(name), "sculk.on('packet', e => {});\nthrow new Error('nope');\n").json();
+        JsonObject saved = post("/api/scripts/save?name=" + enc(name), "sculk.on('packet', e => {});\nthrow new Error('nope');\n").json();
         assertFalse(saved.getAsJsonObject("restart").get("ok").getAsBoolean(), "a new startup script starts, and fails");
-        JsonObject run = post("/scripts/run?name=" + enc(name), "").json();
+        JsonObject run = post("/api/scripts/run?name=" + enc(name), "").json();
         assertFalse(run.get("ok").getAsBoolean());
         assertTrue(run.get("error").getAsString().contains("nope"), run.toString());
         assertTrue(run.get("error").getAsString().contains(name + ":2"), run.toString());
         assertEquals("failed", status(run).get("state").getAsString());
         assertTrue(status(run).get("error").getAsString().contains("nope"));
         assertEquals(0, FakeGame.sculk().scripts().runningNames().stream().filter(name::equals).count(), "no half-started listeners");
-        assertEquals(2, lines(get("/events?filter=" + enc("kind == script_error && script == " + name)).body()).size());
-        post("/scripts/delete?name=" + enc(name), "");
+        assertEquals(2, lines(get("/api/events?filter=" + enc("kind == script_error && script == " + name)).body()).size());
+        post("/api/scripts/delete?name=" + enc(name), "");
     }
 
     @Test
     void scriptNamesAndMissingScripts() throws IOException {
-        assertEquals(400, post("/scripts/save?name=" + enc("../evil.js"), "1").status());
-        assertEquals(400, post("/scripts/save?name=" + enc("no-extension"), "1").status());
-        assertEquals(400, post("/scripts/save?name=" + enc(".hidden.js"), "1").status());
-        assertEquals(400, post("/scripts/save", "1").status());
+        assertEquals(400, post("/api/scripts/save?name=" + enc("../evil.js"), "1").status());
+        assertEquals(400, post("/api/scripts/save?name=" + enc("no-extension"), "1").status());
+        assertEquals(400, post("/api/scripts/save?name=" + enc(".hidden.js"), "1").status());
+        assertEquals(400, post("/api/scripts/save", "1").status());
         for (String bad : List.of("../x.js", "..\\x.js", "a/b.js", "/tmp/x.js", "C:x.js", "x.js:stream", "x.js\0.js",
                 "x\n.js", "CON.js", "nul.js", "..js", "x..js", "", " x.js")) {
-            assertEquals(400, post("/scripts/save?name=" + enc(bad), "1").status(), bad);
+            assertEquals(400, post("/api/scripts/save?name=" + enc(bad), "1").status(), bad);
         }
         // Encoded traversal is decoded first, then refused.
-        assertEquals(400, post("/scripts/save?name=%2e%2e%2fx.js", "1").status());
+        assertEquals(400, post("/api/scripts/save?name=%2e%2e%2fx.js", "1").status());
         assertFalse(Files.exists(FakeGame.SCRIPT_DIR.getParent().resolve("x.js")));
-        assertEquals(404, get("/scripts/source?name=nope.js").status());
-        assertEquals(404, post("/scripts/run?name=nope.js", "").status());
+        assertEquals(404, get("/api/scripts/source?name=nope.js").status());
+        assertEquals(404, post("/api/scripts/run?name=nope.js", "").status());
         // sculk.scripts files are listed but managed elsewhere.
         String startup = FakeGame.STARTUP_SCRIPT.toString();
         assertEquals("property", scriptInfo(startup).get("origin").getAsString());
-        assertEquals(400, post("/scripts/delete?name=" + enc(startup), "").status());
+        assertEquals(400, post("/api/scripts/delete?name=" + enc(startup), "").status());
     }
 
     @Test
     void renameRefusesTraversalAndSymlinksAreWrittenThrough() throws Exception {
         String name = "ctl-paths-" + System.nanoTime() + ".js";
-        assertEquals(200, post("/scripts/save?name=" + enc(name), "1").status());
+        assertEquals(200, post("/api/scripts/save?name=" + enc(name), "1").status());
         for (String bad : List.of("../x.js", "a/b.js", "/tmp/x.js", "C:x.js", "CON.js")) {
-            assertEquals(400, post("/scripts/rename?name=" + enc(name) + "&to=" + enc(bad), "").status(), bad);
+            assertEquals(400, post("/api/scripts/rename?name=" + enc(name) + "&to=" + enc(bad), "").status(), bad);
         }
         assertTrue(Files.exists(FakeGame.SCRIPT_DIR.resolve(name)));
-        post("/scripts/delete?name=" + enc(name), "");
+        post("/api/scripts/delete?name=" + enc(name), "");
 
         // A script symlinked to a file elsewhere: saving updates that file and keeps the link.
         java.nio.file.Path outside = Files.createTempFile("sculk-linked", ".js");
@@ -1013,27 +1029,27 @@ class ControlServerTest {
         } catch (UnsupportedOperationException | IOException e) {
             return; // No symlinks here (Windows without the privilege).
         }
-        assertEquals(200, post("/scripts/save?name=" + enc(linked), "2").status());
+        assertEquals(200, post("/api/scripts/save?name=" + enc(linked), "2").status());
         assertTrue(Files.isSymbolicLink(link));
         assertEquals("2", Files.readString(outside));
-        post("/scripts/delete?name=" + enc(linked), "");
+        post("/api/scripts/delete?name=" + enc(linked), "");
         assertTrue(Files.exists(outside), "deleting removes the link, not its target");
         Files.delete(outside);
     }
 
     @Test
     void checkFindsSyntaxErrors() throws IOException {
-        JsonObject bad = post("/scripts/check", "let a = 1;\nlet b = ;\n").json();
+        JsonObject bad = post("/api/scripts/check", "let a = 1;\nlet b = ;\n").json();
         assertFalse(bad.get("ok").getAsBoolean());
         assertEquals(2, bad.getAsJsonArray("problems").get(0).getAsJsonObject().get("line").getAsInt());
-        assertTrue(post("/scripts/check", "sculk.on('packet', e => e.drop());").json().get("ok").getAsBoolean());
+        assertTrue(post("/api/scripts/check", "sculk.on('packet', e => e.drop());").json().get("ok").getAsBoolean());
     }
 
     @Test
     void pagesStreamTheirResultWhenAskedTo() throws IOException {
-        Response plain = request("GET", "/events/page?filter=" + enc("kind == packet") + "&from=0&count=3", null, auth());
+        Response plain = request("GET", "/api/events/page?filter=" + enc("kind == packet") + "&from=0&count=3", null, auth());
         JsonObject want = plain.json();
-        Response streamed = request("GET", "/events/page?filter=" + enc("kind == packet") + "&from=0&count=3", null, auth(),
+        Response streamed = request("GET", "/api/events/page?filter=" + enc("kind == packet") + "&from=0&count=3", null, auth(),
                 "Accept: text/event-stream");
         assertTrue(streamed.header("Content-Type").startsWith("text/event-stream"), streamed.head());
         String result = null;
@@ -1045,9 +1061,9 @@ class ControlServerTest {
         assertEquals(want.get("start"), GSON.fromJson(result, JsonObject.class).get("start"));
         assertEquals(want.getAsJsonArray("events").get(0), GSON.fromJson(result, JsonObject.class).getAsJsonArray("events").get(0));
         // A bad filter is still a plain 400.
-        assertEquals(400, request("GET", "/events/page?filter=" + enc("kind =="), null, auth(), "Accept: text/event-stream").status());
-        assertEquals(400, request("GET", "/events/position?id=1&filter=" + enc("(("), null, auth(), "Accept: text/event-stream").status());
-        Response pos = request("GET", "/events/position?id=1&filter=", null, auth(), "Accept: text/event-stream");
+        assertEquals(400, request("GET", "/api/events/page?filter=" + enc("kind =="), null, auth(), "Accept: text/event-stream").status());
+        assertEquals(400, request("GET", "/api/events/position?id=1&filter=" + enc("(("), null, auth(), "Accept: text/event-stream").status());
+        Response pos = request("GET", "/api/events/position?id=1&filter=", null, auth(), "Accept: text/event-stream");
         assertTrue(pos.body().contains("event: result"), pos.body());
     }
 
@@ -1064,7 +1080,7 @@ class ControlServerTest {
 
         JsonObject edit = callTool("sculk_script_edit", GSON.toJson(java.util.Map.of("name", name, "old", "n = 1", "new", "n = 2")));
         assertFalse(edit.get("isError").getAsBoolean(), toolText(edit));
-        assertEquals(2, post("/eval", "sculk.scope('" + name + "').n").json().get("result").getAsInt(), "restarted with the edit");
+        assertEquals(2, post("/api/eval", "sculk.scope('" + name + "').n").json().get("result").getAsInt(), "restarted with the edit");
         assertTrue(callTool("sculk_script_edit", GSON.toJson(java.util.Map.of("name", name, "old", "absent", "new", "x")))
                 .get("isError").getAsBoolean());
         assertTrue(callTool("sculk_script_edit", GSON.toJson(java.util.Map.of("name", name, "old", "n", "new", "m")))
@@ -1074,7 +1090,7 @@ class ControlServerTest {
         assertTrue(broken.get("isError").getAsBoolean(), "syntax errors are errors");
         assertTrue(toolText(broken).contains("problems"), toolText(broken));
         assertTrue(toolText(broken).contains("kept"), toolText(broken));
-        assertEquals(2, post("/eval", "sculk.scope('" + name + "').n").json().get("result").getAsInt(), "the old version keeps running");
+        assertEquals(2, post("/api/eval", "sculk.scope('" + name + "').n").json().get("result").getAsInt(), "the old version keeps running");
 
         assertTrue(toolText(callTool("sculk_scripts", "{}")).contains(name));
         JsonObject off = callTool("sculk_script_control", "{\"name\":\"" + name + "\",\"action\":\"disable\"}");

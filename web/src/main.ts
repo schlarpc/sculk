@@ -249,7 +249,7 @@ class App {
 
   // ---- pages ----
 
-  /** /ui/scripts or /ui/scripts/<name> shows the script editor; anything else the events. */
+  /** /scripts or /scripts/<name> shows the script editor; anything else the events. */
   private route(): void {
     const route = parseRoute(location.pathname);
     const scripts = route.page === "scripts";

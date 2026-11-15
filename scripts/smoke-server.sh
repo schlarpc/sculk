@@ -49,9 +49,9 @@ grep -q 'scripting: rhino' "$log" || { echo "FAIL: Rhino did not load"; ok=0; }
 grep -q '\[SERVER\] connection' "$log" || { echo "FAIL: channel hook did not fire"; ok=0; }
 ctl() { python3 "$root/scripts/sculkctl.py" --file "$control" "$@"; }
 if [ -f "$control" ]; then
-    ctl status > /dev/null || { echo "FAIL: control server /status"; ok=0; }
+    ctl status > /dev/null || { echo "FAIL: control server /api/status"; ok=0; }
     [ -n "$(ctl events 'kind == connection && side == server')" ] || { echo "FAIL: control server has no connection event"; ok=0; }
-    [ "$(ctl eval '20 + 22')" = 42 ] || { echo "FAIL: control server /eval"; ok=0; }
+    [ "$(ctl eval '20 + 22')" = 42 ] || { echo "FAIL: control server /api/eval"; ok=0; }
     # Installed scripts: in the server's config dir, started and stopped one at a time.
     printf '// ==Sculk==\n// @run manual\n// ==/Sculk==\nsculk.log("smoke " + sculk.dist); 6 * 7\n' \
         | ctl script push - --name smoke.js > /dev/null || { echo "FAIL: script push"; ok=0; }
@@ -119,7 +119,7 @@ r = rpc("tools/call", {"name": "sculk_stats", "arguments": {"filter": "kind == p
 stats = json.loads(r["content"][0]["text"])
 assert not r["isError"] and stats["matched"] > 0 and stats["groups"], r
 # The capture: events by position, and their frames read back whole.
-req = lambda path: urllib.request.urlopen(urllib.request.Request(info["url"] + path,
+req = lambda path: urllib.request.urlopen(urllib.request.Request(info["url"] + "/api" + path,
     headers={"Authorization": "Bearer " + info["token"]}), timeout=10)
 page = json.load(req("/events/page?filter=kind%20%3D%3D%20packet&from=0&count=5"))
 assert page["total"] > 0 and page["events"] and page["events"][0]["kind"] == "packet", page
@@ -130,10 +130,10 @@ PY
 import json, sys, urllib.request
 url = json.load(open(sys.argv[1]))["url"]
 for name, needle in [("", b"<title>sculk</title>"), ("app.js", b"sculk"), ("monocraft.woff2", b"wOF2")]:
-    body = urllib.request.urlopen(f"{url}/ui/{name}", timeout=10).read()
-    assert needle in body[:65536], f"/ui/{name} does not contain {needle}"
+    body = urllib.request.urlopen(f"{url}/{name}", timeout=10).read()
+    assert needle in body[:65536], f"/{name} does not contain {needle}"
 # The editor's style elements need the page's CSP nonce.
-r = urllib.request.urlopen(f"{url}/ui/", timeout=10)
+r = urllib.request.urlopen(f"{url}/", timeout=10)
 page, csp = r.read().decode(), r.headers["Content-Security-Policy"]
 nonce = page.split('name="csp-nonce" content="')[1].split('"')[0]
 assert nonce and "{{" not in nonce and f"'nonce-{nonce}'" in csp, (nonce, csp)
@@ -142,7 +142,7 @@ PY
         python3 - "$control" <<'PY' || { echo "FAIL: control server on ::1"; ok=0; }
 import json, sys, urllib.request
 info = json.load(open(sys.argv[1]))
-req = urllib.request.Request(f"http://[::1]:{info['port']}/status", headers={"Authorization": "Bearer " + info["token"]})
+req = urllib.request.Request(f"http://[::1]:{info['port']}/api/status", headers={"Authorization": "Bearer " + info["token"]})
 assert json.load(urllib.request.urlopen(req, timeout=10))["platform"]
 PY
     fi

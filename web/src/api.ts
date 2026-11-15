@@ -144,7 +144,7 @@ export class Api {
     const init: RequestInit = { method, headers: { Authorization: `Bearer ${this.token}`, ...headers }, cache: "no-store" };
     if (body !== undefined) init.body = body;
     if (signal) init.signal = signal;
-    const r = await fetch(path, init);
+    const r = await fetch(`/api${path}`, init);
     if (r.status === 401) throw new AuthError();
     if (!r.ok) {
       let message = `${r.status} ${r.statusText}`;

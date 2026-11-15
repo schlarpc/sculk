@@ -275,7 +275,7 @@ A script may start with a metadata block, like a userscript's:
 Every running script has its own top-level scope (on a shared scope of
 built-ins, Rhino's sharing-scopes pattern) and owns the listeners and timers
 it registers, so one script starts, stops or restarts without touching the
-others (`ScriptManager`). The console (`/eval`, the REPL, `sculk_eval`)
+others (`ScriptManager`). The console (`/api/eval`, the REPL, `sculk_eval`)
 has a scope of its own; `sculk.scope('x.js')` reaches a running script's
 globals from anywhere.
 
@@ -406,25 +406,25 @@ being written (`EventStore`):
   for live tails, and for anything the writer has not reached.
 
 ```
-GET  /status                            platform, connections, running scripts, last event id, capture use
-GET  /events?filter=&after=&before=&limit=   JSON Lines; the last `limit` matches (before `before`), or the first after `after`
-GET  /events/stats?filter=&by=&after=&before=&limit=   count, frame bytes, first and last match, grouped by a field
-GET  /events/page?filter=&from=&count=  matches by position: {"start", "total", "from", "events"}; positions stay put while held
-GET  /events/position?filter=&id=       the position of the first match at or after an id
-GET  /events/stream?filter=&after=      server-sent events, live (backlog first with `after`)
-GET  /frame?id=                         a packet event's whole frame, as hex
-POST /eval      body: JavaScript        runs in the console's scope: {"ok":true,"result":...}
-POST /reload                            stops every script, drops all script state; starts the startup scripts again
-GET  /scripts                           installed scripts: metadata, enabled, source hash, status (stopped/running/failed)
-GET  /scripts/source?name=              one script with its source
-POST /scripts/save?name=&base=          body: source; create or replace (base: the hash it was edited from, "" = new; 409 if stale)
-POST /scripts/check     body: source    syntax errors and warnings from Rhino's parser, without running
-POST /scripts/run|stop|delete?name=     run: (re)start from the file, any run mode; returns its result or error
-POST /scripts/rename?name=&to=
-POST /scripts/enable?name=&enabled=     disabling renames to .disabled and stops it
+GET  /api/status                        platform, connections, running scripts, last event id, capture use
+GET  /api/events?filter=&after=&before=&limit=   JSON Lines; the last `limit` matches (before `before`), or the first after `after`
+GET  /api/events/stats?filter=&by=&after=&before=&limit=   count, frame bytes, first and last match, grouped by a field
+GET  /api/events/page?filter=&from=&count=  matches by position: {"start", "total", "from", "events"}; positions stay put while held
+GET  /api/events/position?filter=&id=   the position of the first match at or after an id
+GET  /api/events/stream?filter=&after=  server-sent events, live (backlog first with `after`)
+GET  /api/frame?id=                     a packet event's whole frame, as hex
+POST /api/eval  body: JavaScript        runs in the console's scope: {"ok":true,"result":...}
+POST /api/reload                        stops every script, drops all script state; starts the startup scripts again
+GET  /api/scripts                       installed scripts: metadata, enabled, source hash, status (stopped/running/failed)
+GET  /api/scripts/source?name=          one script with its source
+POST /api/scripts/save?name=&base=      body: source; create or replace (base: the hash it was edited from, "" = new; 409 if stale)
+POST /api/scripts/check body: source    syntax errors and warnings from Rhino's parser, without running
+POST /api/scripts/run|stop|delete?name= run: (re)start from the file, any run mode; returns its result or error
+POST /api/scripts/rename?name=&to=
+POST /api/scripts/enable?name=&enabled= disabling renames to .disabled and stops it
 POST /mcp       body: JSON-RPC          Model Context Protocol, Streamable HTTP transport
 DELETE /mcp                             ends an MCP session
-GET  /ui/...                            the web UI (no token needed for its static files)
+GET  /...                               anything else: the web UI (no token needed for its static files)
 ```
 
 `scripts/sculkctl.py` wraps it (`status`, `events`, `tail`, `frame`, `eval`,
@@ -531,11 +531,11 @@ so:
 
 ### Web UI
 
-`scripts/sculkctl.py ui` opens `http://127.0.0.1:PORT/ui/#token=...`. The
+`scripts/sculkctl.py ui` opens `http://127.0.0.1:PORT/#token=...`. The
 page moves the token from the fragment, which is never sent to the server,
 into local storage (shared by every tab, replaced when a new launch's token
 is entered) and removes it from the address bar. The pages have real paths,
-`/ui/events`, `/ui/scripts` and `/ui/scripts/<name>`, which the server answers
+`/events`, `/scripts` and `/scripts/<name>`, which the server answers
 with `index.html` and the page routes with the History API, so back, forward,
 reload and open-in-new-tab all work. Without a token it
 asks for one. It shows the live event table (filter, presets, pause,

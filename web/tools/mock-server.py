@@ -1102,14 +1102,16 @@ def make_handler(store, game, bundle):
             url = urllib.parse.urlsplit(self.path)
             q = dict(urllib.parse.parse_qsl(url.query, keep_blank_values=True))
             path = url.path
-            if method == "GET" and path in ("/", "/ui"):
-                return self.send(302, "text/plain", b"", {"Location": "/ui/"})
-            if method == "GET" and path.startswith("/ui/"):
-                name = path[4:]
+            if method == "GET" and (path == "/ui" or path.startswith("/ui/")):
+                return self.send(302, "text/plain", b"", {"Location": path[3:] or "/"})
+            if method == "GET" and not path.startswith("/api/") and path != "/mcp":
+                name = path[1:]
                 # The page's own paths load index.html, as on the real server.
                 if name in ("", "events", "scripts") or name.startswith("scripts/"):
                     name = "index.html"
                 return self.static(name)
+            # The API's endpoints, as below, without their /api prefix.
+            path = path[4:] if path.startswith("/api/") else ""
             body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
             if self.headers.get("Authorization", "") != f"Bearer {TOKEN}":
                 return self.json(401, {"error": "missing or wrong bearer token"})
@@ -1277,7 +1279,7 @@ def main():
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(store, game, bundle))
     server.daemon_threads = True
-    print(f"mock control server: http://127.0.0.1:{args.port}/ui/#token={TOKEN}", flush=True)
+    print(f"mock control server: http://127.0.0.1:{args.port}/#token={TOKEN}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

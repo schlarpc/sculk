@@ -287,7 +287,7 @@ public final class SculkCommand {
     private static <S> int ui(S source, Reply<S> reply, Consumer<String> openUrl, Long id) {
         return withControl(source, reply, control -> {
             openUrl.accept(id == null ? control.uiUrl() : control.uiUrl(id));
-            reply.ok(source, "opening the web UI in your browser (" + control.url() + "/ui/)");
+            reply.ok(source, "opening the web UI in your browser (" + control.url() + "/)");
             return 1;
         });
     }

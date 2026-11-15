@@ -122,7 +122,7 @@ export class ScriptsPage {
 
   show(name?: string): void {
     this.visible = true;
-    // The URL is the selection: /ui/scripts alone selects nothing (the Scripts tab links to the last script).
+    // The URL is the selection: /scripts alone selects nothing (the Scripts tab links to the last script).
     void this.refresh().then(() => {
       if (name && this.info(name)) void this.select(name);
       else this.showEmpty();

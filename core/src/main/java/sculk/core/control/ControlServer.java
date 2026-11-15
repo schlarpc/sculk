@@ -57,27 +57,27 @@ import sculk.core.util.Bytes;
  * It must never share a listener with anything a test target can reach.
  *
  * <pre>
- *   GET  /status
- *   GET  /events?filter=&amp;after=&amp;before=&amp;limit=   JSON Lines over the whole capture; see {@link EventFilter}
- *   GET  /events/page?filter=&amp;from=&amp;count=   matches by position in the whole capture: {"start","total","from","events"}
- *   GET  /events/position?filter=&amp;id=         the position of the first match at or after an id
+ *   GET  /api/status
+ *   GET  /api/events?filter=&amp;after=&amp;before=&amp;limit=   JSON Lines over the whole capture; see {@link EventFilter}
+ *   GET  /api/events/page?filter=&amp;from=&amp;count=   matches by position in the whole capture: {"start","total","from","events"}
+ *   GET  /api/events/position?filter=&amp;id=     the position of the first match at or after an id
  *                                       (both stream progress, and stop when the caller leaves, given Accept: text/event-stream)
- *   GET  /events/stats?filter=&amp;by=&amp;after=&amp;before=&amp;limit=   counts, bytes, first and last, grouped by a field
- *   GET  /events/stream?filter=&amp;after=      the same as server-sent events, live
- *   GET  /frame?id=                         the whole frame of a packet event
- *   POST /eval      body: JavaScript        {"ok":true,"result":...}, in the console's own scope
- *   POST /reload                            drops all script state, starts the startup scripts again
- *   GET  /scripts                           {"dir":..., "dist":..., "scripts":[...]}: installed scripts and their state
- *   GET  /scripts/source?name=              one script with its source and hash
- *   POST /scripts/save?name=&amp;base=  body: source   create or replace; base is the hash it was edited from ("" = new)
- *   POST /scripts/check  body: source       syntax errors and warnings, without running it
- *   POST /scripts/{run,stop,delete}?name=
- *   POST /scripts/rename?name=&amp;to=
- *   POST /scripts/enable?name=&amp;enabled=true|false
+ *   GET  /api/events/stats?filter=&amp;by=&amp;after=&amp;before=&amp;limit=   counts, bytes, first and last, grouped by a field
+ *   GET  /api/events/stream?filter=&amp;after=  the same as server-sent events, live
+ *   GET  /api/frame?id=                     the whole frame of a packet event
+ *   POST /api/eval  body: JavaScript        {"ok":true,"result":...}, in the console's own scope
+ *   POST /api/reload                        drops all script state, starts the startup scripts again
+ *   GET  /api/scripts                       {"dir":..., "dist":..., "scripts":[...]}: installed scripts and their state
+ *   GET  /api/scripts/source?name=          one script with its source and hash
+ *   POST /api/scripts/save?name=&amp;base=  body: source   create or replace; base is the hash it was edited from ("" = new)
+ *   POST /api/scripts/check  body: source       syntax errors and warnings, without running it
+ *   POST /api/scripts/{run,stop,delete}?name=
+ *   POST /api/scripts/rename?name=&amp;to=
+ *   POST /api/scripts/enable?name=&amp;enabled=true|false
  *   POST /mcp       body: JSON-RPC          Model Context Protocol (Streamable HTTP); see {@link McpHandler}
  *   DELETE /mcp                             ends an MCP session (Mcp-Session-Id)
- *   GET  /ui/...                            the web UI (static files from sculk/web/ on the classpath;
- *                                           /ui/events, /ui/scripts[/name] load its index.html)
+ *   GET  /...                               anything else: the web UI (static files from sculk/web/ on the
+ *                                           classpath; its pages /, /events, /scripts[/name] load index.html)
  * </pre>
  *
  * The web UI's static files are the only thing served without the token:
@@ -205,7 +205,7 @@ public final class ControlServer {
     /** The base URL, on 127.0.0.1. */
     public String url() { return "http://127.0.0.1:" + port; }
     /** The web UI, signed in: the page takes the token from the fragment and drops it from the address bar. */
-    public String uiUrl() { return url() + "/ui/#token=" + token; }
+    public String uiUrl() { return url() + "/#token=" + token; }
     /** The web UI, signed in, showing event {@code id} among all events. */
     public String uiUrl(long id) { return uiUrl() + "&event=" + id; }
 
@@ -250,7 +250,8 @@ public final class ControlServer {
         try (ex) {
             String path = ex.getRequestURI().getPath();
             String refusal = refuseCaller(ex);
-            if (refusal == null && ex.getRequestMethod().equals("GET") && (path.equals("/") || path.startsWith("/ui/"))) {
+            boolean api = path.startsWith("/api/") || path.equals("/mcp");
+            if (refusal == null && !api && ex.getRequestMethod().equals("GET")) {
                 serveStatic(ex, path);
                 return;
             }
@@ -266,8 +267,10 @@ public final class ControlServer {
             }
             String method = ex.getRequestMethod();
             Map<String, String> query = query(ex.getRequestURI().getRawQuery());
+            // The API's endpoints, below, without their /api prefix; MCP alone sits outside it.
+            String route = path.equals("/mcp") ? path : path.startsWith("/api/") && !path.equals("/api/mcp") ? path.substring(4) : "";
             try {
-                switch (method + " " + path) {
+                switch (method + " " + route) {
                     case "GET /status" -> json(ex, 200, status(engine, store));
                     case "GET /events" -> events(ex, query);
                     case "GET /events/stream" -> stream(ex, query);
@@ -299,7 +302,7 @@ public final class ControlServer {
                     default -> {
                         boolean known = Set.of("/status", "/events", "/events/stream", "/events/stats", "/events/page", "/events/position", "/frame", "/eval", "/reload", "/mcp",
                                 "/scripts", "/scripts/source", "/scripts/save", "/scripts/check", "/scripts/run", "/scripts/stop",
-                                "/scripts/delete", "/scripts/rename", "/scripts/enable").contains(path);
+                                "/scripts/delete", "/scripts/rename", "/scripts/enable").contains(route);
                         json(ex, known ? 405 : 404, Map.of("error", known ? "wrong method for " + path : "no such endpoint " + path));
                     }
                 }
@@ -536,14 +539,16 @@ public final class ControlServer {
         }
     }
 
-    /** Serves the web UI from the classpath; GET / redirects to it. */
+    /** Serves the web UI from the classpath, at the root. */
     private void serveStatic(HttpExchange ex, String path) throws IOException {
-        if (path.equals("/") || path.equals("/ui")) {
-            ex.getResponseHeaders().set("Location", "/ui/");
+        if (path.equals("/ui") || path.startsWith("/ui/")) {
+            // Where the UI used to live; the browser keeps a #token= fragment across the redirect.
+            String rest = ex.getRequestURI().getRawPath().substring(3);
+            ex.getResponseHeaders().set("Location", rest.isEmpty() ? "/" : rest);
             ex.sendResponseHeaders(302, -1);
             return;
         }
-        String name = path.substring("/ui/".length());
+        String name = path.substring(1);
         // The page's own paths (see web/src/route.ts) all load index.html, which routes on the client.
         if (name.isEmpty() || name.equals("events") || name.equals("scripts") || name.startsWith("scripts/")) name = "index.html";
         byte[] bytes = null;

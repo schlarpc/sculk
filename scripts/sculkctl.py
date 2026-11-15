@@ -71,7 +71,7 @@ class Client:
         self.port = info.get("port") or self.url.rsplit(":", 1)[-1]
 
     def request(self, method, path, query=None, body=None, timeout=60):
-        url = self.url + path
+        url = self.url + "/api" + path
         if query:
             url += "?" + urllib.parse.urlencode({k: v for k, v in query.items() if v is not None})
         req = urllib.request.Request(url, method=method, data=body.encode() if body is not None else None,
@@ -228,7 +228,7 @@ def cmd_script(c, a):
 def cmd_ui(c, a):
     # The token travels in the fragment, which browsers never send to the
     # server; the page moves it to session storage and strips it from the URL.
-    url = f"{c.url}/ui/#token={c.token}"
+    url = f"{c.url}/#token={c.token}"
     if a.print:
         print(url)
         return
