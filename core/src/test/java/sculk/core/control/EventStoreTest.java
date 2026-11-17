@@ -153,7 +153,7 @@ class EventStoreTest {
                 assertNotNull(back, "event " + e.id());
                 assertEquals(e.json(), back.json());
                 assertArrayEquals(e.frame(), back.frame());
-                assertEquals(parse(e.json()), back.fields());
+                if (back != e) assertEquals(parse(e.json()), back.fields()); // else still in memory, as added
             }
             assertNull(store.get(0));
             assertNull(store.get(501));
@@ -176,6 +176,33 @@ class EventStoreTest {
                 assertEquals(all.get(id - 1).json(), back.json());
                 assertArrayEquals(all.get(id - 1).frame(), back.frame());
             }
+        }
+    }
+
+    @Test
+    void aFailedWriterLeavesAStoreOfBoundedMemoryAndNoFiles(@TempDir Path tmp) throws Exception {
+        Path dir = tmp.resolve("cap");
+        List<StoredEvent> first = events(20_000, 4);
+        int total = 200_000;
+        try (EventStore store = new EventStore(32, 1 << 20, dir, 1L << 30, 16 << 10)) {
+            for (int i = 0; i < 500; i++) store.add(first.get(i));
+            assertTrue(store.awaitWritten(500, 10_000));
+            // The next segment cannot be made: the writer fails, as on a full disk.
+            EventStore.deleteCapture(dir);
+            for (int i = 500; i < 20_000; i++) store.add(first.get(i));
+            long end = System.currentTimeMillis() + 10_000;
+            while (!Boolean.TRUE.equals(store.describe().get("captureFailed")) && System.currentTimeMillis() < end) Thread.sleep(5);
+            assertEquals(true, store.describe().get("captureFailed"));
+            for (long id = 20_001; id <= total; id++) {
+                store.add(new StoredEvent(id, Map.of("id", id, "kind", "mark"), "{\"id\":" + id + ",\"kind\":\"mark\"}", null));
+            }
+            assertEquals(total, store.lastId());
+            assertTrue(store.size() <= 64, "the hot ring alone: " + store.size());
+            long indexBytes = ((Number) store.describe().get("indexBytes")).longValue();
+            assertTrue(indexBytes < 1 << 20, "index trimmed with the ring: " + indexBytes);
+            assertNotNull(store.get(total));
+            assertEquals(0, (int) store.describe().get("pendingWrites"));
+            assertFalse(Files.exists(dir), "capture files deleted");
         }
     }
 
@@ -253,7 +280,10 @@ class EventStoreTest {
             store.stats("kind == packet && dir == inbound && channel ~ mod", "owner", null, null, 10, EventStore.Progress.NONE);
             store.stats("script == a.js || side == client", "conn.id", null, null, 10, EventStore.Progress.NONE);
             // Except the events whose shape the index cannot mirror (the weird and odd ones), read whole each time.
-            long unindexable = all.stream().filter(e -> Stream.of("weird", "odd").anyMatch(k -> k.equals(e.fields().get("kind")))).count();
+            // (Those still in memory are not read back from disk.)
+            long hotFirst = store.lastId() - ((Number) store.describe().get("memoryEvents")).longValue() + 1;
+            long unindexable = all.stream().filter(e -> e.id() < hotFirst)
+                    .filter(e -> Stream.of("weird", "odd").anyMatch(k -> k.equals(e.fields().get("kind")))).count();
             assertEquals(before + 2 * unindexable, store.diskReads.get(), "the index answered the rest");
             store.stats("packet.data.slot >= 5", null, null, null, 10, EventStore.Progress.NONE);
             assertTrue(store.diskReads.get() > before, "deep fields read events back");

@@ -147,15 +147,17 @@ public final class EventStore implements AutoCloseable {
                 hotFirst = id;
                 if (firstId < id) firstId = id;
             }
-            ring[(int) (id & mask)] = event;
-            if (event.frame() != null) hotFrameBytes += event.frame().length;
-            lastId = id;
-            while (hotFirst < id && (id - hotFirst + 1 > maxHot || hotFrameBytes > maxHotFrameBytes || id - hotFirst + 1 > ring.length)) {
+            long frameBytes = event.frame() == null ? 0 : event.frame().length;
+            // Make room first: when the ring is full, the oldest event's slot is the new one's.
+            while (hotFirst < id && (id - hotFirst + 1 > maxHot || hotFrameBytes + frameBytes > maxHotFrameBytes || id - hotFirst + 1 > ring.length)) {
                 // Keep events the writer has not reached, unless the ring itself is full.
-                if (spool != null && hotFirst > spool.writtenUpTo && id - hotFirst + 1 <= ring.length) break;
+                if (spooling() && hotFirst > spool.writtenUpTo && id - hotFirst + 1 <= ring.length) break;
                 evictOldestHot();
             }
-            if (spool == null) firstId = hotFirst;
+            ring[(int) (id & mask)] = event;
+            hotFrameBytes += frameBytes;
+            lastId = id;
+            if (!spooling()) firstId = hotFirst;
         }
         if (spool != null) spool.enqueue(event);
         for (Consumer<StoredEvent> s : subscribers) {
@@ -173,7 +175,16 @@ public final class EventStore implements AutoCloseable {
         ring[slot] = null;
         if (old != null && old.frame() != null) hotFrameBytes -= old.frame().length;
         hotFirst++;
-        if (spool == null) index.trim(hotFirst);
+        if (!spooling()) index.trim(hotFirst);
+    }
+
+    /**
+     * A writer is putting events on disk. Without one (no spool, or its
+     * writer failed) the store is the hot ring alone, and the index is
+     * trimmed with it, else it would grow with every event.
+     */
+    private boolean spooling() {
+        return spool != null && !spool.failed;
     }
 
     // ---- reading ----
@@ -888,7 +899,12 @@ public final class EventStore implements AutoCloseable {
                 } catch (IOException | RuntimeException e) {
                     failed = true;
                     queue.clear();
-                    if (!closed) Sculk.LOG.error("capture writer failed; capture stopped, events from {} on are kept in memory only", batch.isEmpty() ? "?" : batch.get(0).id(), e);
+                    if (!closed) {
+                        Sculk.LOG.error("capture writer failed; capture stopped and its files deleted, recent events are kept in memory only (from {})",
+                                batch.isEmpty() ? "?" : batch.get(0).id(), e);
+                        // Nothing on disk is reachable once the store is the hot ring alone; a full disk gets its space back.
+                        close();
+                    }
                     return;
                 } finally {
                     batch.clear();
