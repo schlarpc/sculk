@@ -10,10 +10,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Sculk's settings: one table, which each platform turns into its loader's
- * own config file (NeoForge's {@code sculk-startup.toml}, Forge's
- * {@code sculk-common.toml}, and on Fabric, which has no config API,
- * {@code sculk.toml} written by {@link #tomlFile}). A JVM system property
+ * Sculk's settings: one table, which each platform keeps in
+ * {@code config/sculk.toml} through its loader's config API (a NeoForge
+ * startup config, a Forge common config), or on Fabric, which has none,
+ * through {@link #tomlFile}. A JVM system property
  * {@code -Dsculk.<key>} overrides the file, for dev runs and tests.
  */
 public final class Settings {

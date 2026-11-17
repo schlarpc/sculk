@@ -454,13 +454,13 @@ Shorthands, in filters and in scripts: `dir` (`frame.dir`), `len`
 
 ## Settings
 
-Settings live in the loader's own config file, which the loader writes with
-every setting, its default and a comment the first time the game starts:
-`config/sculk-startup.toml` on NeoForge (a startup config, loaded before
-sculk starts, local to each side), `config/sculk-common.toml` on Forge (sculk
-starts once Forge has loaded it, after the mods are constructed) and
-`config/sculk.toml` on Fabric, which has no config API (sculk writes and
-reads that one itself). The table is `Settings.ALL`. A JVM system property
+Settings live in `config/sculk.toml` on every loader, written with every
+setting, its default and a comment the first time the game starts. On
+NeoForge it is a startup config, loaded before sculk starts and local to
+each side; on Forge a common config, so sculk starts once Forge has loaded
+it, after the mods are constructed; on Fabric, which has no config API,
+sculk writes and reads it itself. The name is set explicitly, in place of
+the loaders' `sculk-<type>.toml`, so one file serves every loader. The table is `Settings.ALL`. A JVM system property
 `-Dsculk.<key>=<value>` overrides the file, for dev runs and tests. Changes
 take effect at the next launch.
 

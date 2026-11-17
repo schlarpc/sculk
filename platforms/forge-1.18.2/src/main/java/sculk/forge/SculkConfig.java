@@ -8,7 +8,7 @@ import net.minecraftforge.fml.config.ModConfig;
 import sculk.core.Settings;
 
 /**
- * Sculk's {@link Settings} as a Forge config: {@code config/sculk-common.toml},
+ * Sculk's {@link Settings} as a Forge config: {@code config/sculk.toml},
  * which Forge writes with every setting and its comment, and loads after
  * the mods are constructed (so {@link SculkForge} starts sculk then).
  */
@@ -32,7 +32,7 @@ final class SculkConfig {
             values.put(s.key(), v);
         }
         spec = b.build();
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, spec);
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, spec, "sculk.toml");
         return key -> {
             ForgeConfigSpec.ConfigValue<?> v = values.get(key);
             return v == null ? null : v.get();

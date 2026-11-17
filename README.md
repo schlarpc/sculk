@@ -78,9 +78,8 @@ ship them.
 
 ## Settings
 
-Sculk's settings are in the loader's config file, written with defaults and
-comments on first launch: `config/sculk-startup.toml` (NeoForge),
-`config/sculk-common.toml` (Forge) or `config/sculk.toml` (Fabric).
+Sculk's settings are in `config/sculk.toml`, the same file on every loader,
+written with defaults and comments on first launch.
 
 | Setting | Default | |
 |---|---|---|
