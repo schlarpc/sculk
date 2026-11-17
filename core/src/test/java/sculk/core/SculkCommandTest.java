@@ -234,7 +234,14 @@ class SculkCommandTest {
     }
 
     @Test
-    void uiIsOnlyForGameClients() {
-        assertThrows(CommandSyntaxException.class, () -> dispatcher(true, false).execute("sculk ui", "console"));
+    void uiOnAServerSaysHowToReachIt() throws Exception {
+        var control = FakeGame.sculk().control();
+        assertEquals(1, dispatcher(true, false).execute("sculk ui 42", "console"));
+        assertTrue(opened.isEmpty());
+        String text = String.join("\n", replies);
+        assertTrue(text.contains(control.url() + "/#event=42"), text);
+        assertTrue(text.contains("ssh -L " + control.port() + ":127.0.0.1:" + control.port()), text);
+        assertTrue(text.contains("/sculk mcp token"), text);
+        assertFalse(text.contains(control.token()), text);
     }
 }

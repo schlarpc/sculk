@@ -35,10 +35,12 @@ import sculk.core.script.ScriptManager;
  *   <li>{@code /sculk mcp list}, {@code accept [number]}, {@code revoke
  *       <number>}: MCP clients that connect without the token wait for the
  *       player to accept them; {@code /sculk mcp token} prints the token;</li>
- *   <li>{@code /sculk ui [event]} (game clients only): opens the web UI, at
+ *   <li>{@code /sculk ui [event]}: in a game client, opens the web UI, at
  *       that event if given (a mark's reply offers it as a button), in the
  *       browser, signed in. The token goes straight to the browser, never
- *       into chat, where logs, screenshots and streams would keep it.</li>
+ *       into chat, where logs, screenshots and streams would keep it. In a
+ *       dedicated server, which has no browser, says how to reach the UI
+ *       from another machine.</li>
  * </ul>
  */
 public final class SculkCommand {
@@ -65,7 +67,7 @@ public final class SculkCommand {
      * The command tree. {@code requires} gates all of it (for example to
      * operators on a server); {@code openUrl} opens a link in the player's
      * browser, and is null where there is no player at the keyboard (a
-     * dedicated server), which leaves out {@code /sculk ui}.
+     * dedicated server), where {@code /sculk ui} says how to reach the UI instead.
      */
     public static <S> LiteralArgumentBuilder<S> tree(Predicate<S> requires, Reply<S> reply, Consumer<String> openUrl) {
         LiteralArgumentBuilder<S> root = LiteralArgumentBuilder.<S>literal("sculk").requires(requires)
@@ -102,12 +104,10 @@ public final class SculkCommand {
                                     reply.ok(ctx.getSource(), "control token: " + c.token() + " (for " + c.url() + ")");
                                     return 1;
                                 }))));
-        if (openUrl != null) {
-            root.then(LiteralArgumentBuilder.<S>literal("ui")
-                    .executes(ctx -> ui(ctx.getSource(), reply, openUrl, null))
-                    .then(RequiredArgumentBuilder.<S, Long>argument("event", longArg(1))
-                            .executes(ctx -> ui(ctx.getSource(), reply, openUrl, getLong(ctx, "event")))));
-        }
+        root.then(LiteralArgumentBuilder.<S>literal("ui")
+                .executes(ctx -> ui(ctx.getSource(), reply, openUrl, null))
+                .then(RequiredArgumentBuilder.<S, Long>argument("event", longArg(1))
+                        .executes(ctx -> ui(ctx.getSource(), reply, openUrl, getLong(ctx, "event")))));
         return root;
     }
 
@@ -283,12 +283,35 @@ public final class SculkCommand {
         return 1;
     }
 
-    /** Opens the web UI, at event {@code id} when it is not null. */
+    /**
+     * Opens the web UI, at event {@code id} when it is not null. Without a
+     * browser to open it in (a dedicated server), says how to reach it.
+     */
     private static <S> int ui(S source, Reply<S> reply, Consumer<String> openUrl, Long id) {
         return withControl(source, reply, control -> {
+            if (openUrl == null) {
+                for (String line : remoteUiHelp(control, id)) reply.ok(source, line);
+                return 1;
+            }
             openUrl.accept(id == null ? control.uiUrl() : control.uiUrl(id));
             reply.ok(source, "opening the web UI in your browser (" + control.url() + "/)");
             return 1;
         });
+    }
+
+    /**
+     * How to reach the web UI of a dedicated server: it listens on the
+     * server machine's loopback only, so from elsewhere through a tunnel,
+     * signed in with the token.
+     */
+    public static List<String> remoteUiHelp(ControlServer control, Long id) {
+        int port = control.port();
+        String page = control.url() + "/" + (id == null ? "" : "#event=" + id);
+        return List.of(
+                "the web UI runs on the server machine and listens there only: " + page,
+                "on that machine, open it there; from your own computer, first forward the port: ssh -L "
+                        + port + ":127.0.0.1:" + port + " <you>@<server host>",
+                "the page asks for the control token: /sculk mcp token prints it, and " + control.file() + " holds it",
+                "or, with the sculk repository: scripts/sculkctl.py ui --file <a copy of that file> (with the port forwarded)");
     }
 }

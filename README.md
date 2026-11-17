@@ -55,10 +55,20 @@ it.
 | `/sculk script reload` | restart all scripts from disk |
 | `/sculk mcp list`, `accept [n]`, `revoke <n>` | approve MCP clients that connect without the token (see below) |
 | `/sculk mcp token` | print the control token in chat |
-| `/sculk ui [event]` | open the web UI in your browser, signed in, at that event if given (game clients only) |
+| `/sculk ui [event]` | open the web UI in your browser, signed in, at that event if given; on a dedicated server, say how to reach it |
 
 In a game client these are client commands, so they work on any server; a
 dedicated server offers them to operators.
+
+**On a dedicated server**, the web UI listens on the server machine's
+loopback only (`http://127.0.0.1:25580/`), and there is no browser there to
+open. The server log says how to reach it at startup, and so does `/sculk ui`
+at the server console. In short: forward the port from your computer
+(`ssh -L 25580:127.0.0.1:25580 you@server`), open `http://127.0.0.1:25580/`,
+and paste the token that `/sculk mcp token` prints (it is also in
+`sculk-control.json` in the server directory). A player whose own game also
+runs sculk reaches their client's `/sculk`, not the server's; use the server
+console for the server's.
 
 ![The scripts page: installed scripts, one open in the editor, and its live output](docs/images/scripts.png)
 

@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import sculk.core.command.SculkCommand;
 import sculk.core.control.ControlServer;
 import sculk.core.control.EventStore;
 import sculk.core.control.StoredEvent;
@@ -174,6 +175,9 @@ public final class Sculk {
                 int[] ports = controlPort.isEmpty() ? ControlServer.DEFAULT_PORTS : new int[] {Integer.parseInt(controlPort)};
                 sculk.control = new ControlServer(sculk, store, ports, file,
                         token == null || token.isBlank() ? null : token.trim());
+                if (platform.dedicatedServer()) {
+                    for (String line : SculkCommand.remoteUiHelp(sculk.control, null)) LOG.info(line);
+                }
             } catch (IOException | RuntimeException e) {
                 LOG.error("cannot start control server on {}", controlPort.isEmpty() ? "any port" : "port " + controlPort, e);
             }
