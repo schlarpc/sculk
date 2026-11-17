@@ -30,6 +30,15 @@ public interface Platform {
         return Path.of("config");
     }
 
+    /**
+     * Sculk's settings from the loader's config file (see
+     * {@link sculk.core.Settings}), loaded by the time this is called (from
+     * {@code Sculk.init}); null for the defaults.
+     */
+    default sculk.core.Settings.Source settings() {
+        return null;
+    }
+
     /** True in a dedicated server; false in a game client, including its integrated server. */
     default boolean dedicatedServer() {
         return false;

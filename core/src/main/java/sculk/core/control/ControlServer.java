@@ -38,14 +38,14 @@ import sculk.core.util.Bytes;
  * script code, manage installed scripts.
  *
  * <p>Whoever can call this server can run code in the game process and inject
- * packets. It is on unless {@code -Dsculk.control=off}, so:
+ * packets. It is on unless the {@code control} setting is {@code off} (see {@link sculk.core.Settings}), so:
  * <ul>
  *   <li>it listens on the loopback addresses only: 127.0.0.1 and, when the
  *       system has it, ::1, on the same port;</li>
  *   <li>every request needs {@code Authorization: Bearer <token>}. The token
  *       is random per launch and written, with the port, to a file only the
  *       user can read ({@code sculk-control.json} in the working directory,
- *       or {@code -Dsculk.controlFile}). The one exception is {@code /mcp},
+ *       or the {@code controlFile} setting). The one exception is {@code /mcp},
  *       where a client without it can pair instead: its tools wait until
  *       the player approves it in game (see {@link McpHandler});</li>
  *   <li>the {@code Host} header must name the loopback address and this port,

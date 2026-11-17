@@ -25,6 +25,14 @@ import sculk.mc.Protocols;
  * what is NeoForge's own: mods, config, commands, chat.
  */
 final class NeoForgePlatform implements Platform {
+    /** Sculk's config, from {@link SculkConfig}. */
+    volatile sculk.core.Settings.Source settings;
+
+    @Override
+    public sculk.core.Settings.Source settings() {
+        return settings;
+    }
+
     private volatile Map<String, String> modByModule;
 
     @Override

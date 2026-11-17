@@ -47,7 +47,7 @@ import sculk.shaded.org.mozilla.javascript.Scriptable;
  * The installed scripts and the running ones.
  *
  * <p>Scripts are {@code .js} files in one directory ({@code
- * <config>/sculk/scripts}, or {@code -Dsculk.scriptDir}), so a modpack can
+ * <config>/sculk/scripts}, or the {@code scriptDir} setting), so a modpack can
  * ship them. A file named {@code x.js.disabled} is script {@code x.js},
  * disabled, the way launchers disable mod jars. Files named in {@code
  * -Dsculk.scripts} are scripts too; they keep their path as their name and

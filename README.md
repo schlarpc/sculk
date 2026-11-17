@@ -76,6 +76,26 @@ console for the server's.
 and live output. Scripts sit in `config/sculk/scripts/`, so a modpack can
 ship them.
 
+## Settings
+
+Sculk's settings are in the loader's config file, written with defaults and
+comments on first launch: `config/sculk-startup.toml` (NeoForge),
+`config/sculk-common.toml` (Forge) or `config/sculk.toml` (Fabric).
+
+| Setting | Default | |
+|---|---|---|
+| `control` | `""` | control server port: empty for the first free one from 25580, a number for that port, `off` for none |
+| `controlFile` | `sculk-control.json` | where the port and token are written |
+| `controlToken` | `""` | a fixed token (16+ characters) instead of a random one per launch |
+| `captureBytes` | 2 GiB | how much of the session to keep on disk, in a temporary directory deleted on exit; `0` for memory only |
+| `captureDir` | system temp | where that directory goes |
+| `controlEvents`, `controlFrameBytes` | 50000, 128 MiB | how many recent events, and frame bytes, stay in memory |
+| `scriptDir` | `config/sculk/scripts` | installed scripts |
+| `watch` | `true` | reload scripts when their files change |
+| `eventLog` | `""` | also append every event to this JSON Lines file (grows without limit) |
+
+A JVM option `-Dsculk.<setting>=<value>` overrides the file.
+
 ## Development
 
 Everything you need (Gradle, JDK 17/21/25, client native libraries) comes from
@@ -130,7 +150,7 @@ have to try again. Approval lasts until the game
 exits. After a restart the client reconnects and asks again, with no change
 to its configuration.
 
-To skip pairing, start the game with `-Dsculk.controlToken=<16+ chars>` and
+To skip pairing, set `controlToken` (16+ characters) in sculk's config and
 send that token in an `Authorization: Bearer <token>` header;
 `scripts/sculkctl.py mcp-config --token` prints that configuration. Anyone
 who can read the configuration can then drive the game.

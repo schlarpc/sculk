@@ -284,7 +284,7 @@ with the script as written when Rhino can parse it, else Babel's, else
 Rhino's with Babel's output.
 
 Installed scripts are the `.js`
-files in `<config>/sculk/scripts/` (or `-Dsculk.scriptDir`), so a modpack
+files in `<config>/sculk/scripts/` (or the `scriptDir` setting), so a modpack
 can ship them in its `config/` folder. `x.js.disabled` is script `x.js`,
 disabled, the way launchers disable mod jars. Files named in
 `-Dsculk.scripts` (dev runs: `-Psculk.scripts=...`) are scripts too, started
@@ -311,7 +311,7 @@ globals from anywhere.
 What happens to a script is one set of rules (`Lifecycle`, a pure planner;
 `ScriptManager` carries out its plans), whoever changed the file: the web
 UI, sculkctl, MCP, or an editor, `git checkout` and the like. sculk polls
-the script files (every 500 ms; `-Dsculk.watch=false` turns it off,
+the script files (every 500 ms; the `watch` setting turns it off,
 `-Dsculk.watchMillis` sets the period) and applies a change once the file
 has held still for one poll.
 
@@ -396,7 +396,7 @@ those of the connection whose packet is being handled, else the client's.
 
 ### Events
 
-`-Dsculk.eventLog=path` writes a JSON Lines log of everything sculk sees:
+The `eventLog` setting, a path, writes a JSON Lines log of everything sculk sees:
 `start`, `connection`, `disconnect`, `payload_type`, `packet`, `eval`,
 `mark` (`text`, and `by`: `command` for `/sculk mark`), `chat` (`text`
 shown to the player, and `script` when a script said it), `mcp_client`
@@ -452,6 +452,18 @@ Shorthands, in filters and in scripts: `dir` (`frame.dir`), `len`
 (`mod.channel`) and `owner` (`mod.owner` if there is a mod layer, else
 `packet.owner`).
 
+## Settings
+
+Settings live in the loader's own config file, which the loader writes with
+every setting, its default and a comment the first time the game starts:
+`config/sculk-startup.toml` on NeoForge (a startup config, loaded before
+sculk starts, local to each side), `config/sculk-common.toml` on Forge (sculk
+starts once Forge has loaded it, after the mods are constructed) and
+`config/sculk.toml` on Fabric, which has no config API (sculk writes and
+reads that one itself). The table is `Settings.ALL`. A JVM system property
+`-Dsculk.<key>=<value>` overrides the file, for dev runs and tests. Changes
+take effect at the next launch.
+
 ## Control server
 
 The control server is one HTTP listener for tools, agents and the web UI: a
@@ -459,25 +471,25 @@ filterable live event log, a REPL, a script editor, and an MCP server. It
 is on by default, on port 25580; when another game on the machine holds
 that, the next free one up to 25589, else any free port. The port it got is
 in `sculk-control.json` and the game log, and `/sculk ui` opens it.
-`-Dsculk.control=PORT` asks for exactly that port (0: any free one) and
-`-Dsculk.control=off` turns the server off (dev runs: `-Psculk.control=...`).
+The `control` setting asks for exactly a port (0: any free one), or with
+`off` turns the server off (dev runs: `-Psculk.control=...`).
 
 It captures every event of the session with its whole frame (the event log
-cuts long frames short), whether or not `sculk.eventLog` is set, so queries
+cuts long frames short), whether or not `eventLog` is set, so queries
 reach back to the start of the session, like a capture file that is still
 being written (`EventStore`):
 
 - **Spool.** A writer thread appends events to 64 MiB segment files in a
-  temporary capture directory (`-Dsculk.captureDir`, default the system
+  temporary capture directory (the `captureDir` setting, default the system
   temp directory), in zstd-compressed blocks of about 256 KiB (JSON and
   frames compress about ten to one; a block is written when full, when
   the writer goes quiet, or before the hot ring would have to let its
   events go). The index points at each event's block and its place in it;
   reading one back unpacks its block, and the last few unpacked blocks are
-  kept for scans. Past the cap (`-Dsculk.captureBytes`, default 2 GiB) the
+  kept for scans. Past the cap (the `captureBytes` setting, default 2 GiB) the
   oldest segment is deleted. The directory goes when the game exits, and
   ones left by a crashed game are cleaned up at the next launch. Captures
-  do not persist across launches. `-Dsculk.captureBytes=0` keeps only the
+  do not persist across launches. `captureBytes = 0` keeps only the
   newest events in memory.
 - **Index.** In memory, about 47 bytes per event: id, t, kind, conn.id,
   conn.side, frame.dir, frame.len, packet.type, packet.owner, packet.state,
@@ -487,8 +499,8 @@ being written (`EventStore`):
   `frame.hex`) reads events back from disk, at about 400 thousand a
   second. An event whose shape the index cannot mirror exactly is always
   read whole, so both give the same answers.
-- **Hot cache.** The newest events (`-Dsculk.controlEvents`, default 50000,
-  and `-Dsculk.controlFrameBytes`, default 128 MiB) stay whole in memory
+- **Hot cache.** The newest events (the `controlEvents` setting, default 50000,
+  and `controlFrameBytes`, default 128 MiB) stay whole in memory
   for live tails, and for anything the writer has not reached.
 
 ```
@@ -563,7 +575,7 @@ An MCP client gets in one of two ways:
 
 - **Pairing** (`scripts/sculkctl.py mcp-config`): the client's configuration
   holds only the URL, so it never changes; the default port stays the same
-  across launches unless another game holds it (`-Dsculk.control=<port>`
+  across launches unless another game holds it (the `control` setting
   pins one). A client that connects without the token gets
   a session that waits for the player: it can initialize and list tools,
   but a tool call is held until the player approves it (up to 5 minutes,
@@ -581,7 +593,7 @@ An MCP client gets in one of two ways:
   the check. The Host and Origin checks apply as everywhere.
 - **The token** (`mcp-config --token`): the `Authorization` header, as for
   the HTTP API. The token changes with every launch;
-  `-Dsculk.controlToken=<16+ chars>` fixes it for a static client
+  the `controlToken` setting (16+ characters) fixes it for a static client
   configuration (and then anyone who can read that configuration can drive
   the game). `/sculk mcp token` prints it in chat.
 
@@ -606,13 +618,13 @@ A layer name alone (`mod`) asks whether the event has that layer. Operators are 
 Anyone who can call this server can run code in the game and inject packets,
 so:
 
-- it listens on loopback only (`-Dsculk.control=off` turns it off): 127.0.0.1 and `::1`
+- it listens on loopback only (the `control` setting `off` turns it off): 127.0.0.1 and `::1`
   on the same port, bound explicitly (Forge and NeoForge dev runs make the
   JVM prefer IPv6, so "the" loopback address would be `::1` alone). Without
   IPv6 loopback it serves IPv4 only;
 - every request needs `Authorization: Bearer <token>`. The token is random
   per launch and is written, with the port, to `sculk-control.json` in the
-  game directory (or `-Dsculk.controlFile`), readable by the user only, and
+  game directory (or the `controlFile` setting), readable by the user only, and
   deleted on exit;
 - the `Host` header must be `127.0.0.1`, `[::1]` or `localhost` with this port,
   which stops DNS rebinding; a request with any other `Origin` is refused,
@@ -663,10 +675,9 @@ draws seeded 16×16 noise in those colours at startup (sculk, panel stone,
 bone, veins), and CSS scales them up with pixelated rendering. The header
 icon is a hand-drawn sculk sensor that pulses as events arrive.
 
-Memory is bounded by `-Dsculk.controlEvents` (default 100000) and
-`-Dsculk.controlFrameBytes` (default 256 MiB); the oldest events go first.
-Every `sculk.control*` property can be given to dev runs as a Gradle
-property (`-Psculk.control=0`).
+Memory is bounded by the `controlEvents` and `controlFrameBytes` settings;
+the oldest events go first. Every `sculk.control*` setting can be given to
+dev runs as a Gradle property (`-Psculk.control=0`).
 
 ## Testing
 

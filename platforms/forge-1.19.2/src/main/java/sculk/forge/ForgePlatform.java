@@ -42,6 +42,14 @@ import sculk.mc.GameTrees;
  * channel, which for SimpleChannel start with a one-byte message discriminator.
  */
 final class ForgePlatform implements Platform {
+    /** Sculk's config, from {@link SculkConfig}. */
+    volatile sculk.core.Settings.Source settings;
+
+    @Override
+    public sculk.core.Settings.Source settings() {
+        return settings;
+    }
+
     private volatile Map<String, String> modByModule;
 
     @Override

@@ -47,36 +47,12 @@ import sculk.core.util.Bytes;
  * entrypoint. Its mixins then report connections and packets through
  * {@link sculk.core.net.WireHooks}, which calls back into this class.
  *
- * <p>System properties:
- * <ul>
- *   <li>{@code sculk.eventLog}: path of a JSON Lines event log to write;</li>
- *   <li>{@code sculk.scriptDir}: the directory of installed scripts (default
- *       {@code <config>/sculk/scripts}). See {@link ScriptManager};</li>
- *   <li>{@code sculk.scripts}: more script files to load at startup,
- *       separated by the platform path separator, before the installed ones;</li>
- *   <li>{@code sculk.watch}: whether to poll the script files for changes
- *       made outside sculk and apply them (default true), every
- *       {@code sculk.watchMillis} (default 500);</li>
- *   <li>{@code sculk.control}: port for the loopback control server, which
- *       is on by default: unset, it takes the first free port of
- *       {@link ControlServer#DEFAULT_PORTS}, else any free port; a number asks
- *       for exactly that port (0: any free port); {@code off} turns it off.
- *       See {@link ControlServer};</li>
- *   <li>{@code sculk.controlFile}: where the control server writes its port
- *       and token (default {@code sculk-control.json});</li>
- *   <li>{@code sculk.controlToken}: a fixed bearer token (16 characters or
- *       more) instead of a random one per launch, for static MCP client
- *       configurations;</li>
- *   <li>{@code sculk.captureBytes}: the control server captures every event,
- *       with its whole frame, to a temporary directory deleted on exit, up to
- *       this size (default 2 GiB; 0 keeps recent events in memory only). See
- *       {@link EventStore};</li>
- *   <li>{@code sculk.captureDir}: where to make that directory (default the
- *       system temporary directory);</li>
- *   <li>{@code sculk.controlEvents}, {@code sculk.controlFrameBytes}: how many
- *       of the newest events, and how many bytes of their frames, are also
- *       kept whole in memory (defaults 50000 and 128 MiB).</li>
- * </ul>
+ * <p>Settings are in {@link Settings}: the loader's config file for sculk,
+ * each overridable with a system property {@code -Dsculk.<key>}. Two more
+ * are system properties only, for dev runs: {@code sculk.scripts}, more
+ * script files to load at startup (separated by the platform path
+ * separator), and {@code sculk.watchMillis}, how often to poll the script
+ * files (default 500).
  */
 public final class Sculk {
     public static final String MOD_ID = "sculk";
@@ -114,31 +90,33 @@ public final class Sculk {
         if (instance != null) {
             throw new IllegalStateException("sculk already initialised by " + instance.platform.describe());
         }
+        Settings.use(platform.settings());
         EventLog log = null;
-        String logPath = System.getProperty("sculk.eventLog");
-        if (logPath != null && !logPath.isBlank()) {
+        String logPath = Settings.optional("eventLog");
+        if (logPath != null) {
             try {
                 log = new EventLog(Path.of(logPath));
             } catch (IOException e) {
                 LOG.error("cannot open event log {}", logPath, e);
             }
         }
-        String controlPort = System.getProperty("sculk.control", "").trim();
+        String controlPort = Settings.string("control").trim();
         boolean controlOn = !java.util.Set.of("off", "false", "no", "none").contains(controlPort.toLowerCase(java.util.Locale.ROOT));
         EventStore store = null;
         if (controlOn) {
-            long captureBytes = Long.getLong("sculk.captureBytes", 2L << 30);
+            long captureBytes = Settings.longValue("captureBytes");
             java.nio.file.Path captureDir = null;
             if (captureBytes > 0) {
                 try {
-                    captureDir = EventStore.newCaptureDir(Path.of(System.getProperty("sculk.captureDir", System.getProperty("java.io.tmpdir"))));
+                    String parent = Settings.optional("captureDir");
+                    captureDir = EventStore.newCaptureDir(Path.of(parent != null ? parent : System.getProperty("java.io.tmpdir")));
                 } catch (IOException e) {
                     LOG.error("cannot make a capture directory; keeping recent events in memory only", e);
                 }
             }
             store = new EventStore(
-                    Integer.getInteger("sculk.controlEvents", 50_000),
-                    Long.getLong("sculk.controlFrameBytes", 128L << 20),
+                    Settings.intValue("controlEvents"),
+                    Settings.longValue("controlFrameBytes"),
                     captureDir, captureBytes);
         }
         // Babel takes Rhino a second or two to load: start it first, while the game loads.
@@ -161,17 +139,17 @@ public final class Sculk {
                 if (!p.isBlank()) extra.add(Path.of(p.trim()));
             }
         }
-        String dir = System.getProperty("sculk.scriptDir");
-        Path scriptDir = dir != null && !dir.isBlank() ? Path.of(dir.trim()) : platform.configDir().resolve("sculk").resolve("scripts");
+        String dir = Settings.optional("scriptDir");
+        Path scriptDir = dir != null ? Path.of(dir) : platform.configDir().resolve("sculk").resolve("scripts");
         sculk.scripts = new ScriptManager(sculk, scriptDir, extra);
         LOG.info("scripts in {}", sculk.scripts.dir());
         Map<String, Object> started = sculk.scripts.startAll();
         LOG.info("started scripts: {}", started.get("loaded"));
-        if (Boolean.parseBoolean(System.getProperty("sculk.watch", "true"))) sculk.scripts.watch(Long.getLong("sculk.watchMillis", 500));
+        if (Settings.bool("watch")) sculk.scripts.watch(Long.getLong("sculk.watchMillis", 500));
         if (controlOn) {
             try {
-                Path file = Path.of(System.getProperty("sculk.controlFile", "sculk-control.json"));
-                String token = System.getProperty("sculk.controlToken");
+                Path file = Path.of(Settings.string("controlFile").trim());
+                String token = Settings.optional("controlToken");
                 int[] ports = controlPort.isEmpty() ? ControlServer.DEFAULT_PORTS : new int[] {Integer.parseInt(controlPort)};
                 sculk.control = new ControlServer(sculk, store, ports, file,
                         token == null || token.isBlank() ? null : token.trim());

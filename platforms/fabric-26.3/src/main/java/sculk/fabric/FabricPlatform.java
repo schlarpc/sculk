@@ -32,6 +32,12 @@ final class FabricPlatform implements Platform {
         return FabricLoader.getInstance().getConfigDir();
     }
 
+    /** Fabric has no config API: a TOML file of sculk's own, config/sculk.toml. */
+    @Override
+    public sculk.core.Settings.Source settings() {
+        return sculk.core.Settings.tomlFile(configDir().resolve("sculk.toml"));
+    }
+
     @Override
     public boolean dedicatedServer() {
         return FabricLoader.getInstance().getEnvironmentType() == net.fabricmc.api.EnvType.SERVER;
