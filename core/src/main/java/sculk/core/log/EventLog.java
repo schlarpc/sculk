@@ -23,6 +23,8 @@ public final class EventLog implements AutoCloseable {
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
 
     private final BufferedWriter writer;
+    /** The last write failed; only the executor thread touches it. */
+    private boolean failing;
     private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "sculk-eventlog");
         t.setDaemon(true);
@@ -75,8 +77,14 @@ public final class EventLog implements AutoCloseable {
                 writer.write(finalLine);
                 writer.newLine();
                 writer.flush();
+                if (failing) {
+                    failing = false;
+                    Sculk.LOG.info("event log writes again");
+                }
             } catch (IOException e) {
-                Sculk.LOG.warn("event log write failed", e);
+                // Once per stretch of failures: a full disk would otherwise fail, and log, every event.
+                if (!failing) Sculk.LOG.warn("event log write failed; entries are lost until writes succeed again", e);
+                failing = true;
             }
         });
     }

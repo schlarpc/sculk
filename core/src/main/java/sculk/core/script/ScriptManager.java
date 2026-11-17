@@ -579,11 +579,16 @@ public final class ScriptManager {
             t.setDaemon(true);
             return t;
         });
+        String[] lastError = {null};
         watcher.scheduleWithFixedDelay(() -> {
             try {
                 pollOnce();
+                lastError[0] = null;
             } catch (RuntimeException | LinkageError e) {
-                Sculk.LOG.warn("watching scripts: {}", e.toString());
+                // Every poll would repeat it: log a failure when it first appears, not twice a second.
+                String text = e.toString();
+                if (!text.equals(lastError[0])) Sculk.LOG.warn("watching scripts: {}", text);
+                lastError[0] = text;
             }
         }, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
     }

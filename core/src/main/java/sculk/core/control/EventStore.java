@@ -223,6 +223,7 @@ public final class EventStore implements AutoCloseable {
             out.put("diskBytesUncompressed", spool.rawBytes);
             out.put("diskCap", spool.maxBytes);
             out.put("pendingWrites", spool.queue.size());
+            if (spool.failed) out.put("captureFailed", true);
         }
         return out;
     }
@@ -816,6 +817,10 @@ public final class EventStore implements AutoCloseable {
         private long segmentFill;
         private final Thread writer;
         private volatile boolean closed;
+        /** The writer has stopped on an error; nothing more is queued. */
+        volatile boolean failed;
+        /** The queue was full; set until it drains, so the warning is logged once per stretch. */
+        private volatile boolean behind;
 
         // The open block, owned by the writer thread.
         private byte[] block = new byte[BLOCK_BYTES + (64 << 10)];
@@ -851,7 +856,19 @@ public final class EventStore implements AutoCloseable {
         }
 
         void enqueue(StoredEvent e) {
-            if (!queue.offer(e)) Sculk.LOG.warn("capture writer is behind; event {} is kept in memory only", e.id());
+            if (failed) return; // Nothing would take it off the queue: the hot ring has it, as without a spool.
+            if (queue.offer(e)) {
+                if (behind && queue.size() < queue.remainingCapacity()) {
+                    behind = false;
+                    Sculk.LOG.info("capture writer caught up; events from {} on are captured again", e.id());
+                }
+                return;
+            }
+            // Once per stretch: logged per event, a writer that cannot keep up (or a full disk) fills the disk with log instead.
+            if (!behind) {
+                behind = true;
+                Sculk.LOG.warn("capture writer is behind; events from {} on are kept in memory only until it catches up", e.id());
+            }
         }
 
         private void run() {
@@ -869,7 +886,9 @@ public final class EventStore implements AutoCloseable {
                 } catch (InterruptedException e) {
                     return;
                 } catch (IOException | RuntimeException e) {
-                    if (!closed) Sculk.LOG.error("capture writer failed; events from {} on are in memory only", batch.isEmpty() ? "?" : batch.get(0).id(), e);
+                    failed = true;
+                    queue.clear();
+                    if (!closed) Sculk.LOG.error("capture writer failed; capture stopped, events from {} on are kept in memory only", batch.isEmpty() ? "?" : batch.get(0).id(), e);
                     return;
                 } finally {
                     batch.clear();
