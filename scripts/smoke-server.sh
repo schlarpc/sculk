@@ -72,37 +72,41 @@ if [ -f "$control" ]; then
     echo 'sculk script stop smoke.js' >&3
     console_saw 'kind == script_stop && script == smoke.js && cause == user' || { echo "FAIL: /sculk script stop"; ok=0; }
     ctl script rm smoke.js > /dev/null || { echo "FAIL: script rm"; ok=0; }
-    # MCP pairing: a client without the token waits until the console accepts it.
-    python3 - "$control" <<'PY' > "$run/smoke.pair" || { echo "FAIL: MCP pairing (waiting)"; ok=0; }
-import json, re, sys, urllib.request
-info = json.load(open(sys.argv[1]))
-def post(body, session=None):
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    # MCP pairing: a client without the token connects, and its tool call is
+    # held until the console accepts it; then that same call runs.
+    rm -f "$run/smoke.pair"
+    python3 - "$control" "$run/smoke.pair" <<'PY' &
+import json, re, sys, time, urllib.request
+info, pair = json.load(open(sys.argv[1])), sys.argv[2]
+def post(body, session=None, timeout=10):
+    # application/json only: the held call answers once, without a progress stream.
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if session: headers["Mcp-Session-Id"] = session
-    r = urllib.request.urlopen(urllib.request.Request(info["mcp"], json.dumps(body).encode(), headers), timeout=10)
+    r = urllib.request.urlopen(urllib.request.Request(info["mcp"], json.dumps(body).encode(), headers), timeout=timeout)
     return r.headers.get("Mcp-Session-Id"), json.load(r)
 session, init = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
     "capabilities": {}, "clientInfo": {"name": "smoke-pair", "version": "0"}}})
 number = re.search(r"/sculk mcp accept (\d+)", init["result"]["instructions"]).group(1)
-_, r = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sculk_status", "arguments": {}}}, session)
-assert r["result"]["isError"], r
-print(session, number)
+with open(pair + ".tmp", "w") as f:
+    f.write(number)
+import os; os.replace(pair + ".tmp", pair)
+start = time.time()
+_, r = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sculk_status", "arguments": {}}},
+            session, timeout=60)
+assert not r["result"].get("isError"), r
+assert '"platform"' in r["result"]["content"][0]["text"], r
+print(f"held {time.time() - start:.1f} s until accepted", file=sys.stderr)
 PY
-    read -r pair_session pair_number < "$run/smoke.pair" || true
-    echo "sculk mcp accept $pair_number" >&3
-    python3 - "$control" "$pair_session" <<'PY' || { echo "FAIL: MCP pairing (accepted at the console)"; ok=0; }
-import json, sys, time, urllib.request
-info, session = json.load(open(sys.argv[1])), sys.argv[2]
-for _ in range(20):
-    req = urllib.request.Request(info["mcp"], json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-        "params": {"name": "sculk_status", "arguments": {}}}).encode(),
-        {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Mcp-Session-Id": session})
-    r = json.load(urllib.request.urlopen(req, timeout=10))
-    if not r["result"]["isError"]:
-        sys.exit(0)
-    time.sleep(0.5)
-sys.exit("still waiting: " + json.dumps(r))
-PY
+    pair_pid=$!
+    for _ in $(seq 1 40); do [ -s "$run/smoke.pair" ] && break; sleep 0.25; done
+    if [ -s "$run/smoke.pair" ]; then
+        sleep 1 # the tool call is waiting now
+        echo "sculk mcp accept $(cat "$run/smoke.pair")" >&3
+        wait "$pair_pid" || { echo "FAIL: MCP pairing (call held, then run once accepted at the console)"; ok=0; }
+    else
+        kill "$pair_pid" 2>/dev/null
+        echo "FAIL: MCP pairing (no number to accept)"; ok=0
+    fi
     rm -f "$run/smoke.pair"
     python3 - "$control" <<'PY' || { echo "FAIL: control server /mcp"; ok=0; }
 import json, sys, urllib.request
