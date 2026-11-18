@@ -151,7 +151,8 @@ public final class Sculk {
                 Path file = Path.of(Settings.string("controlFile").trim());
                 String token = Settings.optional("controlToken");
                 int[] ports = controlPort.isEmpty() ? ControlServer.DEFAULT_PORTS : new int[] {Integer.parseInt(controlPort)};
-                sculk.control = new ControlServer(sculk, store, ports, file,
+                String address = Settings.optional("controlAddress");
+                sculk.control = new ControlServer(sculk, store, address == null ? null : java.net.InetAddress.getByName(address), ports, file,
                         token == null || token.isBlank() ? null : token.trim());
                 if (platform.dedicatedServer()) {
                     for (String line : SculkCommand.remoteUiHelp(sculk.control, null)) LOG.info(line);

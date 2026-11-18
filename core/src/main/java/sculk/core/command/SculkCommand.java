@@ -261,6 +261,11 @@ public final class SculkCommand {
 
     private static <S> int mcpList(S source, ControlServer control, Reply<S> reply) {
         List<Map<String, Object>> clients = control.mcpClients();
+        if (!control.loopbackOnly()) {
+            reply.ok(source, "MCP clients cannot pair in game: the control server listens beyond loopback (controlAddress "
+                    + control.address().getHostAddress() + "), so a client must send the token, which /sculk mcp token prints");
+            return 0;
+        }
         if (clients.isEmpty()) {
             reply.ok(source, "no MCP clients have paired; one that connects to " + control.url() + "/mcp without the token will wait here");
             return 0;
@@ -302,11 +307,22 @@ public final class SculkCommand {
     /**
      * How to reach the web UI of a dedicated server: it listens on the
      * server machine's loopback only, so from elsewhere through a tunnel,
-     * signed in with the token.
+     * signed in with the token; or, beyond loopback ({@code controlAddress}),
+     * directly, with the token.
      */
     public static List<String> remoteUiHelp(ControlServer control, Long id) {
         int port = control.port();
-        String page = control.url() + "/" + (id == null ? "" : "#event=" + id);
+        String fragment = id == null ? "" : "#event=" + id;
+        String page = control.url() + "/" + fragment;
+        if (!control.loopbackOnly()) {
+            String any = control.address().isAnyLocalAddress() ? "<server address>" : null;
+            String remote = any == null ? page : "http://" + any + ":" + port + "/" + fragment;
+            return List.of(
+                    "the web UI listens on " + control.address().getHostAddress() + " port " + port + " (controlAddress), beyond loopback: open " + remote,
+                    "the page asks for the control token: /sculk mcp token prints it, and " + control.file() + " holds it",
+                    "the connection is plain HTTP, token included; over the internet, put a TLS proxy in front",
+                    "MCP clients connect to the same address at /mcp and must send the token (Authorization: Bearer <token>): they cannot pair in game here");
+        }
         return List.of(
                 "the web UI runs on the server machine and listens there only: " + page,
                 "on that machine, open it there; from your own computer, first forward the port: ssh -L "

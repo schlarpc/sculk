@@ -70,6 +70,15 @@ and paste the token that `/sculk mcp token` prints (it is also in
 runs sculk reaches their client's `/sculk`, not the server's; use the server
 console for the server's.
 
+**Without SSH** (many game hosts offer none), set `controlAddress` to
+`0.0.0.0` and open the control port on the host, then browse to
+`http://<server address>:25580/` and paste the token. Anyone who can reach
+that port and has the token can run code in your server, and the connection
+is plain HTTP, token included, so put a TLS proxy in front if you can, and
+fix the port (`control = "25580"`) to the one the host forwards. MCP clients
+must then send the token (`Authorization: Bearer <token>`): pairing in game
+is off beyond loopback.
+
 ![The scripts page: installed scripts, one open in the editor, and its live output](docs/images/scripts.png)
 
 **Scripts.** Write, run and toggle JavaScript in the game, with completions
@@ -84,6 +93,7 @@ written with defaults and comments on first launch.
 | Setting | Default | |
 |---|---|---|
 | `control` | `""` | control server port: empty for the first free one from 25580, a number for that port, `off` for none |
+| `controlAddress` | `""` | where the control server listens: empty for loopback only; an address such as `0.0.0.0` lets other machines reach it, token required (no MCP pairing) and plain HTTP |
 | `controlFile` | `sculk-control.json` | where the port and token are written |
 | `controlToken` | `""` | a fixed token (16+ characters) instead of a random one per launch |
 | `captureBytes` | 2 GiB | how much of the session to keep on disk, in a temporary directory deleted on exit; `0` for memory only |

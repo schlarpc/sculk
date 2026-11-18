@@ -632,6 +632,16 @@ so:
 - anything that changes state is a `POST`; every eval (HTTP or MCP) is
   logged. MCP shares all of these checks.
 
+The `controlAddress` setting can move it off loopback, for hosts where the
+player has no SSH to forward a port through (issue #1): one address, such as
+`0.0.0.0` for all of them. Callers then reach it by names it cannot know
+(a public address, a proxy's), so the `Host` check gives way to the token,
+and an `Origin` must match the request's own `Host` (`http` or `https`, for
+a TLS proxy that keeps it). Every request needs the token there, `/mcp`
+included: MCP clients cannot pair in game, since anyone on the network could
+ask, and a client that tries is told so. The startup log warns that the
+server is reachable and speaks plain HTTP, token included.
+
 ### Web UI
 
 `scripts/sculkctl.py ui` opens `http://127.0.0.1:PORT/#token=...`. The
@@ -803,8 +813,8 @@ Decisions:
   copies between versions grow past small adapters.
 - **UI out of process.** In-game GUI APIs change between versions, and a
   Burp-style UI wants a real window, so the UI is a web page served by the
-  control server. The control server binds to localhost
-  and requires a token, because a reachable packet injector is a
+  control server. The control server binds to localhost unless told
+  otherwise (`controlAddress`) and requires a token, because a reachable packet injector is a
   vulnerability in its own right.
 - **No `nix build` of the mods.** Loom and MDG download and decompile
   Minecraft during the build. Packaging that as fixed-output derivations is

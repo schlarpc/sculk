@@ -41,7 +41,10 @@ import sculk.core.util.Bytes;
  * packets. It is on unless the {@code control} setting is {@code off} (see {@link sculk.core.Settings}), so:
  * <ul>
  *   <li>it listens on the loopback addresses only: 127.0.0.1 and, when the
- *       system has it, ::1, on the same port;</li>
+ *       system has it, ::1, on the same port. The {@code controlAddress}
+ *       setting can name another address instead, for hosts where the
+ *       player cannot forward a port over SSH; see "beyond loopback"
+ *       below;</li>
  *   <li>every request needs {@code Authorization: Bearer <token>}. The token
  *       is random per launch and written, with the port, to a file only the
  *       user can read ({@code sculk-control.json} in the working directory,
@@ -54,6 +57,14 @@ import sculk.core.util.Bytes;
  *       cross-site requests from a browser;</li>
  *   <li>anything that changes state is a POST.</li>
  * </ul>
+ * <p>Beyond loopback (a {@code controlAddress} that is not a loopback
+ * address, such as {@code 0.0.0.0}), callers from other machines are served
+ * and the server cannot know the names they reach it by, so the Host check
+ * gives way to the token: every request needs it, MCP clients included,
+ * which cannot pair without it. An {@code Origin} must still be this server,
+ * as the request's own Host names it (over http or, through a TLS proxy that
+ * keeps the Host header, https). The traffic is plain HTTP, token and
+ * all; a TLS proxy in front is the safe way to reach it over the internet.
  * It must never share a listener with anything a test target can reach.
  *
  * <pre>
@@ -111,8 +122,12 @@ public final class ControlServer {
 
     private final Sculk engine;
     private final EventStore store;
-    /** One per loopback address: 127.0.0.1 always, ::1 when available. */
+    /** One per loopback address (127.0.0.1 always, ::1 when available), or the one {@code controlAddress}. */
     private final List<HttpServer> servers = new java.util.ArrayList<>();
+    /** The address asked for, or null for loopback (both families). */
+    private final InetAddress address;
+    /** False when callers from other machines can reach the server: no Host check, no pairing without the token. */
+    private final boolean loopbackOnly;
     private final int port;
     private final String token;
     private final Set<String> hosts;
@@ -129,7 +144,18 @@ public final class ControlServer {
 
     /** @param ports the ports to try, in order; the first one free is used. */
     public ControlServer(Sculk engine, EventStore store, int[] ports, Path file, String token) throws IOException {
+        this(engine, store, null, ports, file, token);
+    }
+
+    /**
+     * @param address the address to listen on, or null for the loopback
+     *                addresses; any other address than a loopback one (a
+     *                wildcard included) puts the server beyond loopback.
+     */
+    public ControlServer(Sculk engine, EventStore store, InetAddress address, int[] ports, Path file, String token) throws IOException {
         this.engine = engine;
+        this.address = address;
+        this.loopbackOnly = address == null || address.isLoopbackAddress();
         this.store = store;
         this.file = file.toAbsolutePath();
         this.mcp = new McpHandler(engine, store);
@@ -165,8 +191,27 @@ public final class ControlServer {
                 // Best effort.
             }
         }, "sculk-control-cleanup"));
-        Sculk.LOG.info("control server on http://127.0.0.1:{}{} (token in {})",
-                bound, servers.size() > 1 ? " and http://[::1]:" + bound : "", this.file);
+        if (address == null) {
+            Sculk.LOG.info("control server on http://127.0.0.1:{}{} (token in {})",
+                    bound, servers.size() > 1 ? " and http://[::1]:" + bound : "", this.file);
+        } else {
+            Sculk.LOG.info("control server on http://{}:{} (token in {})", literal(address), bound, this.file);
+        }
+        if (!loopbackOnly) {
+            Sculk.LOG.warn("control server: listening on {}, beyond loopback: anyone who can reach this port and has the token "
+                    + "can run code in this game. Traffic is plain HTTP, token included; put a TLS proxy in front to reach it over the internet.",
+                    literal(address));
+            Sculk.LOG.warn("control server: MCP clients cannot pair in game here; they must send the token "
+                    + "(Authorization: Bearer <token>, from /sculk mcp token or {}).", this.file);
+        }
+    }
+
+    /** An address as it goes in a URL: IPv6 in brackets. */
+    private static String literal(InetAddress a) {
+        String h = a.getHostAddress();
+        int zone = h.indexOf('%');
+        if (zone >= 0) h = h.substring(0, zone);
+        return a instanceof java.net.Inet6Address ? "[" + h + "]" : h;
     }
 
     /**
@@ -180,7 +225,7 @@ public final class ControlServer {
     private int bind(int[] candidates) throws IOException {
         for (int i = 0; ; i++) {
             try {
-                int bound = bind(candidates[i]);
+                int bound = address == null ? bind(candidates[i]) : bindAddress(candidates[i]);
                 if (i > 0) Sculk.LOG.info("control server: port {} is taken; using {}", candidates[0], bound);
                 return bound;
             } catch (java.net.BindException e) {
@@ -214,6 +259,12 @@ public final class ControlServer {
         }
     }
 
+    private int bindAddress(int requested) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress(address, requested), 16);
+        servers.add(server);
+        return server.getAddress().getPort();
+    }
+
     /** True for bind failures that mean "no IPv6 here" rather than "port taken". */
     private static boolean noIpv6(java.net.BindException e) {
         String m = String.valueOf(e.getMessage()).toLowerCase(java.util.Locale.ROOT);
@@ -223,11 +274,25 @@ public final class ControlServer {
     public int port() { return port; }
     /** True when the server also listens on ::1. */
     public boolean ipv6() { return servers.size() > 1; }
+    /**
+     * True unless callers from other machines can reach the server
+     * ({@code controlAddress} names an address that is not loopback). Then
+     * MCP clients cannot pair without the token.
+     */
+    public boolean loopbackOnly() { return loopbackOnly; }
+    /** The address listened on, or null for the loopback addresses. */
+    public InetAddress address() { return address; }
     public String token() { return token; }
     public Path file() { return file; }
     public EventStore store() { return store; }
-    /** The base URL, on 127.0.0.1. */
-    public String url() { return "http://127.0.0.1:" + port; }
+    /**
+     * The base URL this machine reaches the server at: 127.0.0.1, unless
+     * {@code controlAddress} names one particular address.
+     */
+    public String url() {
+        boolean local = address == null || address.isAnyLocalAddress();
+        return "http://" + (local ? "127.0.0.1" : literal(address)) + ":" + port;
+    }
     /** The web UI, signed in: the page takes the token from the fragment and drops it from the address bar. */
     public String uiUrl() { return url() + "/#token=" + token; }
     /** The web UI, signed in, showing event {@code id} among all events. */
@@ -287,7 +352,12 @@ public final class ControlServer {
             }
             String tokenRefusal = refusal == null ? refuseToken(ex) : null;
             // Without the token, /mcp still answers: a client can pair (see McpHandler).
-            boolean pairing = tokenRefusal != null && path.equals("/mcp");
+            // Not beyond loopback, where anyone on the network could ask.
+            boolean pairing = tokenRefusal != null && path.equals("/mcp") && loopbackOnly;
+            if (tokenRefusal != null && path.equals("/mcp") && !loopbackOnly) {
+                tokenRefusal = "401 missing or wrong bearer token. This control server listens beyond loopback (controlAddress), "
+                        + "so MCP clients cannot pair in game: send Authorization: Bearer <token>, which /sculk mcp token prints";
+            }
             if (refusal == null && !pairing) refusal = tokenRefusal;
             if (refusal != null) {
                 int status = refusal.startsWith("401") ? 401 : 403;
@@ -353,8 +423,19 @@ public final class ControlServer {
 
     /** Returns "403 reason" for a caller that must not be served at all, or null. */
     private String refuseCaller(HttpExchange ex) {
-        if (!ex.getRemoteAddress().getAddress().isLoopbackAddress()) return "403 not a loopback caller";
         String host = ex.getRequestHeaders().getFirst("Host");
+        if (!loopbackOnly) {
+            // Callers reach it by names it cannot know (a public address, a
+            // proxy's), so the token alone stands in for the Host check. An
+            // Origin must still be the server the request names.
+            String origin = ex.getRequestHeaders().getFirst("Origin");
+            // https: through a TLS proxy that keeps the Host header.
+            if (origin != null && !(host != null && (origin.equalsIgnoreCase("http://" + host) || origin.equalsIgnoreCase("https://" + host)))) {
+                return "403 cross-origin request";
+            }
+            return null;
+        }
+        if (!ex.getRemoteAddress().getAddress().isLoopbackAddress()) return "403 not a loopback caller";
         if (host == null || !hosts.contains(host.toLowerCase(java.util.Locale.ROOT))) return "403 bad Host header";
         String origin = ex.getRequestHeaders().getFirst("Origin");
         if (origin != null && !(origin.startsWith("http://") && hosts.contains(origin.substring(7)))) {

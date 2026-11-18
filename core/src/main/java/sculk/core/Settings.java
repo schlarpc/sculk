@@ -23,6 +23,10 @@ public final class Settings {
     public static final List<Setting> ALL = List.of(
             new Setting("control", "",
                     "Control server (web UI, MCP, sculkctl): empty takes the first free port from 25580, a number asks for that port (0: any), off turns it off."),
+            new Setting("controlAddress", "",
+                    "The address the control server listens on: empty for loopback only (127.0.0.1 and ::1). Another address, such as 0.0.0.0 for all, "
+                    + "lets other machines reach it (for hosts without SSH): every request then needs the token, MCP clients cannot pair without it, "
+                    + "and traffic is plain HTTP."),
             new Setting("controlFile", "sculk-control.json",
                     "Where the control server writes its port and token, relative to the game directory."),
             new Setting("controlToken", "",

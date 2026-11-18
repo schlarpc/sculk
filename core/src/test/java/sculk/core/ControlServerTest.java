@@ -63,7 +63,12 @@ class ControlServerTest {
     }
 
     private static Response request(String method, String path, String body, String... headers) throws IOException {
-        try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), server().port())) {
+        return request(server().port(), host(), method, path, body, headers);
+    }
+
+    /** A request to the server on {@code port}, over loopback, with Host {@code host} unless the headers give one. */
+    private static Response request(int port, String host, String method, String path, String body, String... headers) throws IOException {
+        try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), port)) {
             socket.setSoTimeout(10_000);
             byte[] bytes = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
             StringBuilder req = new StringBuilder(method + " " + path + " HTTP/1.1\r\n");
@@ -72,7 +77,7 @@ class ControlServerTest {
                 req.append(h).append("\r\n");
                 hostGiven |= h.regionMatches(true, 0, "Host:", 0, 5);
             }
-            if (!hostGiven) req.append("Host: ").append(host()).append("\r\n");
+            if (!hostGiven) req.append("Host: ").append(host).append("\r\n");
             req.append("Content-Length: ").append(bytes.length).append("\r\nConnection: close\r\n\r\n");
             OutputStream out = socket.getOutputStream();
             out.write(req.toString().getBytes(StandardCharsets.UTF_8));
@@ -376,6 +381,41 @@ class ControlServerTest {
             }
             assertThrows(java.net.BindException.class,
                     () -> new ControlServer(Sculk.get(), server().store(), busy, file, null), "an exact port that is taken fails");
+        }
+    }
+
+    @Test
+    void beyondLoopbackTheTokenStandsInForTheHostCheckAndNobodyPairs() throws IOException {
+        var file = Files.createTempFile("sculk-control", ".json");
+        ControlServer wide = new ControlServer(Sculk.get(), server().store(), InetAddress.getByName("0.0.0.0"), new int[] {0}, file, null);
+        try {
+            assertFalse(wide.loopbackOnly());
+            assertTrue(server().loopbackOnly());
+            int port = wide.port();
+            String auth = "Authorization: Bearer " + wide.token();
+            String named = "mc.example.net:" + port;
+            // Any name reaches it, with the token; without it, nothing does.
+            assertEquals(200, request(port, named, "GET", "/api/status", null, auth).status());
+            assertEquals(401, request(port, named, "GET", "/api/status", null).status());
+            assertEquals(401, request(port, named, "GET", "/api/status", null, "Authorization: Bearer " + server().token()).status());
+            // An Origin must be the server the request names.
+            assertEquals(200, request(port, named, "POST", "/api/eval", "1", auth, "Origin: http://" + named).status());
+            assertEquals(200, request(port, named, "POST", "/api/eval", "1", auth, "Origin: https://" + named).status());
+            assertEquals(403, request(port, named, "POST", "/api/eval", "1", auth, "Origin: http://evil.example").status());
+            assertEquals(403, request(port, named, "POST", "/api/eval", "1", auth, "Origin: null").status());
+            // MCP without the token does not pair: it is refused, and says why.
+            Response mcp = request(port, named, "POST", "/mcp",
+                    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"clientInfo\":{\"name\":\"x\"}}}");
+            assertEquals(401, mcp.status(), mcp.body());
+            assertTrue(mcp.body().contains("cannot pair"), mcp.body());
+            assertEquals(200, request(port, named, "POST", "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{}}", auth).status());
+            assertEquals("http://127.0.0.1:" + port, wide.url(), "the wildcard is reached on loopback from this machine");
+            String help = String.join("\n", sculk.core.command.SculkCommand.remoteUiHelp(wide, null));
+            assertFalse(help.contains("ssh"), help);
+            assertTrue(help.contains("cannot pair"), help);
+        } finally {
+            wide.stop();
+            Files.deleteIfExists(file);
         }
     }
 
