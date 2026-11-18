@@ -1,1 +1,0 @@
-sculk.tree(sculk.with(new Packages.sculk.core.FakeGame.Packet(1, 'a'), 'text', 'b'));

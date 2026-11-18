@@ -1,1 +1,0 @@
-var mcpValue = 6;mcpValue * 7;

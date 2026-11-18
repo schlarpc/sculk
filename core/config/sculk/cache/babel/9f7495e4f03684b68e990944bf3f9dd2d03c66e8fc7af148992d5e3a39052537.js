@@ -1,1 +1,0 @@
-var t = sculk.tree(new Packages.sculk.core.FakeGame.Packet(1, 'a'));[t.text, t.id + 1, Object.keys(t).length].join('|');

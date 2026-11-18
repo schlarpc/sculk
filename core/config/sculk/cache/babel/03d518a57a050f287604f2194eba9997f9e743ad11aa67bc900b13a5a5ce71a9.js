@@ -1,1 +1,0 @@
-sculk.decoder('sculk.core.ScriptApiTest$Blob', (obj, tree) => {sculk.reader(obj.data()).i32();});

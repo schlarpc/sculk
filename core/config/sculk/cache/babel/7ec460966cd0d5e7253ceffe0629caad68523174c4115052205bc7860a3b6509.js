@@ -1,1 +1,0 @@
-for (var z of [1]) {var _z$a;print((_z$a = z === null || z === void 0 ? void 0 : z.a) !== null && _z$a !== void 0 ? _z$a : 2);}

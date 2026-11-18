@@ -1,1 +1,0 @@
-sculk.scope('filtered.js').seen.join(',') + '|' + sculk.scope('filtered.js').conns;

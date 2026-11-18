@@ -1,1 +1,0 @@
-var s = sculk.scope('watch-436021378800886.js');s ? s.v : null;

@@ -1,1 +1,0 @@
-var replValue = 20;replValue + 22;

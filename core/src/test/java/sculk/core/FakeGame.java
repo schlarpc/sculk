@@ -113,6 +113,8 @@ public final class FakeGame {
             CHAT_LINES.add(line);
             CHAT.add(line.plain());
         }
+        /** Under build/, so the Babel cache and the like stay out of the source tree, and last between test runs. */
+        @Override public java.nio.file.Path configDir() { return java.nio.file.Path.of("build", "test-config"); }
         @Override public String loader() { return "fake"; }
         @Override public String minecraftVersion() { return "0"; }
 

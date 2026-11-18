@@ -1,2 +1,0 @@
-(() => {var r = sculk.reader('ac02fffffffe02c3a901100000000000000001000000000000000100000000000000023fc00000');
-  return [r.varInt(), r.i32(), r.string(), r.bool(), r.i64(), r.varLong(), r.uuid(), r.f32(), r.readable()].join(',');})();

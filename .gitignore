@@ -22,3 +22,5 @@ sculk-control.json
 node_modules/
 # MCP client configuration (scripts/sculkctl.py mcp-config)
 .mcp.json
+# core tests write their config (the Babel cache) under build/; never into the tree
+core/config/

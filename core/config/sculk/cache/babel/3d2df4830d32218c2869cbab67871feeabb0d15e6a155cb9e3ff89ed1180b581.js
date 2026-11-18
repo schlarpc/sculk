@@ -1,1 +1,0 @@
-sculk.scope('ctl-script-435346396884218.js').mine;
