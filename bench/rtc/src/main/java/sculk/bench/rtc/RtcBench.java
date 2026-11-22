@@ -7,6 +7,7 @@ import java.lang.reflect.Constructor;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,47 +24,81 @@ import sculk.shaded.com.dylibso.chicory.wasm.WasmModule;
 /**
  * Runs rust/rtc-bench (two str0m peers and a data channel) under Chicory.
  *
- * <p>{@code --mode interp|aot} (default aot), {@code --runs n} (default 3: the
- * first includes the JVM's own warm-up), and the rest is passed to the wasm
- * ({@code --mb}, {@code --msg}). Each run is a fresh instance; the module is
- * parsed once, as the mod would.
+ * <p>{@code --mode interp|aot} (default aot) and {@code --runs n} (default 5)
+ * are ours; everything else goes to the wasm ({@code --mb}, {@code --msg},
+ * {@code --aes rust|host}). {@code --vs "<args>"} adds a second case, the
+ * same arguments plus these (later ones win), and the runs alternate A, B,
+ * A, B so that whatever else the machine is doing lands on both. Each run is
+ * a fresh instance; the module is parsed once, as the mod would.
+ *
+ * <p>Costs are thread CPU time, not wall time, so a low-priority or busy
+ * machine does not change them much. The summary is the median of each case
+ * without its first run (JIT warm-up).
  */
 public final class RtcBench {
     public static void main(String[] args) throws Exception {
         String mode = "aot";
-        int runs = 3;
-        List<String> wasmArgs = new ArrayList<>(List.of("rtc-bench"));
+        int runs = 5;
+        List<String> base = new ArrayList<>(List.of("rtc-bench"));
+        List<String> vs = null;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--mode" -> mode = args[++i];
                 case "--runs" -> runs = Integer.parseInt(args[++i]);
-                default -> wasmArgs.add(args[i]);
+                case "--vs" -> vs = List.of(args[++i].trim().split("\\s+"));
+                default -> base.add(args[i]);
             }
         }
+        List<List<String>> cases = new ArrayList<>(List.of(base));
+        if (vs != null) {
+            List<String> b = new ArrayList<>(base);
+            b.addAll(vs);
+            cases.add(b);
+        }
 
-        long t = System.nanoTime();
         WasmModule module;
         try (InputStream in = RtcBench.class.getResourceAsStream("rtc-bench.wasm")) {
             module = Parser.parse(in);
         }
-        System.out.printf("java=%s mode=%s parse_ms=%.1f%n",
-                Runtime.version(), mode, (System.nanoTime() - t) / 1e6);
-
+        System.out.printf("java=%s mode=%s%n", Runtime.version(), mode);
         Function<Instance, Machine> machine = switch (mode) {
             case "interp" -> null; // Chicory's default: the interpreter
             case "aot" -> aotMachine();
             default -> throw new IllegalArgumentException("--mode interp|aot");
         };
 
-        for (int run = 1; run <= runs; run++) {
-            Map<String, String> r = runOnce(module, machine, wasmArgs);
-            System.out.printf("run %d: setup %s ms, handshake %s ms (cpu L %s / R %s), "
-                            + "%s MB in %s ms: sender %s MB/s, receiver %s MB/s%n",
-                    run, r.get("setup_ms"), r.get("handshake_ms"),
-                    r.get("handshake_left_cpu_ms"), r.get("handshake_right_cpu_ms"),
-                    r.get("transfer_mb"), r.get("transfer_ms"),
-                    r.get("sender_mb_per_s"), r.get("receiver_mb_per_s"));
+        double[][] sender = new double[cases.size()][runs];
+        double[][] receiver = new double[cases.size()][runs];
+        for (int run = 0; run < runs; run++) {
+            for (int c = 0; c < cases.size(); c++) {
+                Map<String, String> r = runOnce(module, machine, cases.get(c));
+                sender[c][run] = Double.parseDouble(r.get("sender_cpu_ms_per_mb"));
+                receiver[c][run] = Double.parseDouble(r.get("receiver_cpu_ms_per_mb"));
+                System.out.printf("run %d %s: handshake cpu L %s / R %s ms; "
+                                + "per MB: sender %.1f ms, receiver %.1f ms (wall %s ms for %s MB)%n",
+                        run + 1, label(cases.get(c)),
+                        r.get("handshake_left_cpu_ms"), r.get("handshake_right_cpu_ms"),
+                        sender[c][run], receiver[c][run], r.get("transfer_wall_ms"), r.get("transfer_mb"));
+            }
         }
+        System.out.println("median without the first run; % of one core for a 1 MB/s stream:");
+        for (int c = 0; c < cases.size(); c++) {
+            double s = median(sender[c]);
+            double r = median(receiver[c]);
+            System.out.printf("  %-24s sender %.1f ms/MB = %.1f%%, receiver %.1f ms/MB = %.1f%%%n",
+                    label(cases.get(c)), s, s / 10, r, r / 10);
+        }
+    }
+
+    private static String label(List<String> args) {
+        String s = String.join(" ", args.subList(1, args.size()));
+        return s.isEmpty() ? "(defaults)" : s;
+    }
+
+    private static double median(double[] runs) {
+        double[] v = runs.length > 1 ? Arrays.copyOfRange(runs, 1, runs.length) : runs.clone();
+        Arrays.sort(v);
+        return v.length % 2 == 1 ? v[v.length / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
     }
 
     @SuppressWarnings("unchecked")
@@ -91,9 +126,11 @@ public final class RtcBench {
                 .build();
         int exit = 0;
         try (var wasi = WasiPreview1.builder().withOptions(options).build()) {
-            var builder = Instance.builder(module)
-                    .withImportValues(ImportValues.builder().addFunction(wasi.toHostFunctions()).build())
-                    .withStart(false);
+            var imports = ImportValues.builder()
+                    .addFunction(wasi.toHostFunctions())
+                    .addFunction(new SculkHost().functions())
+                    .build();
+            var builder = Instance.builder(module).withImportValues(imports).withStart(false);
             if (machine != null) {
                 builder.withMachineFactory(machine);
             }

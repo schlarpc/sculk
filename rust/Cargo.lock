@@ -741,6 +741,7 @@ dependencies = [
 name = "rtc-bench"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rtc-crypto",
  "str0m",
 ]

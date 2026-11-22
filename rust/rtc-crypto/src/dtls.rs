@@ -14,7 +14,10 @@ use str0m_proto::crypto::dtls::{DtlsCert, DtlsImplError, DtlsInstance, DtlsOutpu
 // ============================================================================
 
 #[derive(Debug)]
-pub(super) struct RustCryptoDtlsProvider;
+pub(super) struct RustCryptoDtlsProvider {
+    // sculk: AES-GCM records through the host (host_aes.rs) rather than RustCrypto.
+    pub(super) host_aes: bool,
+}
 
 impl DtlsProvider for RustCryptoDtlsProvider {
     fn generate_certificate(&self) -> Option<DtlsCert> {
@@ -37,6 +40,13 @@ impl DtlsProvider for RustCryptoDtlsProvider {
         // Create a default dimpl Config with RustCrypto crypto provider
         // ICE verifies return routability before DTLS, making server cookies redundant.
         let mut builder = dimpl::Config::builder().use_server_cookie(false);
+        // sculk: the record cipher, as chosen in crate::provider.
+        #[cfg(target_arch = "wasm32")]
+        if self.host_aes {
+            builder = builder.with_crypto_provider(crate::host_aes::dimpl_provider());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = self.host_aes;
         if let Some(mtu) = mtu {
             builder = builder.mtu(mtu);
         }
