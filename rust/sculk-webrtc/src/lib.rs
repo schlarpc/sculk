@@ -39,6 +39,8 @@ use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
 const ADDR: usize = 18;
+/// Bytes a channel may hold unsent; the host's ChannelLink keeps below this.
+const MAX_BUFFERED: usize = 1 << 20;
 
 struct Conn {
     rtc: Rtc,
@@ -125,6 +127,8 @@ pub extern "C" fn rtc_new(host_aes: u32) -> u32 {
     let aes = if host_aes != 0 { sculk_webrtc_crypto::Aes::Host } else { sculk_webrtc_crypto::Aes::Rust };
     let rtc = Rtc::builder()
         .set_crypto_provider(Arc::new(sculk_webrtc_crypto::provider(aes)))
+        // str0m's default is 128 KiB per channel; a streamed event log wants more in flight.
+        .set_sctp_max_buffered_amount(MAX_BUFFERED)
         .build(Instant::now());
     let conn = Conn { rtc, channels: Vec::new(), pending: None };
     CONNS.with(|c| {

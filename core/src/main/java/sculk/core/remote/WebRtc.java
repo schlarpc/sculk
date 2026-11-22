@@ -285,6 +285,11 @@ public final class WebRtc implements AutoCloseable {
         timers.add(Map.entry(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ms), task));
     }
 
+    /** Whether this is the WebRtc thread, where {@link Connection} may be used. */
+    public boolean onThread() {
+        return Thread.currentThread() == thread;
+    }
+
     private void checkThread() {
         if (Thread.currentThread() != thread) throw new IllegalStateException("use WebRtc.execute");
     }

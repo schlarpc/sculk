@@ -1,7 +1,6 @@
 package sculk.core.remote;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
@@ -41,6 +40,13 @@ public final class RemoteAccess implements AutoCloseable {
         return t;
     });
     private volatile GameSignaling signaling;
+    private final java.util.function.Supplier<Tunnel.Upstream> upstream;
+    /** Threads that read the control server's answers for tunnels. */
+    private final java.util.concurrent.ExecutorService readers = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "sculk-tunnel");
+        t.setDaemon(true);
+        return t;
+    });
 
     /**
      * Starts remote access: loads or makes the key, and starts listening.
@@ -49,8 +55,12 @@ public final class RemoteAccess implements AutoCloseable {
      * @param cacheDir where the relay list is cached ({@code config/sculk/cache})
      * @param port the UDP port for WebRTC; 0 for any
      * @param chat shows a line to the player, or the server console
+     * @param upstream the control server that approved browsers reach, or
+     *     null while it is not running
      */
-    public RemoteAccess(Path dir, Path cacheDir, int port, Consumer<ChatLine> chat) throws IOException {
+    public RemoteAccess(Path dir, Path cacheDir, int port, Consumer<ChatLine> chat,
+            java.util.function.Supplier<Tunnel.Upstream> upstream) throws IOException {
+        this.upstream = upstream;
         Files.createDirectories(dir);
         this.key = loadOrCreateKey(dir.resolve("server.key"));
         this.approvals = new Approvals(dir.resolve("browsers.json"), chat, timers);
@@ -100,6 +110,9 @@ public final class RemoteAccess implements AutoCloseable {
     /** GameSignaling asks for the answer to an approved browser's offer. */
     private CompletableFuture<String> answer(byte[] browserKey, String offer) {
         return webrtc.answer(offer, new WebRtc.Peer() {
+            ChannelLink link;
+            Tunnel tunnel;
+
             @Override
             public void connected(WebRtc.Connection c) {
                 approvals.connected(browserKey, c);
@@ -107,14 +120,28 @@ public final class RemoteAccess implements AutoCloseable {
             }
 
             @Override
+            public void opened(WebRtc.Connection c, int channel, String label) {
+                if (!label.equals("sculk") || tunnel != null) return;
+                link = new ChannelLink(webrtc, c, channel);
+                tunnel = new Tunnel(link, upstream, readers);
+            }
+
+            @Override
             public void message(WebRtc.Connection c, int channel, byte[] data, boolean binary) {
-                // Until the control server is carried over the channel: echo.
-                c.send(channel, ("sculk: " + new String(data, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8), false);
+                if (tunnel != null && binary) tunnel.receive(data);
+            }
+
+            @Override
+            public void writable(WebRtc.Connection c, int channel) {
+                if (link != null) link.flush();
             }
 
             @Override
             public void closed(WebRtc.Connection c) {
                 approvals.disconnected(browserKey, c);
+                if (tunnel != null) tunnel.close();
+                if (link != null) link.close();
+                LOG.info("remote access: browser #{} disconnected", approvals.browser(browserKey).number);
             }
         });
     }
@@ -137,5 +164,6 @@ public final class RemoteAccess implements AutoCloseable {
         timers.shutdownNow();
         if (signaling != null) signaling.close();
         webrtc.close();
+        readers.shutdownNow();
     }
 }

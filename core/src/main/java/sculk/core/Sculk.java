@@ -166,7 +166,23 @@ public final class Sculk {
             try {
                 Path base = platform.configDir().resolve("sculk");
                 sculk.remote = new sculk.core.remote.RemoteAccess(base.resolve("remote"), base.resolve("cache"),
-                        Settings.intValue("remotePort"), line -> sculk.chat(line, null));
+                        Settings.intValue("remotePort"), line -> sculk.chat(line, null), () -> {
+                            ControlServer c = sculk.control;
+                            if (c == null) return null;
+                            java.net.URI uri = java.net.URI.create(c.url() + "/");
+                            String token = c.token();
+                            return new sculk.core.remote.Tunnel.Upstream() {
+                                @Override
+                                public java.net.URI base() {
+                                    return uri;
+                                }
+
+                                @Override
+                                public String token() {
+                                    return token;
+                                }
+                            };
+                        });
                 LOG.info("remote access: {} (each new browser needs /sculk remote accept)", sculk.remote.link());
             } catch (IOException | RuntimeException e) {
                 LOG.error("cannot start remote access", e);
