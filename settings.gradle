@@ -16,6 +16,7 @@ include 'core'
 include 'libs:rhino'
 include 'libs:aircompressor'
 include 'libs:chicory'
+include 'libs:webrtc'
 
 // Benchmarks, run by hand; never shipped.
 include 'bench:webrtc'

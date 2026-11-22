@@ -17,15 +17,18 @@ repositories {
     mavenCentral()
 }
 
-sourceSets {
+configurations {
     // Runs at build time only: Chicory's compiler, unrelocated, with ASM.
-    aot
+    aotTool {
+        canBeConsumed = false
+        canBeResolved = true
+    }
 }
 
 dependencies {
     // The relocated runtime and WASI, as the mod would ship them.
     implementation project(path: ':libs:chicory', configuration: 'shaded')
-    aotImplementation "com.dylibso.chicory:compiler:${rootProject.chicory_version}"
+    aotTool project(path: ':libs:chicory', configuration: 'aotTool')
 }
 
 def wasmProp = providers.gradleProperty('sculk.webrtcBenchWasm')
@@ -46,8 +49,8 @@ def aotOut = layout.buildDirectory.dir('generated/aot')
 def aotCompile = tasks.register('aotCompile', JavaExec) {
     description = 'Compiles sculk-webrtc-bench.wasm to JVM bytecode with Chicory.'
     if (!wasmProp.isPresent()) dependsOn nixWasm
-    classpath = sourceSets.aot.runtimeClasspath
-    mainClass = 'sculk.bench.aot.WasmAot'
+    classpath = configurations.aotTool
+    mainClass = 'sculk.chicory.WasmAot'
     inputs.file(wasmFile)
     outputs.dir(aotOut)
     args wasmFile.path, 'sculk.bench.webrtc.WebRtcBenchMachine', aotOut.get().asFile.path,

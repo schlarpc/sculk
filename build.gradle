@@ -75,3 +75,15 @@ tasks.register('relays', Exec) {
             'build', '.#relays', '--out-link', 'build/relays'
 }
 ext.relaysDir = providers.gradleProperty('sculk.relaysDir')
+
+// The remote access WebRTC module (rust/sculk-webrtc): `nix build .#webrtc`.
+// libs/webrtc compiles it to JVM classes for the mod.
+tasks.register('webrtc', Exec) {
+    description = 'Builds rust/sculk-webrtc for wasm32-wasip1 with Nix into build/webrtc.'
+    workingDir = rootDir
+    inputs.files('flake.nix', 'flake.lock')
+    inputs.dir('rust')
+    outputs.upToDateWhen { false } // Nix does its own caching, and the out-link is a symlink.
+    commandLine 'nix', '--extra-experimental-features', 'nix-command flakes',
+            'build', '.#webrtc', '--out-link', 'build/webrtc'
+}

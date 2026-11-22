@@ -1,0 +1,63 @@
+// The remote access WebRTC module (rust/sculk-webrtc, built by Nix), compiled
+// to JVM classes at build time with Chicory's compiler and exposed as the
+// 'shaded' configuration: the machine classes, sculk.core.remote.WebRtcMachine*,
+// which use libs/chicory's relocated runtime, and the module trimmed to what
+// Chicory still reads at run time (sculk/remote/sculk_webrtc.wasm).
+//
+// -Psculk.webrtcWasm=<file> uses a module at hand instead of Nix.
+plugins {
+    id 'java-base'
+}
+
+repositories {
+    mavenCentral() // Chicory's compiler, for aotTool
+}
+
+configurations {
+    aotTool {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+    shaded {
+        canBeConsumed = true
+        canBeResolved = false
+    }
+}
+
+dependencies {
+    aotTool project(path: ':libs:chicory', configuration: 'aotTool')
+}
+
+def wasmProp = providers.gradleProperty('sculk.webrtcWasm')
+def wasmFile = wasmProp.isPresent()
+        ? rootProject.file(wasmProp.get())
+        : rootProject.layout.buildDirectory.file('webrtc/lib/sculk_webrtc.wasm').get().asFile
+def out = layout.buildDirectory.dir('aot')
+
+def aotCompile = tasks.register('aotCompile', JavaExec) {
+    description = 'Compiles sculk_webrtc.wasm to JVM classes with Chicory.'
+    if (!wasmProp.isPresent()) dependsOn rootProject.tasks.named('webrtc')
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(17) }
+    classpath = configurations.aotTool
+    mainClass = 'sculk.chicory.WasmAot'
+    inputs.file(wasmFile)
+    outputs.dir(out)
+    doFirst { delete out }
+    args wasmFile.path, 'sculk.core.remote.WebRtcMachine', out.get().asFile.path,
+            'com/dylibso/chicory/', 'sculk/shaded/com/dylibso/chicory/',
+            out.get().file('sculk/remote/sculk_webrtc.wasm').asFile.path
+}
+
+def jar = tasks.register('jar', Jar) {
+    archiveClassifier = 'shaded'
+    from(aotCompile)
+    manifest.attributes(
+        'Sculk-Shaded-From': 'rust/sculk-webrtc (str0m, RustCrypto, dimpl; see rust/Cargo.lock)',
+        'Sculk-Shaded-License': 'MIT OR Apache-2.0 (str0m and its dependencies)',
+    )
+}
+tasks.named('assemble') { dependsOn jar }
+
+artifacts {
+    shaded jar
+}

@@ -5,9 +5,11 @@
 // copy of a library across all mods.
 //
 // The runtime (with its interpreter) and WASI only. Chicory's compiler, which
-// turns wasm into JVM bytecode with ASM, runs at build time instead (see
-// bench/webrtc), so ASM never ships in the mod and the game never generates
-// classes. Its output refers to the runtime by the relocated names.
+// turns wasm into JVM bytecode with ASM, runs at build time instead: the
+// 'aotTool' configuration is the classpath of sculk.chicory.WasmAot (in
+// src/aot), which libs/webrtc and bench/webrtc run. So ASM never ships in the
+// mod and the game never generates classes. Its output refers to the runtime
+// by the relocated names.
 //
 // Java 11 bytecode, no dependencies besides each other (error_prone's
 // annotations, which log depends on, are not needed at run time).
@@ -20,10 +22,17 @@ repositories {
     mavenCentral()
 }
 
+sourceSets {
+    aot
+}
+
 dependencies {
     implementation "com.dylibso.chicory:runtime:${rootProject.chicory_version}"
     implementation "com.dylibso.chicory:wasi:${rootProject.chicory_version}"
+    aotImplementation "com.dylibso.chicory:compiler:${rootProject.chicory_version}"
 }
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 tasks.named('jar') { enabled = false }
 
@@ -45,8 +54,16 @@ configurations {
         canBeConsumed = true
         canBeResolved = false
     }
+    aotTool {
+        canBeConsumed = true
+        canBeResolved = false
+        extendsFrom configurations.aotRuntimeClasspath
+    }
 }
 
 artifacts {
     shaded tasks.named('shadowJar')
+    aotTool(sourceSets.aot.java.destinationDirectory) {
+        builtBy tasks.named('compileAotJava')
+    }
 }

@@ -32,6 +32,10 @@ dependencies {
     api project(path: ':libs:rhino', configuration: 'shaded')
     // Relocated zstd (sculk.shaded.io.airlift.compress); see libs/aircompressor.
     api project(path: ':libs:aircompressor', configuration: 'shaded')
+    // Relocated Chicory (sculk.shaded.com.dylibso.chicory), and the remote
+    // access WebRTC module compiled for it; see libs/chicory, libs/webrtc.
+    api project(path: ':libs:chicory', configuration: 'shaded')
+    api project(path: ':libs:webrtc', configuration: 'shaded')
 
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
