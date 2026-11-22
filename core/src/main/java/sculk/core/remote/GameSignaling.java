@@ -14,7 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +48,7 @@ public final class GameSignaling implements AutoCloseable {
     private final KeyPair serverKey;
     private final String topic;
     private final Approver approver;
-    private final Function<String, CompletableFuture<String>> answerer;
+    private final BiFunction<byte[], String, CompletableFuture<String>> answerer;
     private final LongSupplier nowMs;
     private final ScheduledExecutorService thread;
     private final RelayPool pool;
@@ -81,15 +81,16 @@ public final class GameSignaling implements AutoCloseable {
 
     /**
      * @param relays the relay list ({@link RelayList#current()})
-     * @param answerer turns a browser's WebRTC offer into the game's answer
+     * @param answerer turns an approved browser's WebRTC offer into the
+     *     game's answer, given the browser's static key and its offer
      */
     public GameSignaling(KeyPair serverKey, List<String> relays, Approver approver,
-            Function<String, CompletableFuture<String>> answerer) {
+            BiFunction<byte[], String, CompletableFuture<String>> answerer) {
         this(serverKey, relays, approver, answerer, null, System::currentTimeMillis);
     }
 
     GameSignaling(KeyPair serverKey, List<String> relays, Approver approver,
-            Function<String, CompletableFuture<String>> answerer, RelayPool.Connector connector, LongSupplier nowMs) {
+            BiFunction<byte[], String, CompletableFuture<String>> answerer, RelayPool.Connector connector, LongSupplier nowMs) {
         this.serverKey = serverKey;
         this.topic = Nostr.serverTopic(X25519.raw(serverKey.getPublic()));
         this.approver = approver;
@@ -205,7 +206,7 @@ public final class GameSignaling implements AutoCloseable {
                 finish(s, "{\"status\":\"denied\"}");
                 return;
             }
-            answerer.apply(offer).whenComplete((answer, err) -> run(() -> {
+            answerer.apply(s.noise.remoteStatic(), offer).whenComplete((answer, err) -> run(() -> {
                 if (sessions.get(s.sidHex) != s || s.state != State.APPROVAL) return;
                 if (err != null) {
                     LOG.warn("remote signaling: no WebRTC answer: {}", err.toString());

@@ -31,6 +31,11 @@ public final class Settings {
                     "Where the control server writes its port and token, relative to the game directory."),
             new Setting("controlToken", "",
                     "A fixed bearer token (16 characters or more) instead of a random one per launch; empty for random."),
+            new Setting("remote", false,
+                    "Remote access from any browser, with no port forwarding: the game meets browsers through public Nostr relays and "
+                    + "connects to them directly with WebRTC; each new browser needs approval in game (/sculk remote). See docs/REMOTE.md."),
+            new Setting("remotePort", 0,
+                    "The UDP port remote access uses for WebRTC; 0 for any. Fixing it only matters for firewall rules."),
             new Setting("captureBytes", 2L << 30,
                     "The control server captures every event to a temporary directory, deleted on exit, up to this many bytes; 0 keeps recent events in memory only."),
             new Setting("captureDir", "",

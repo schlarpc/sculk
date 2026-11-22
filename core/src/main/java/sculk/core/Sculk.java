@@ -77,6 +77,7 @@ public final class Sculk {
     private long lastEventId;
     private ScriptManager scripts;
     private ControlServer control;
+    private sculk.core.remote.RemoteAccess remote;
 
     private Sculk(Platform platform, EventLog eventLog, EventStore eventStore) {
         this.platform = platform;
@@ -161,6 +162,16 @@ public final class Sculk {
                 LOG.error("cannot start control server on {}", controlPort.isEmpty() ? "any port" : "port " + controlPort, e);
             }
         }
+        if (Settings.bool("remote")) {
+            try {
+                Path base = platform.configDir().resolve("sculk");
+                sculk.remote = new sculk.core.remote.RemoteAccess(base.resolve("remote"), base.resolve("cache"),
+                        Settings.intValue("remotePort"), line -> sculk.chat(line, null));
+                LOG.info("remote access: {} (each new browser needs /sculk remote accept)", sculk.remote.link());
+            } catch (IOException | RuntimeException e) {
+                LOG.error("cannot start remote access", e);
+            }
+        }
         return sculk;
     }
 
@@ -174,6 +185,8 @@ public final class Sculk {
     public List<SculkConnection> connections() { return new ArrayList<>(connections); }
     /** The control server, or null when it is off or failed to start. */
     public ControlServer control() { return control; }
+    /** Remote access, or null when it is off or failed to start. */
+    public sculk.core.remote.RemoteAccess remote() { return remote; }
 
     public void addPacketListener(Consumer<PacketEvent> listener) { packetListeners.add(listener); }
     public void addConnectionListener(Consumer<SculkConnection> listener) { connectionListeners.add(listener); }

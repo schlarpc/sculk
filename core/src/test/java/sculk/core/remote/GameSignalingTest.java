@@ -98,7 +98,7 @@ class GameSignalingTest {
 
     private static GameSignaling game(FakeRelays.Net net, KeyPair key, GameSignaling.Approver approver) {
         return new GameSignaling(key, RELAYS, approver,
-                offer -> CompletableFuture.completedFuture("ANSWER to " + offer), net, System::currentTimeMillis);
+                (browser, offer) -> CompletableFuture.completedFuture("ANSWER to " + offer), net, System::currentTimeMillis);
     }
 
     @Test

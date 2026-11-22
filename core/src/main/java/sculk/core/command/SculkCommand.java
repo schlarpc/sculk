@@ -19,6 +19,8 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import sculk.core.Sculk;
 import sculk.core.control.ControlServer;
+import sculk.core.remote.Approvals;
+import sculk.core.remote.RemoteAccess;
 import sculk.core.platform.ChatLine;
 import sculk.core.script.ScriptManager;
 
@@ -35,6 +37,11 @@ import sculk.core.script.ScriptManager;
  *   <li>{@code /sculk mcp list}, {@code accept [number]}, {@code revoke
  *       <number>}: MCP clients that connect without the token wait for the
  *       player to accept them; {@code /sculk mcp token} prints the token;</li>
+ *   <li>{@code /sculk remote link}, {@code open}, {@code list}, {@code accept <number>
+ *       [remember]}, {@code deny <number>}, {@code revoke <number>}: remote
+ *       access from any browser (docs/REMOTE.md); each new browser waits
+ *       for the player to accept it, and a remembered one comes back
+ *       without asking;</li>
  *   <li>{@code /sculk ui [event]}: in a game client, opens the web UI, at
  *       that event if given (a mark's reply offers it as a button), in the
  *       browser, signed in. The token goes straight to the browser, never
@@ -104,6 +111,42 @@ public final class SculkCommand {
                                     reply.ok(ctx.getSource(), "control token: " + c.token() + " (for " + c.url() + ")");
                                     return 1;
                                 }))));
+        root.then(LiteralArgumentBuilder.<S>literal("remote")
+                .then(LiteralArgumentBuilder.<S>literal("link")
+                        .executes(ctx -> withRemote(ctx.getSource(), reply, r -> remoteLink(ctx.getSource(), r, reply, openUrl))))
+                .then(LiteralArgumentBuilder.<S>literal("open")
+                        .executes(ctx -> withRemote(ctx.getSource(), reply, r -> {
+                            if (openUrl == null) {
+                                reply.fail(ctx.getSource(), "there is no browser here; open " + r.link() + " on another machine");
+                                return 0;
+                            }
+                            openUrl.accept(r.link());
+                            return 1;
+                        })))
+                .then(LiteralArgumentBuilder.<S>literal("list")
+                        .executes(ctx -> withRemote(ctx.getSource(), reply, r -> remoteList(ctx.getSource(), r, reply))))
+                .then(LiteralArgumentBuilder.<S>literal("accept")
+                        .then(SculkCommand.<S>browserNumber(Approvals.Browser::isPending)
+                                .executes(ctx -> withRemote(ctx.getSource(), reply,
+                                        r -> remoteAccept(ctx.getSource(), r, getInteger(ctx, "number"), false, reply)))
+                                .then(LiteralArgumentBuilder.<S>literal("remember")
+                                        .executes(ctx -> withRemote(ctx.getSource(), reply,
+                                                r -> remoteAccept(ctx.getSource(), r, getInteger(ctx, "number"), true, reply))))))
+                .then(LiteralArgumentBuilder.<S>literal("deny")
+                        .then(SculkCommand.<S>browserNumber(Approvals.Browser::isPending)
+                                .executes(ctx -> withRemote(ctx.getSource(), reply, r -> {
+                                    var b = r.approvals().deny(getInteger(ctx, "number"));
+                                    reply.ok(ctx.getSource(), "refused browser #" + b.number);
+                                    return 1;
+                                }))))
+                .then(LiteralArgumentBuilder.<S>literal("revoke")
+                        .then(SculkCommand.<S>browserNumber(b -> b.isRemembered() || b.connected() > 0)
+                                .executes(ctx -> withRemote(ctx.getSource(), reply, r -> {
+                                    int n = getInteger(ctx, "number");
+                                    r.revoke(n);
+                                    reply.ok(ctx.getSource(), "browser #" + n + " is forgotten and disconnected");
+                                    return 1;
+                                })))));
         root.then(LiteralArgumentBuilder.<S>literal("ui")
                 .executes(ctx -> ui(ctx.getSource(), reply, openUrl, null))
                 .then(RequiredArgumentBuilder.<S, Long>argument("event", longArg(1))
@@ -220,6 +263,81 @@ public final class SculkCommand {
             }
         }
         return Boolean.TRUE.equals(r.get("ok")) ? 1 : 0;
+    }
+
+    // ---- remote access ----
+
+    @FunctionalInterface
+    private interface RemoteAction {
+        int run(RemoteAccess remote) throws java.io.IOException;
+    }
+
+    /** Runs {@code action} with remote access, answering its refusals as failures. */
+    private static <S> int withRemote(S source, Reply<S> reply, RemoteAction action) {
+        Sculk sculk = Sculk.get();
+        RemoteAccess remote = sculk == null ? null : sculk.remote();
+        if (remote == null) {
+            reply.fail(source, "remote access is off (set remote = true in config/sculk.toml) or failed to start; see the game log");
+            return 0;
+        }
+        try {
+            return action.run(remote);
+        } catch (IllegalArgumentException e) {
+            reply.fail(source, e.getMessage());
+            return 0;
+        } catch (java.io.IOException e) {
+            reply.fail(source, "cannot save remembered browsers: " + e.getMessage());
+            return 0;
+        }
+    }
+
+    /** A browser's number; completes from those {@code which} accepts. */
+    private static <S> RequiredArgumentBuilder<S, Integer> browserNumber(Predicate<Approvals.Browser> which) {
+        SuggestionProvider<S> suggest = (ctx, builder) -> {
+            Sculk sculk = Sculk.get();
+            if (sculk != null && sculk.remote() != null) {
+                for (Approvals.Browser b : sculk.remote().approvals().browsers()) {
+                    String n = String.valueOf(b.number);
+                    if (which.test(b) && n.startsWith(builder.getRemaining())) builder.suggest(n);
+                }
+            }
+            return builder.buildFuture();
+        };
+        return RequiredArgumentBuilder.<S, Integer>argument("number", integer(1)).suggests(suggest);
+    }
+
+    private static <S> int remoteLink(S source, RemoteAccess remote, Reply<S> reply, Consumer<String> openUrl) {
+        ChatLine line = ChatLine.of("remote access: " + remote.link());
+        if (openUrl != null) line = line.text(" ").button("open", "/sculk remote open", "Open it in this computer's browser");
+        reply.send(source, line, false);
+        reply.ok(source, "anyone with the link can ask to connect; each new browser still needs /sculk remote accept");
+        return 1;
+    }
+
+    private static <S> int remoteList(S source, RemoteAccess remote, Reply<S> reply) {
+        List<Approvals.Browser> list = remote.approvals().browsers();
+        if (list.isEmpty()) {
+            reply.ok(source, "no browsers yet; /sculk remote link gives the link to open");
+            return 1;
+        }
+        for (Approvals.Browser b : list) {
+            List<String> state = new ArrayList<>();
+            if (b.isPending()) state.add("waiting, code " + b.code());
+            if (b.connected() > 0) state.add("connected");
+            if (b.isRemembered()) state.add("remembered");
+            if (state.isEmpty()) state.add("seen");
+            ChatLine line = ChatLine.of("#" + b.number + " " + b.shortKey() + "…: " + String.join(", ", state));
+            if (b.isPending()) line = line.text(" ").button("accept", "/sculk remote accept " + b.number, "Let it in until the game exits");
+            reply.send(source, line, false);
+        }
+        return 1;
+    }
+
+    private static <S> int remoteAccept(S source, RemoteAccess remote, int number, boolean remember, Reply<S> reply)
+            throws java.io.IOException {
+        var b = remote.approvals().accept(number, remember);
+        reply.ok(source, "approved browser #" + b.number + (remember ? ", and it will be let in next time" : " until the game exits"));
+        return 1;
     }
 
     // ---- control server: mcp and ui ----
