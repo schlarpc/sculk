@@ -9,10 +9,11 @@ this page is the wire protocol, which two codebases implement:
 - the shell, the page at <https://sculk-ui.github.io/>:
   [sculk-ui/sculk-ui.github.io](https://github.com/sculk-ui/sculk-ui.github.io).
 
-Status: everything below works end to end (Chrome to a game's WebRtc
-engine, through the live relays), but nothing in the game starts it yet.
-Still to come: the server's persistent key and its link, approval in game
-and remembered browsers, and the game's UI over the data channel.
+Status: works end to end with `remote = true` in `config/sculk.toml`: the
+game prints its link, a new browser waits for `/sculk remote accept`, and
+one accepted with `remember` comes back without asking. What it carries is
+an echo for now: the control server and the game's UI over the data
+channel are still to come.
 
 ## Overview
 
