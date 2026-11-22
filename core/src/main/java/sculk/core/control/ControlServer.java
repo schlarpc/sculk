@@ -203,6 +203,8 @@ public final class ControlServer {
                     literal(address));
             Sculk.LOG.warn("control server: MCP clients cannot pair in game here; they must send the token "
                     + "(Authorization: Bearer <token>, from /sculk mcp token or {}).", this.file);
+            Sculk.LOG.warn("control server: controlAddress beyond loopback is deprecated; remote access (remote = true in config/sculk.toml) "
+                    + "reaches the web UI from any browser with no open port, end-to-end encrypted, each browser approved in game.");
         }
     }
 

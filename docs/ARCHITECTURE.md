@@ -640,7 +640,11 @@ and an `Origin` must match the request's own `Host` (`http` or `https`, for
 a TLS proxy that keeps it). Every request needs the token there, `/mcp`
 included: MCP clients cannot pair in game, since anyone on the network could
 ask, and a client that tries is told so. The startup log warns that the
-server is reachable and speaks plain HTTP, token included.
+server is reachable and speaks plain HTTP, token included, and that this use
+of `controlAddress` is deprecated: remote access (`remote = true`,
+[REMOTE.md](REMOTE.md)) covers the same hosts with no open port, end-to-end
+encryption and approval per browser. It stays until the `sculkctl` bridge
+(issue #6) covers the CLI and MCP remotely.
 
 ### Web UI
 

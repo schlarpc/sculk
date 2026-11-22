@@ -155,9 +155,6 @@ public final class Sculk {
                 String address = Settings.optional("controlAddress");
                 sculk.control = new ControlServer(sculk, store, address == null ? null : java.net.InetAddress.getByName(address), ports, file,
                         token == null || token.isBlank() ? null : token.trim());
-                if (platform.dedicatedServer()) {
-                    for (String line : SculkCommand.remoteUiHelp(sculk.control, null)) LOG.info(line);
-                }
             } catch (IOException | RuntimeException e) {
                 LOG.error("cannot start control server on {}", controlPort.isEmpty() ? "any port" : "port " + controlPort, e);
             }
@@ -187,6 +184,10 @@ public final class Sculk {
             } catch (IOException | RuntimeException e) {
                 LOG.error("cannot start remote access", e);
             }
+        }
+        if (sculk.control != null && platform.dedicatedServer()) {
+            String link = sculk.remote == null ? null : sculk.remote.link();
+            for (String line : SculkCommand.remoteUiHelp(sculk.control, link, null)) LOG.info(line);
         }
         return sculk;
     }

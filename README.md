@@ -63,21 +63,32 @@ dedicated server offers them to operators.
 **On a dedicated server**, the web UI listens on the server machine's
 loopback only (`http://127.0.0.1:25580/`), and there is no browser there to
 open. The server log says how to reach it at startup, and so does `/sculk ui`
-at the server console. In short: forward the port from your computer
+at the server console.
+
+**Remote access** is the easy way: set `remote = true` in
+`config/sculk.toml`, restart, and open the link the server prints
+(`https://sculk-ui.github.io/#…`) in any browser. Nothing needs a port
+opened or forwarded, the connection is end-to-end encrypted, and each new
+browser waits for `/sculk remote accept` at the console. See
+[docs/REMOTE.md](docs/REMOTE.md).
+
+**Over SSH**, forward the port from your computer
 (`ssh -L 25580:127.0.0.1:25580 you@server`), open `http://127.0.0.1:25580/`,
 and paste the token that `/sculk mcp token` prints (it is also in
 `sculk-control.json` in the server directory). A player whose own game also
 runs sculk reaches their client's `/sculk`, not the server's; use the server
 console for the server's.
 
-**Without SSH** (many game hosts offer none), set `controlAddress` to
-`0.0.0.0` and open the control port on the host, then browse to
+**`controlAddress` (deprecated)**: before remote access, the way in
+without SSH was to set `controlAddress` to `0.0.0.0` and open the control
+port on the host, then browse to
 `http://<server address>:25580/` and paste the token. Anyone who can reach
 that port and has the token can run code in your server, and the connection
 is plain HTTP, token included, so put a TLS proxy in front if you can, and
 fix the port (`control = "25580"`) to the one the host forwards. MCP clients
 must then send the token (`Authorization: Bearer <token>`): pairing in game
-is off beyond loopback.
+is off beyond loopback. It still works, and logs a warning; prefer remote
+access.
 
 ![The scripts page: installed scripts, one open in the editor, and its live output](docs/images/scripts.png)
 
@@ -93,7 +104,9 @@ written with defaults and comments on first launch.
 | Setting | Default | |
 |---|---|---|
 | `control` | `""` | control server port: empty for the first free one from 25580, a number for that port, `off` for none |
-| `controlAddress` | `""` | where the control server listens: empty for loopback only; an address such as `0.0.0.0` lets other machines reach it, token required (no MCP pairing) and plain HTTP |
+| `controlAddress` | `""` | where the control server listens: empty for loopback only; an address such as `0.0.0.0` lets other machines reach it, token required (no MCP pairing) and plain HTTP; deprecated beyond loopback, use `remote` |
+| `remote` | `false` | remote access from any browser, no open port ([docs/REMOTE.md](docs/REMOTE.md)) |
+| `remotePort` | `0` | the UDP port remote access uses; `0` for any |
 | `controlFile` | `sculk-control.json` | where the port and token are written |
 | `controlToken` | `""` | a fixed token (16+ characters) instead of a random one per launch |
 | `captureBytes` | 2 GiB | how much of the session to keep on disk, in a temporary directory deleted on exit; `0` for memory only |

@@ -413,7 +413,8 @@ public final class SculkCommand {
     private static <S> int ui(S source, Reply<S> reply, Consumer<String> openUrl, Long id) {
         return withControl(source, reply, control -> {
             if (openUrl == null) {
-                for (String line : remoteUiHelp(control, id)) reply.ok(source, line);
+                RemoteAccess remote = Sculk.get() == null ? null : Sculk.get().remote();
+                for (String line : remoteUiHelp(control, remote == null ? null : remote.link(), id)) reply.ok(source, line);
                 return 1;
             }
             openUrl.accept(id == null ? control.uiUrl() : control.uiUrl(id));
@@ -423,12 +424,24 @@ public final class SculkCommand {
     }
 
     /**
-     * How to reach the web UI of a dedicated server: it listens on the
-     * server machine's loopback only, so from elsewhere through a tunnel,
-     * signed in with the token; or, beyond loopback ({@code controlAddress}),
-     * directly, with the token.
+     * How to reach the web UI of a dedicated server: through remote access
+     * when it is on ({@code remoteLink}, else null); otherwise it listens on
+     * the server machine's loopback only, so from elsewhere through a
+     * tunnel, signed in with the token, or, beyond loopback
+     * ({@code controlAddress}, deprecated), directly, with the token.
      */
-    public static List<String> remoteUiHelp(ControlServer control, Long id) {
+    public static List<String> remoteUiHelp(ControlServer control, String remoteLink, Long id) {
+        if (remoteLink != null) {
+            return List.of(
+                    "open " + remoteLink + " in any browser: remote access connects it to this server, no port forwarding",
+                    "a new browser waits for approval: /sculk remote list shows it, /sculk remote accept <number> lets it in");
+        }
+        List<String> lines = new ArrayList<>(localUiHelp(control, id));
+        lines.add("or, with no port to forward: set remote = true in config/sculk.toml and restart, for a link that works in any browser (docs/REMOTE.md)");
+        return lines;
+    }
+
+    private static List<String> localUiHelp(ControlServer control, Long id) {
         int port = control.port();
         String fragment = id == null ? "" : "#event=" + id;
         String page = control.url() + "/" + fragment;
@@ -436,7 +449,7 @@ public final class SculkCommand {
             String any = control.address().isAnyLocalAddress() ? "<server address>" : null;
             String remote = any == null ? page : "http://" + any + ":" + port + "/" + fragment;
             return List.of(
-                    "the web UI listens on " + control.address().getHostAddress() + " port " + port + " (controlAddress), beyond loopback: open " + remote,
+                    "the web UI listens on " + control.address().getHostAddress() + " port " + port + " (controlAddress, deprecated), beyond loopback: open " + remote,
                     "the page asks for the control token: /sculk mcp token prints it, and " + control.file() + " holds it",
                     "the connection is plain HTTP, token included; over the internet, put a TLS proxy in front",
                     "MCP clients connect to the same address at /mcp and must send the token (Authorization: Bearer <token>): they cannot pair in game here");

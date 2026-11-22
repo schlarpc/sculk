@@ -26,7 +26,7 @@ public final class Settings {
             new Setting("controlAddress", "",
                     "The address the control server listens on: empty for loopback only (127.0.0.1 and ::1). Another address, such as 0.0.0.0 for all, "
                     + "lets other machines reach it (for hosts without SSH): every request then needs the token, MCP clients cannot pair without it, "
-                    + "and traffic is plain HTTP."),
+                    + "and traffic is plain HTTP. Deprecated beyond loopback: remote = true reaches the web UI without an open port."),
             new Setting("controlFile", "sculk-control.json",
                     "Where the control server writes its port and token, relative to the game directory."),
             new Setting("controlToken", "",

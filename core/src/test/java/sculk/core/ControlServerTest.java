@@ -410,9 +410,13 @@ class ControlServerTest {
             assertTrue(mcp.body().contains("cannot pair"), mcp.body());
             assertEquals(200, request(port, named, "POST", "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{}}", auth).status());
             assertEquals("http://127.0.0.1:" + port, wide.url(), "the wildcard is reached on loopback from this machine");
-            String help = String.join("\n", sculk.core.command.SculkCommand.remoteUiHelp(wide, null));
+            String help = String.join("\n", sculk.core.command.SculkCommand.remoteUiHelp(wide, null, null));
             assertFalse(help.contains("ssh"), help);
             assertTrue(help.contains("cannot pair"), help);
+            assertTrue(help.contains("remote = true"), help);
+            String viaRemote = String.join("\n", sculk.core.command.SculkCommand.remoteUiHelp(wide, "https://sculk-ui.github.io/#k", null));
+            assertTrue(viaRemote.contains("https://sculk-ui.github.io/#k"), viaRemote);
+            assertFalse(viaRemote.contains("token"), viaRemote);
         } finally {
             wide.stop();
             Files.deleteIfExists(file);
