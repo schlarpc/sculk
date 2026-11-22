@@ -102,6 +102,13 @@ class GameSignalingTest {
     }
 
     @Test
+    void theApprovalCodeIsPinned() {
+        // The cacophony vector's handshake hash; the shell's tests pin the same.
+        assertEquals("144909", Signaling.approvalCode(
+                HexFormat.of().parseHex("4f5a40e425d3adcdb2c715d988e4ef8763ed0f8aa0fe78e2d2879d71b2d38186")));
+    }
+
+    @Test
     void aRememberedBrowserGetsTheAnswerAtOnce() throws Exception {
         var net = new FakeRelays.Net();
         KeyPair server = X25519.generate();
