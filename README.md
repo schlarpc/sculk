@@ -1,4 +1,4 @@
-# sculk
+# <img src="docs/images/logo.svg" alt="sculk" width="342" height="112">
 
 A scriptable intercepting proxy for modded Minecraft, running inside the game.
 It is for finding and reproducing protocol-level security bugs in mods.
