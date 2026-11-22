@@ -73,6 +73,7 @@ public final class Nostr {
     public static final class Signer {
         private final byte[] secretKey;
         private final String pubkey;
+        private long lastCreatedAt = Long.MIN_VALUE / 2;
 
         public Signer() {
             this(Bip340.newSecretKey());
@@ -93,8 +94,14 @@ public final class Nostr {
         }
 
         /** As above, with fixed BIP-340 randomness: for tests. */
-        String event(String topic, String content, long createdAt, byte[] aux) {
+        synchronized String event(String topic, String content, long createdAt, byte[] aux) {
             checkTopic(topic);
+            // An event's id covers its time in seconds but not its signature,
+            // and relays drop an id they have seen: so each event is at least
+            // a second after this signer's last, or a message sent again
+            // within a second would vanish.
+            createdAt = Math.max(createdAt, lastCreatedAt + 1);
+            lastCreatedAt = createdAt;
             // Everything here is ASCII that JSON does not escape, so NIP-01's
             // serialization is plain concatenation.
             if (!BASE64.matcher(content).matches()) throw new IllegalArgumentException("content must be base64");
