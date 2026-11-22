@@ -1,5 +1,6 @@
 // The control server's HTTP API (see ControlServer.java). Every call carries
 // the bearer token; the static UI files are the only thing served without it.
+// In remote access, calls go through the shell's frame instead (embedding).
 
 export interface SculkEvent {
   id: number;
@@ -125,6 +126,17 @@ export interface CheckResult {
   problems: { line: number; column: number; message: string; severity: "error" | "warning" }[];
 }
 
+/**
+ * Set by the remote access shell's frame (sculk-ui.github.io; docs/REMOTE.md)
+ * before this UI loads: requests then go through it, over WebRTC, to the one
+ * game the frame was opened for. That game adds its own token.
+ */
+interface Embedding {
+  fetch(input: string, init: RequestInit): Promise<Response>;
+}
+
+export const embedding: Embedding | undefined = (globalThis as { sculkEmbedding?: Embedding }).sculkEmbedding;
+
 export class AuthError extends Error {
   constructor() {
     super("missing or wrong token");
@@ -144,7 +156,7 @@ export class Api {
     const init: RequestInit = { method, headers: { Authorization: `Bearer ${this.token}`, ...headers }, cache: "no-store" };
     if (body !== undefined) init.body = body;
     if (signal) init.signal = signal;
-    const r = await fetch(`/api${path}`, init);
+    const r = await (embedding ? embedding.fetch(`/api${path}`, init) : fetch(`/api${path}`, init));
     if (r.status === 401) throw new AuthError();
     if (!r.ok) {
       let message = `${r.status} ${r.statusText}`;

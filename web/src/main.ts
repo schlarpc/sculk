@@ -1,4 +1,4 @@
-import { Api, ApiError, AuthError, type SculkEvent } from "./api";
+import { Api, ApiError, AuthError, embedding, type SculkEvent } from "./api";
 import { byId, el, store } from "./dom";
 import { installTextures } from "./textures";
 import { conn, field, frame, mod, roundTripBad } from "./event";
@@ -29,6 +29,8 @@ const PRESETS: [string, string][] = [
 let linkedEvent: number | undefined;
 
 function readToken(): string | null {
+  // In remote access the game adds its own token; the frame has no storage anyway.
+  if (embedding) return "remote";
   const hash = new URLSearchParams(location.hash.slice(1));
   const fromHash = hash.get("token");
   const event = Number(hash.get("event"));
