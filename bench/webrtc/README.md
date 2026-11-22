@@ -1,4 +1,4 @@
-# bench/rtc: str0m in Chicory
+# bench/webrtc: str0m in Chicory
 
 Issue #3 plans to run [str0m](https://github.com/algesten/str0m) (Rust,
 sans-IO WebRTC) in the mod as WebAssembly, under
@@ -13,25 +13,25 @@ must be built with `opt-level = "s"` (see below).
 
 ## What runs
 
-`rust/rtc-bench` makes two str0m peers in one process, joined by an
+`rust/sculk-webrtc-bench` makes two str0m peers in one process, joined by an
 in-memory link with no loss and no delay. They negotiate over SDP as a
 browser would, finish ICE, DTLS and SCTP, and the left peer then sends
 16 MB on a reliable, ordered data channel in 16 KiB messages. Time on the
 link is virtual. The CPU time spent inside each peer is measured separately:
 the mod is one side, the browser the other.
 
-Crypto is `rust/rtc-crypto`: str0m-rust-crypto (dimpl for DTLS, RustCrypto
+Crypto is `rust/sculk-webrtc-crypto`: str0m-rust-crypto (dimpl for DTLS, RustCrypto
 for the rest) without dimpl's `rcgen` feature, which pulls in aws-lc-rs (C)
 and so does not build for wasm. It makes the self-signed certificate itself.
 
-`bench/rtc` loads the wasm (`nix build .#rtc-bench`, built by breakbulk for
+`bench/webrtc` loads the wasm (`nix build .#webrtc-bench`, built by breakbulk for
 `wasm32-wasip1`) into the relocated Chicory runtime with WASI.
 
 ```sh
-gradle :bench:rtc:run --args='--mode aot --mb 16'           # compiled, Java 21
-gradle :bench:rtc:run --args='--mode interp --mb 1'         # interpreter
-gradle :bench:rtc:run -Pbench.java=17 --args='--mode aot'   # another JVM
-nix build .#rtc-bench-native && result/bin/rtc-bench        # native baseline
+gradle :bench:webrtc:run --args='--mode aot --mb 16'           # compiled, Java 21
+gradle :bench:webrtc:run --args='--mode interp --mb 1'         # interpreter
+gradle :bench:webrtc:run -Pbench.java=17 --args='--mode aot'   # another JVM
+nix build .#webrtc-bench-native && result/bin/rtc-bench        # native baseline
 ```
 
 `--mode aot` uses classes that the `aotCompile` task makes at build time
@@ -73,7 +73,7 @@ still over the limit, but the hot crypto is not.
 ## AES-GCM from the JDK
 
 `--aes host` seals and opens DTLS records with `javax.crypto` through host
-imports (`rust/rtc-crypto/src/host_aes.rs`, `SculkHost.java`); HotSpot runs
+imports (`rust/sculk-webrtc-crypto/src/host_aes.rs`, `SculkHost.java`); HotSpot runs
 it with AES-NI and CLMUL. `--aes mixed` (host on one side, RustCrypto on
 the other) checks that the two interoperate.
 
@@ -133,6 +133,6 @@ the threshold does not fix it:
 ## Cost in the mod jar
 
 The relocated Chicory runtime and WASI are 423 KiB. The compiled
-rtc-bench is 997 KiB of classes (880 KiB zipped), and the wasm module is
+sculk-webrtc-bench is 997 KiB of classes (880 KiB zipped), and the wasm module is
 2.1 MB (Chicory still parses it for its types, data and tables). A real
 module without the benchmark's second peer would be about the same size.

@@ -1,7 +1,7 @@
 //! AES-GCM from the host: in the mod, the JDK's `AES/GCM/NoPadding`, which
 //! HotSpot runs with AES-NI and CLMUL. In wasm, RustCrypto's AES is bitsliced
 //! software, and in Chicory it was a third of a data channel's CPU time
-//! (bench/rtc/README.md).
+//! (bench/webrtc/README.md).
 //!
 //! dimpl's own cipher suites are kept for everything but the record cipher:
 //! key lengths, hashes, and DTLS 1.3's record number mask (one AES block per

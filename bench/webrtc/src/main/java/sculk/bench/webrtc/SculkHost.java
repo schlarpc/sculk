@@ -1,4 +1,4 @@
-package sculk.bench.rtc;
+package sculk.bench.webrtc;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
@@ -18,7 +18,7 @@ import sculk.shaded.com.dylibso.chicory.wasm.types.ValType;
 /**
  * The {@code sculk} host module that rust/ code imports: AES-GCM from the JDK
  * (AES-NI and CLMUL in HotSpot) for DTLS records, and this thread's CPU time.
- * See rust/rtc-crypto/src/host_aes.rs for the contract. One per instance, used
+ * See rust/sculk-webrtc-crypto/src/host_aes.rs for the contract. One per instance, used
  * from one thread.
  */
 final class SculkHost {

@@ -1,5 +1,5 @@
 [package]
-name = "rtc-bench"
+name = "sculk-webrtc-bench"
 version = "0.1.0"
 description = "Throughput of a str0m data channel: two peers over an in-memory link."
 edition.workspace = true
@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 # No crypto feature: the provider is ours (rtc-crypto), pure Rust, so it builds for wasm.
 str0m = { version = "0.25", default-features = false }
-rtc-crypto = { path = "../rtc-crypto" }
+sculk-webrtc-crypto = { path = "../sculk-webrtc-crypto" }
 
 # Thread CPU time natively; in wasm it comes from the host (sculk.thread_cpu_ns).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

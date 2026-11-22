@@ -18,7 +18,7 @@ include 'libs:aircompressor'
 include 'libs:chicory'
 
 // Benchmarks, run by hand; never shipped.
-include 'bench:rtc'
+include 'bench:webrtc'
 
 // One subproject per (loader, Minecraft version) target. See docs/ARCHITECTURE.md.
 include 'platforms:neoforge-1.21.1'

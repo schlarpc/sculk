@@ -122,10 +122,10 @@
           babel = pkgs.callPackage ./nix/babel { };
         # The relay list as of the pinned shell, packed under sculk/remote/.
         relays = sculk-ui.packages.${pkgs.stdenv.hostPlatform.system}.relays;
-          # str0m data channel benchmark (rust/rtc-bench), as wasm for Chicory
-          # (bench/rtc) and natively for comparison.
-          rtc-bench = rust.packages.rtc-bench;
-          rtc-bench-native = rust.target.${pkgs.stdenv.hostPlatform.rust.rustcTarget}.packages.rtc-bench;
+          # str0m data channel benchmark (rust/sculk-webrtc-bench), as wasm for Chicory
+          # (bench/webrtc) and natively for comparison.
+          webrtc-bench = rust.packages.sculk-webrtc-bench;
+          webrtc-bench-native = rust.target.${pkgs.stdenv.hostPlatform.rust.rustcTarget}.packages.sculk-webrtc-bench;
         }
       );
 

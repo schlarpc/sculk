@@ -1,5 +1,5 @@
 [package]
-name = "rtc-crypto"
+name = "sculk-webrtc-crypto"
 version = "0.1.0"
 description = "str0m's RustCrypto provider without rcgen, so it builds for wasm."
 edition.workspace = true

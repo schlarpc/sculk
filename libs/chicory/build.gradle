@@ -6,7 +6,7 @@
 //
 // The runtime (with its interpreter) and WASI only. Chicory's compiler, which
 // turns wasm into JVM bytecode with ASM, runs at build time instead (see
-// bench/rtc), so ASM never ships in the mod and the game never generates
+// bench/webrtc), so ASM never ships in the mod and the game never generates
 // classes. Its output refers to the runtime by the relocated names.
 //
 // Java 11 bytecode, no dependencies besides each other (error_prone's

@@ -738,33 +738,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rtc-bench"
-version = "0.1.0"
-dependencies = [
- "libc",
- "rtc-crypto",
- "str0m",
-]
-
-[[package]]
-name = "rtc-crypto"
-version = "0.1.0"
-dependencies = [
- "aes",
- "aes-gcm",
- "ctr",
- "der",
- "dimpl",
- "getrandom 0.4.3",
- "hmac",
- "p256",
- "sha1",
- "sha2",
- "str0m-proto",
- "x509-cert",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -792,6 +765,41 @@ dependencies = [
  "rustc-hash",
  "slab",
  "thiserror",
+]
+
+[[package]]
+name = "sculk-webrtc"
+version = "0.1.0"
+dependencies = [
+ "sculk-webrtc-crypto",
+ "str0m",
+]
+
+[[package]]
+name = "sculk-webrtc-bench"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sculk-webrtc-crypto",
+ "str0m",
+]
+
+[[package]]
+name = "sculk-webrtc-crypto"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "ctr",
+ "der",
+ "dimpl",
+ "getrandom 0.4.3",
+ "hmac",
+ "p256",
+ "sha1",
+ "sha2",
+ "str0m-proto",
+ "x509-cert",
 ]
 
 [[package]]

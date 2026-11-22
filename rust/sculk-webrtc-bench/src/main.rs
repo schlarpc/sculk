@@ -12,8 +12,8 @@
 //! the share of one core a 1 MB/s stream would take.
 //!
 //! `--aes host` seals DTLS records with the host's AES-GCM (wasm only; see
-//! rust/rtc-crypto); `--aes mixed` uses it on the sending side only, against
-//! RustCrypto on the other, which checks the two agree. Built natively and for `wasm32-wasip1`; bench/rtc runs
+//! rust/sculk-webrtc-crypto); `--aes mixed` uses it on the sending side only, against
+//! RustCrypto on the other, which checks the two agree. Built natively and for `wasm32-wasip1`; bench/webrtc runs
 //! the wasm under Chicory, and provides the `sculk` host module this needs.
 //! Output is `key=value` lines.
 
@@ -22,7 +22,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rtc_crypto::Aes;
+use sculk_webrtc_crypto::Aes;
 use str0m::channel::ChannelId;
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, Input, Output, Rtc, RtcError};
@@ -172,7 +172,7 @@ fn main() -> Result<(), RtcError> {
 
     let rtc = |now, aes| {
         Rtc::builder()
-            .set_crypto_provider(Arc::new(rtc_crypto::provider(aes)))
+            .set_crypto_provider(Arc::new(sculk_webrtc_crypto::provider(aes)))
             .build(now)
     };
     let t = cpu_ns();
