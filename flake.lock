@@ -135,11 +135,11 @@
         "trystero": "trystero"
       },
       "locked": {
-        "lastModified": 1795329694,
-        "narHash": "sha256-qj8YFLkpppM0tIg6d4QxoO+O7r/yIchme0/D67XOYlc=",
+        "lastModified": 1795335291,
+        "narHash": "sha256-38Bu3sSv/PM4ZDjkWKLtEvsxDWdZFD642vvTdWnwS0E=",
         "ref": "refs/heads/main",
-        "rev": "e9c7ecd78bbc687cb7a54fc058354dd0c0eac953",
-        "revCount": 4,
+        "rev": "b0e1deb86683642e89fb3c257d0ac467bf1a2d82",
+        "revCount": 13,
         "type": "git",
         "url": "https://github.com/sculk-ui/sculk-ui.github.io"
       },

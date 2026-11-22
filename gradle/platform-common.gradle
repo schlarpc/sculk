@@ -60,7 +60,7 @@ providers.gradleProperty('sculk.mods').getOrElse('').split(',').findAll { it }.e
 // properties, for example -Psculk.eventLog=/tmp/events.jsonl or
 // -Psculk.control=0 (control server on a free port; see scripts/sculkctl.py).
 ext.sculkRunProperties = ['sculk.eventLog', 'sculk.scripts', 'sculk.control', 'sculk.controlFile', 'sculk.controlToken',
-                          'sculk.controlEvents', 'sculk.controlFrameBytes']
+                          'sculk.controlEvents', 'sculk.controlFrameBytes', 'sculk.remote', 'sculk.remotePort']
         .findAll { providers.gradleProperty(it).isPresent() }
         .collectEntries { [(it): providers.gradleProperty(it).get()] }
 

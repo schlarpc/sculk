@@ -10,10 +10,10 @@ this page is the wire protocol, which two codebases implement:
   [sculk-ui/sculk-ui.github.io](https://github.com/sculk-ui/sculk-ui.github.io).
 
 Status: works end to end with `remote = true` in `config/sculk.toml`: the
-game prints its link, a new browser waits for `/sculk remote accept`, and
-one accepted with `remember` comes back without asking. What it carries is
-an echo for now: the control server and the game's UI over the data
-channel are still to come.
+game prints its link, a new browser waits for `/sculk remote accept`, one
+accepted with `remember` comes back without asking, and the page shows the
+game's own web UI. `scripts/smoke-remote.sh` tries all of it against a dev
+server and a headless Chromium.
 
 ## Overview
 
@@ -113,6 +113,39 @@ its `n` before decrypting), in a new event: relays drop an event whose id
 they have seen. The game keeps
 publishing `approved` until the WebRTC connection is up or 30 seconds pass.
 A pending session expires after 60 seconds without approval.
+
+## Tunnel
+
+Once connected, the browser's data channel (label `sculk`) carries HTTP to
+the game's control server. Every message is
+
+```
+stream (u32, big-endian) || type (u8) || data
+```
+
+| Type | From | Data |
+|---:|---|---|
+| 1 request | browser | JSON: `{"method", "path", "headers"}` |
+| 2 request body | browser | bytes, at most 16 KiB a message |
+| 3 request end | browser | |
+| 7 cancel | browser | |
+| 4 response | game | JSON: `{"status", "headers"}` |
+| 5 response body | game | bytes, at most 16 KiB, as the server writes them |
+| 6 response end | game | |
+| 8 error | game | UTF-8 text: why there is no response |
+
+The browser opens streams, one per request, and several run at once. The
+game (`Tunnel`) replays each request against its control server on
+loopback with the control token, which never leaves the game; only
+`Accept`, `Content-Type` and `Last-Event-ID` pass in, and `Content-Type`
+and `Cache-Control` back. The control server must be on.
+
+In the browser, the game's web UI runs in the shell's `frame.html`: a frame
+sandboxed without `allow-same-origin`, so with an opaque origin, away from
+the shell's keys and storage, whose CSP allows only its own loader and the
+`blob:` URLs it makes, and no connections. The loader fetches the UI
+(`index.html`, its stylesheet, fonts and script) through the tunnel and
+gives it the tunnel as `sculkEmbedding.fetch`, its only way out.
 
 ## Approval code
 

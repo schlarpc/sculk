@@ -122,6 +122,11 @@
           babel = pkgs.callPackage ./nix/babel { };
         # The relay list as of the pinned shell, packed under sculk/remote/.
         relays = sculk-ui.packages.${pkgs.stdenv.hostPlatform.system}.relays;
+        # The shell itself, for scripts/smoke-remote.sh.
+        shell = sculk-ui.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        # A headless browser for scripts/smoke-remote.sh: Python with Playwright, and its browsers.
+        smoke-browser = pkgs.python3.withPackages (ps: [ ps.playwright ]);
+        playwright-browsers = pkgs.playwright-driver.browsers;
           # str0m behind a sans-IO interface (rust/sculk-webrtc), as the wasm
           # module the mod runs under Chicory for remote access.
           webrtc = rust.packages.sculk-webrtc;
