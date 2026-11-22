@@ -2,7 +2,7 @@
 # Built by Nix through breakbulk: `nix build .#webrtc-bench` (see flake.nix).
 [workspace]
 resolver = "3"
-members = ["sculk-webrtc-bench", "sculk-webrtc-crypto"]
+members = ["sculk-webrtc", "sculk-webrtc-bench", "sculk-webrtc-crypto"]
 
 [workspace.package]
 edition = "2024"

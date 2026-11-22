@@ -122,6 +122,9 @@
           babel = pkgs.callPackage ./nix/babel { };
         # The relay list as of the pinned shell, packed under sculk/remote/.
         relays = sculk-ui.packages.${pkgs.stdenv.hostPlatform.system}.relays;
+          # str0m behind a sans-IO interface (rust/sculk-webrtc), as the wasm
+          # module the mod runs under Chicory for remote access.
+          webrtc = rust.packages.sculk-webrtc;
           # str0m data channel benchmark (rust/sculk-webrtc-bench), as wasm for Chicory
           # (bench/webrtc) and natively for comparison.
           webrtc-bench = rust.packages.sculk-webrtc-bench;
