@@ -17,6 +17,9 @@ include 'libs:rhino'
 include 'libs:aircompressor'
 include 'libs:chicory'
 
+// Benchmarks, run by hand; never shipped.
+include 'bench:rtc'
+
 // One subproject per (loader, Minecraft version) target. See docs/ARCHITECTURE.md.
 include 'platforms:neoforge-1.21.1'
 include 'platforms:fabric-1.21.1'

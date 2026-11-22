@@ -1,0 +1,73 @@
+// Benchmark: the str0m data channel (rust/rtc-bench, built as wasm by Nix)
+// under Chicory, in the game's JVM, interpreted and compiled to bytecode.
+// Never shipped. See README.md here for how to run it and what it found.
+//
+//   gradle :bench:rtc:run --args='--mode aot --mb 16'
+//   gradle :bench:rtc:run -Pbench.java=17 --args='--mode interp --mb 1'
+//
+// -Psculk.rtcBenchWasm=<file> uses a wasm already at hand instead of Nix.
+plugins {
+    id 'application'
+}
+
+def benchJava = (findProperty('bench.java') ?: '21') as int
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+repositories {
+    mavenCentral()
+}
+
+sourceSets {
+    // Runs at build time only: Chicory's compiler, unrelocated, with ASM.
+    aot
+}
+
+dependencies {
+    // The relocated runtime and WASI, as the mod would ship them.
+    implementation project(path: ':libs:chicory', configuration: 'shaded')
+    aotImplementation "com.dylibso.chicory:compiler:${rootProject.chicory_version}"
+}
+
+def wasmProp = providers.gradleProperty('sculk.rtcBenchWasm')
+def nixWasm = tasks.register('rtcBenchWasm', Exec) {
+    description = 'Builds rust/rtc-bench for wasm32-wasip1 with Nix into build/rtc-bench.'
+    workingDir = rootDir
+    outputs.upToDateWhen { false } // Nix does its own caching, and the out-link is a symlink.
+    commandLine 'nix', '--extra-experimental-features', 'nix-command flakes',
+            'build', '.#rtc-bench', '--out-link', layout.buildDirectory.dir('rtc-bench').get().asFile.path
+}
+def wasmFile = wasmProp.isPresent()
+        ? rootProject.file(wasmProp.get())
+        : layout.buildDirectory.file('rtc-bench/bin/rtc-bench.wasm').get().asFile
+
+// The wasm, compiled to JVM classes that use the relocated runtime: what a
+// platform build would do for a module it ships.
+def aotOut = layout.buildDirectory.dir('generated/aot')
+def aotCompile = tasks.register('aotCompile', JavaExec) {
+    description = 'Compiles rtc-bench.wasm to JVM bytecode with Chicory.'
+    if (!wasmProp.isPresent()) dependsOn nixWasm
+    classpath = sourceSets.aot.runtimeClasspath
+    mainClass = 'sculk.bench.aot.WasmAot'
+    inputs.file(wasmFile)
+    outputs.dir(aotOut)
+    args wasmFile.path, 'sculk.bench.rtc.RtcBenchMachine', aotOut.get().asFile.path,
+            'com/dylibso/chicory/', 'sculk/shaded/com/dylibso/chicory/'
+}
+sourceSets.main.output.dir(aotOut, builtBy: aotCompile)
+
+tasks.named('processResources') {
+    if (!wasmProp.isPresent()) dependsOn nixWasm
+    from(wasmFile) { into 'sculk/bench/rtc' }
+}
+
+application {
+    mainClass = 'sculk.bench.rtc.RtcBench'
+}
+
+tasks.named('run', JavaExec) {
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(benchJava) }
+    // About what a game gets; the interpreter needs a deep stack.
+    jvmArgs '-Xmx2G', '-Xss8m'
+    // -Pbench.jvmArgs='-XX:StartFlightRecording=filename=rtc.jfr' and the like.
+    jvmArgs((findProperty('bench.jvmArgs') ?: '').tokenize())
+}
