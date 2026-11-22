@@ -15,6 +15,7 @@ include 'core'
 // Third-party libraries, relocated so they cannot clash with other mods' copies.
 include 'libs:rhino'
 include 'libs:aircompressor'
+include 'libs:chicory'
 
 // One subproject per (loader, Minecraft version) target. See docs/ARCHITECTURE.md.
 include 'platforms:neoforge-1.21.1'

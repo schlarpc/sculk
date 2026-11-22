@@ -1,0 +1,52 @@
+// Chicory, a WebAssembly runtime in pure Java, relocated to
+// sculk.shaded.com.dylibso.chicory and exposed as the 'shaded' configuration,
+// for Rust code the mod runs as wasm (rust/; WebRTC through str0m, issue #3).
+// Relocated for the same reason as Rhino (see libs/rhino): loaders pick one
+// copy of a library across all mods.
+//
+// The runtime (with its interpreter) and WASI only. Chicory's compiler, which
+// turns wasm into JVM bytecode with ASM, runs at build time instead (see
+// bench/rtc), so ASM never ships in the mod and the game never generates
+// classes. Its output refers to the runtime by the relocated names.
+//
+// Java 11 bytecode, no dependencies besides each other (error_prone's
+// annotations, which log depends on, are not needed at run time).
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "com.dylibso.chicory:runtime:${rootProject.chicory_version}"
+    implementation "com.dylibso.chicory:wasi:${rootProject.chicory_version}"
+}
+
+tasks.named('jar') { enabled = false }
+
+tasks.named('shadowJar') {
+    archiveClassifier = 'shaded'
+    relocate 'com.dylibso.chicory', 'sculk.shaded.com.dylibso.chicory'
+    dependencies {
+        exclude(dependency('com.google.errorprone:.*'))
+    }
+    exclude 'module-info.class', 'META-INF/versions/*/module-info.class', 'META-INF/maven/**'
+    manifest.attributes(
+        'Sculk-Shaded-From': "com.dylibso.chicory:runtime,wasi,wasm,log:${rootProject.chicory_version}",
+        'Sculk-Shaded-License': 'Apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)',
+    )
+}
+
+configurations {
+    shaded {
+        canBeConsumed = true
+        canBeResolved = false
+    }
+}
+
+artifacts {
+    shaded tasks.named('shadowJar')
+}
