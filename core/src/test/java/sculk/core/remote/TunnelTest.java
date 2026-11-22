@@ -32,6 +32,7 @@ class TunnelTest {
     private final BlockingQueue<byte[]> out = new LinkedBlockingQueue<>();
     private final AtomicReference<String> seenAuth = new AtomicReference<>();
     private final AtomicReference<String> seenCookie = new AtomicReference<>();
+    private final AtomicReference<String> seenEncoding = new AtomicReference<>();
     private final CountDownLatch streamClosed = new CountDownLatch(1);
     private Tunnel tunnel;
 
@@ -45,6 +46,14 @@ class TunnelTest {
             byte[] b = "{\"hi\":true}".getBytes(StandardCharsets.UTF_8);
             ex.getResponseHeaders().set("Content-Type", "application/json");
             ex.getResponseHeaders().set("Set-Cookie", "no=thanks");
+            ex.sendResponseHeaders(200, b.length);
+            ex.getResponseBody().write(b);
+            ex.close();
+        });
+        server.createContext("/api/gzip", ex -> {
+            seenEncoding.set(ex.getRequestHeaders().getFirst("Accept-Encoding"));
+            byte[] b = {0x1f, (byte) 0x8b, 8, 0};
+            ex.getResponseHeaders().set("Content-Encoding", "gzip");
             ex.sendResponseHeaders(200, b.length);
             ex.getResponseBody().write(b);
             ex.close();
@@ -139,6 +148,16 @@ class TunnelTest {
         assertEquals("{\"hi\":true}", a[1]);
         assertEquals("Bearer TOKEN", seenAuth.get());
         assertNull(seenCookie.get(), "the browser's other headers stay behind");
+    }
+
+    @Test
+    void gzipPassesThroughUndecoded() throws Exception {
+        request(9, "GET", "/api/gzip", null, "{\"Accept-Encoding\":\"gzip\"}");
+        String[] a = answer(9);
+        assertEquals("gzip", seenEncoding.get());
+        JsonObject head = JsonParser.parseString(a[0]).getAsJsonObject();
+        assertEquals("gzip", head.getAsJsonObject("headers").get("content-encoding").getAsString());
+        assertEquals(0x1f, a[1].charAt(0), "the body crosses as gzip, not decoded");
     }
 
     @Test

@@ -9,7 +9,7 @@ import type { Page, Position, Progress, SculkEvent } from "./api";
 export const PAGE = 200;
 /** Pages kept, besides those in view. */
 const MAX_PAGES = 60;
-/** Pages one tail() fetches at most, catching up after a burst. */
+/** Pages' worth of rows one tail() fetches at most, catching up after a burst, in one request. */
 const TAIL_PAGES = 5;
 
 /**
@@ -105,8 +105,11 @@ export class Query {
 
   /**
    * Asks for whatever was appended past the end; one at a time, the next one
-   * sharing the request. When more arrived than a page holds, keeps fetching
-   * (up to TAIL_PAGES) so the newest rows are loaded, not only counted.
+   * sharing the request. When more arrived than a page holds, it still takes
+   * one request (up to TAIL_PAGES pages of rows), so the newest rows are
+   * loaded, not only counted, in one round trip: over SSH or remote access,
+   * where each costs tens of milliseconds, several in a row made the live
+   * table move in jerks (issue #2).
    */
   tail(): Promise<Delta> {
     if (this.tailing) return this.tailing;
@@ -114,18 +117,9 @@ export class Query {
     return this.tailing;
   }
 
-  private async catchUp(): Promise<Delta> {
+  private catchUp(): Promise<Delta> {
     // The last partial page again, and anything after it.
-    let from = Math.max(this.start, Math.floor(this.total / PAGE) * PAGE);
-    const sum = { grew: 0, dropped: 0 };
-    for (let i = 0; i < TAIL_PAGES; i++) {
-      const d = await this.fetch(from);
-      sum.grew += d.grew;
-      sum.dropped += d.dropped;
-      from = Math.max(this.start, from + PAGE);
-      if (this.closed || from >= this.total) break;
-    }
-    return sum;
+    return this.fetch(Math.max(this.start, Math.floor(this.total / PAGE) * PAGE), TAIL_PAGES * PAGE);
   }
 
   /**
@@ -150,10 +144,10 @@ export class Query {
     }
   }
 
-  private async fetch(from: number): Promise<Delta> {
+  private async fetch(from: number, count = PAGE): Promise<Delta> {
     if (this.closed) return NONE;
     try {
-      const p = await this.source.page(this.filter, from, PAGE, undefined, this.signal);
+      const p = await this.source.page(this.filter, from, count, undefined, this.signal);
       return p && !this.closed ? this.apply(p) : NONE;
     } catch {
       return NONE; // Closed, or the game went away: the rows stay blank until asked again.

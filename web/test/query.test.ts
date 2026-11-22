@@ -86,7 +86,7 @@ test("tail reports what was appended, and shares one request when nudged repeate
   assert.equal(q.at(479)?.id, 480);
 });
 
-test("tail catches up over several pages after a burst, so the newest rows are loaded", async () => {
+test("tail catches up over several pages after a burst in one request, so the newest rows are loaded", async () => {
   const s = new FakeServer();
   s.add(450);
   const q = new Query("", s);
@@ -96,7 +96,7 @@ test("tail catches up over several pages after a burst, so the newest rows are l
   const before = s.calls;
   const d = await q.tail();
   assert.deepEqual(d, { grew: 3 * PAGE + 7, dropped: 0 });
-  assert.equal(s.calls - before, 4);
+  assert.equal(s.calls - before, 1, "one round trip");
   assert.equal(q.at(q.total - 1)?.id, 450 + 3 * PAGE + 7);
   assert.equal(q.loadedEnd(PAGE), q.total);
 });

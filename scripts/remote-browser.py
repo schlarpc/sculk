@@ -6,7 +6,8 @@ profile kept between visits, opens a game's remote access link.
 first: the page must wait for approval, and show the code the game prompted
 with; this types `sculk remote accept 1 remember` at the server console.
 again: the same browser must get straight in. Either way, the game's own UI
-must then load in the sandboxed frame and show the game's status.
+must then load in the sandboxed frame and show the game's status, and the
+live event stream must come through the tunnel.
 """
 import asyncio
 import glob
@@ -74,6 +75,26 @@ async def main() -> int:
         else:
             print(f"FAIL: the game's UI did not load: {inner!r}")
             return 1
+        # The live event stream through the tunnel, gzipped and decoded as it
+        # arrives: an event, or the keepalive the game sends after 10 s of none.
+        ui = next(f for f in page.frames if f != page.main_frame)
+        got = await ui.evaluate("""async () => {
+            const r = await sculkEmbedding.fetch("/api/events/stream?after=0", {});
+            const reader = r.body.getReader();
+            let t = "";
+            const until = Date.now() + 20000;
+            while (!/^(data: |: keepalive)/m.test(t) && Date.now() < until) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                t += new TextDecoder().decode(value);
+            }
+            await reader.cancel();
+            return t;
+        }""")
+        if "data: " not in got and ": keepalive" not in got:
+            print(f"FAIL: the event stream did not come through: {got[:200]!r}")
+            return 1
+        print(f"the event stream comes through: {got.strip().splitlines()[0][:80]!r}", flush=True)
         await ctx.close()
         return 0
 

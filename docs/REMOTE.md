@@ -137,8 +137,16 @@ stream (u32, big-endian) || type (u8) || data
 The browser opens streams, one per request, and several run at once. The
 game (`Tunnel`) replays each request against its control server on
 loopback with the control token, which never leaves the game; only
-`Accept`, `Content-Type` and `Last-Event-ID` pass in, and `Content-Type`
-and `Cache-Control` back. The control server must be on.
+`Accept`, `Accept-Encoding`, `Content-Type` and `Last-Event-ID` pass in, and
+`Content-Type`, `Content-Encoding` and `Cache-Control` back. The control
+server must be on.
+
+A browser that sends `Accept-Encoding: gzip` gets gzipped bodies, event
+streams included (a sync flush per batch of events), and decodes them
+itself, with `DecompressionStream("gzip")`: the game's UI sees plain
+responses. Compressed bytes are what cross the channel, so DTLS and SCTP
+handle a fifth to a tenth of them. A shell that asks for nothing gets plain
+bodies.
 
 In the browser, the game's web UI runs in the shell's `frame.html`: a frame
 sandboxed without `allow-same-origin`, so with an opaque origin, away from

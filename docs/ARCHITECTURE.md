@@ -509,7 +509,7 @@ GET  /api/events?filter=&after=&before=&limit=   JSON Lines; the last `limit` ma
 GET  /api/events/stats?filter=&by=&after=&before=&limit=   count, frame bytes, first and last match, grouped by a field
 GET  /api/events/page?filter=&from=&count=  matches by position: {"start", "total", "from", "events"}; positions stay put while held
 GET  /api/events/position?filter=&id=   the position of the first match at or after an id
-GET  /api/events/stream?filter=&after=  server-sent events, live (backlog first with `after`)
+GET  /api/events/stream?filter=&after=&ids=  server-sent events, live (backlog first with `after`; `ids=true`: ids alone)
 GET  /api/frame?id=                     a packet event's whole frame, as hex
 POST /api/eval  body: JavaScript        runs in the console's scope: {"ok":true,"result":...}
 POST /api/reload                        stops every script, drops all script state; starts the startup scripts again
@@ -524,6 +524,21 @@ POST /mcp       body: JSON-RPC          Model Context Protocol, Streamable HTTP 
 DELETE /mcp                             ends an MCP session
 GET  /...                               anything else: the web UI (no token needed for its static files)
 ```
+
+Responses are gzipped when the request's `Accept-Encoding` allows it (issue
+#9), and plain otherwise, so `sculkctl` and curl see no change. The event
+streams are gzipped too, with a sync flush per batch of events, so each
+batch decodes as it arrives while the window carries over: the repetitive
+JSON of a busy server shrinks five to ten times, for about 2.5% of a core per
+MB/s. zstd would compress a little better, but aircompressor's stream cannot
+flush mid-frame, and a frame per flush starts with no history (11% smaller,
+against gzip's 80 to 90%); browsers' `DecompressionStream`, which the remote
+shell decodes with, has gzip and not zstd.
+
+The web UI's table hears of new matches through `/api/events/stream` with
+`ids=true` and fetches the rows itself, in one request of up to 1000, so the
+live table costs one copy of each event, not two, and a round trip per
+catch-up; this is what kept it from moving smoothly over SSH (issue #2).
 
 `scripts/sculkctl.py` wraps it (`status`, `events`, `tail`, `frame`, `eval`,
 `repl`, `reload`, `script ls|cat|push|run|stop|enable|disable|rm|mv`) and

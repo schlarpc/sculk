@@ -50,9 +50,12 @@ public final class Tunnel {
     /** Streams open at once; more are refused. */
     static final int MAX_STREAMS = 64;
     /** Request headers passed on; the rest (cookies, origin, authorization) are not. */
-    private static final List<String> REQUEST_HEADERS = List.of("accept", "content-type", "last-event-id");
-    /** Response headers passed back. */
-    private static final List<String> RESPONSE_HEADERS = List.of("content-type", "cache-control");
+    private static final List<String> REQUEST_HEADERS = List.of("accept", "accept-encoding", "content-type", "last-event-id");
+    /**
+     * Response headers passed back. A gzipped body crosses the channel as it
+     * is, and the shell decodes it, so DTLS and SCTP carry a fraction of the bytes.
+     */
+    private static final List<String> RESPONSE_HEADERS = List.of("content-type", "content-encoding", "cache-control");
     private static final Pattern PATH = Pattern.compile("/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*");
 
     /** Where messages to the browser go. */

@@ -268,7 +268,8 @@ export class EventTable {
   private async listen(q: Query): Promise<void> {
     while (!q.closed) {
       try {
-        const it = await this.hooks.guard(async (api) => api.stream(q.filter, undefined, q.signal));
+        // Only that something matched: the rows come from tail(), so the stream carries ids alone.
+        const it = await this.hooks.guard(async (api) => api.arrivals(q.filter, q.signal));
         if (!it) return;
         this.hooks.live(true);
         // Anything that matched between opening the filter and the stream starting.

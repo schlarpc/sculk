@@ -74,7 +74,8 @@ import sculk.core.util.Bytes;
  *   GET  /api/events/position?filter=&amp;id=     the position of the first match at or after an id
  *                                       (both stream progress, and stop when the caller leaves, given Accept: text/event-stream)
  *   GET  /api/events/stats?filter=&amp;by=&amp;after=&amp;before=&amp;limit=   counts, bytes, first and last, grouped by a field
- *   GET  /api/events/stream?filter=&amp;after=  the same as server-sent events, live
+ *   GET  /api/events/stream?filter=&amp;after=&amp;ids=  the same as server-sent events, live; with ids=true,
+ *                                       each event is only its id (for a view that fetches rows itself)
  *   GET  /api/frame?id=                     the whole frame of a packet event
  *   POST /api/eval  body: JavaScript        {"ok":true,"result":...}, in the console's own scope
  *   POST /api/reload                        drops all script state, starts the startup scripts again
@@ -91,7 +92,11 @@ import sculk.core.util.Bytes;
  *                                           classpath; its pages /, /events, /scripts[/name] load index.html)
  * </pre>
  *
- * The web UI's static files are the only thing served without the token:
+ * Responses are gzipped when the request's {@code Accept-Encoding} allows
+ * it, the event streams included, flushed as events go out; see
+ * {@link #acceptsGzip}.
+ *
+ * <p>The web UI's static files are the only thing served without the token:
  * they hold no secrets, and a page can only load them when its Host header
  * passes. The page asks for the token (or reads it from {@code #token=}) and
  * sends it with every API call.
@@ -535,10 +540,7 @@ public final class ControlServer {
             send(ex, 200, "application/json", work.apply(EventStore.Progress.NONE) + "\n");
             return;
         }
-        ex.getResponseHeaders().set("Content-Type", "text/event-stream");
-        ex.getResponseHeaders().set("Cache-Control", "no-store");
-        ex.sendResponseHeaders(200, 0);
-        OutputStream out = ex.getResponseBody();
+        OutputStream out = eventStream(ex);
         long started = System.currentTimeMillis();
         EventStore.Progress progress = new EventStore.Progress() {
             long next = started + 150;
@@ -569,7 +571,7 @@ public final class ControlServer {
             return; // The caller went away.
         }
         out.write(("event: result\ndata: " + result + "\n\n").getBytes(StandardCharsets.UTF_8));
-        out.flush();
+        out.close(); // gzip's trailer
     }
 
     private static String pageJson(Map<String, Object> page) {
@@ -610,8 +612,14 @@ public final class ControlServer {
         json(ex, 200, out);
     }
 
-    /** Server-sent events: matching events as they happen, after any backlog asked for with {@code after}. */
+    /**
+     * Server-sent events: matching events as they happen, after any backlog
+     * asked for with {@code after}. With {@code ids=true}, each is its
+     * {@code id:} line alone: the web UI's table only needs to hear that
+     * something matched, and fetches the rows in pages (issue #2).
+     */
     private void stream(HttpExchange ex, Map<String, String> query) throws IOException {
+        boolean idsOnly = "true".equals(query.get("ids"));
         Predicate<Map<String, Object>> filter = EventFilter.compile(query.get("filter"));
         Long after = query.containsKey("after") ? Long.valueOf(query.get("after")) : null;
         BlockingQueue<StoredEvent> queue = new LinkedBlockingQueue<>(10_000);
@@ -620,10 +628,7 @@ public final class ControlServer {
         };
         store.subscribe(subscriber);
         try {
-            ex.getResponseHeaders().set("Content-Type", "text/event-stream");
-            ex.getResponseHeaders().set("Cache-Control", "no-store");
-            ex.sendResponseHeaders(200, 0);
-            OutputStream out = ex.getResponseBody();
+            OutputStream out = eventStream(ex);
             long last = -1;
             if (after != null) {
                 // The backlog, a page at a time: it may run to millions of events on disk.
@@ -631,7 +636,7 @@ public final class ControlServer {
                 while (true) {
                     List<StoredEvent> page = store.query(query.get("filter"), from, null, 1000, EventStore.Progress.NONE);
                     for (StoredEvent e : page) {
-                        out.write(("id: " + e.id() + "\ndata: " + e.json() + "\n\n").getBytes(StandardCharsets.UTF_8));
+                        out.write(sse(e, idsOnly));
                         last = e.id();
                     }
                     if (page.size() < 1000) break;
@@ -639,10 +644,21 @@ public final class ControlServer {
                 }
             }
             out.flush();
+            List<StoredEvent> batch = new java.util.ArrayList<>();
             while (true) {
                 StoredEvent e = queue.poll(10, TimeUnit.SECONDS);
-                if (e == null) out.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
-                else if (e.id() > last) out.write(("id: " + e.id() + "\ndata: " + e.json() + "\n\n").getBytes(StandardCharsets.UTF_8));
+                if (e == null) {
+                    out.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                } else {
+                    // Whatever else has queued goes out with it, in one flush: one chunk, and
+                    // one gzip sync point, for a burst of events rather than one each.
+                    batch.add(e);
+                    queue.drainTo(batch, 999);
+                    for (StoredEvent b : batch) {
+                        if (b.id() > last) out.write(sse(b, idsOnly));
+                    }
+                    batch.clear();
+                }
                 out.flush();
             }
         } catch (InterruptedException e) {
@@ -650,6 +666,11 @@ public final class ControlServer {
         } finally {
             store.unsubscribe(subscriber);
         }
+    }
+
+    private static byte[] sse(StoredEvent e, boolean idOnly) {
+        String s = idOnly ? "id: " + e.id() + "\n\n" : "id: " + e.id() + "\ndata: " + e.json() + "\n\n";
+        return s.getBytes(StandardCharsets.UTF_8);
     }
 
     /** Serves the web UI from the classpath, at the root. */
@@ -687,8 +708,7 @@ public final class ControlServer {
         headers.set("Referrer-Policy", "no-referrer");
         headers.set("Cross-Origin-Opener-Policy", "same-origin");
         headers.set("Cross-Origin-Resource-Policy", "same-origin");
-        ex.sendResponseHeaders(200, bytes.length == 0 ? -1 : bytes.length);
-        if (bytes.length > 0) ex.getResponseBody().write(bytes);
+        body(ex, 200, bytes);
     }
 
     // ---- plumbing ----
@@ -722,7 +742,76 @@ public final class ControlServer {
         ex.getResponseHeaders().set("Content-Type", type + "; charset=utf-8");
         ex.getResponseHeaders().set("Cache-Control", "no-store");
         ex.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+        body(ex, status, bytes);
+    }
+
+    // ---- compression (issue #9) ----
+    //
+    // gzip when the caller's Accept-Encoding allows it, plain otherwise, so
+    // clients that ask for nothing (sculkctl, curl) are unchanged. The event
+    // stream is a sync flush per batch of events: the browser decodes each as
+    // it arrives, and the window carries over, so the repetitive JSON of a
+    // busy server compresses 5 to 10 times. zstd would need a flush mid-frame,
+    // which aircompressor's stream lacks, and a frame per flush starts with no
+    // history (11% smaller, against gzip's 90%); and browsers' DecompressionStream,
+    // which the remote shell decodes the tunnel with, has gzip but not zstd.
+
+    /** Bodies smaller than this go out plain: gzip would save little, or add bytes. */
+    public static final int GZIP_MIN = 1024;
+
+    /** True when the request's Accept-Encoding lists gzip (or *) with a nonzero q. */
+    static boolean acceptsGzip(HttpExchange ex) {
+        String header = ex.getRequestHeaders().getFirst("Accept-Encoding");
+        if (header == null) return false;
+        for (String part : header.split(",")) {
+            String[] p = part.trim().split(";");
+            String coding = p[0].trim().toLowerCase(java.util.Locale.ROOT);
+            if (!coding.equals("gzip") && !coding.equals("x-gzip") && !coding.equals("*")) continue;
+            boolean zero = false;
+            for (int i = 1; i < p.length; i++) {
+                String param = p[i].trim();
+                if (param.startsWith("q=")) {
+                    try {
+                        zero = Double.parseDouble(param.substring(2).trim()) == 0;
+                    } catch (NumberFormatException e) {
+                        zero = true;
+                    }
+                }
+            }
+            if (!zero) return true;
+        }
+        return false;
+    }
+
+    /** Sends {@code bytes} as the whole body, gzipped when the caller accepts it and it is worth it. */
+    private static void body(HttpExchange ex, int status, byte[] bytes) throws IOException {
+        ex.getResponseHeaders().add("Vary", "Accept-Encoding");
+        if (bytes.length >= GZIP_MIN && acceptsGzip(ex)) {
+            java.io.ByteArrayOutputStream z = new java.io.ByteArrayOutputStream(bytes.length / 4 + 64);
+            try (OutputStream gz = new java.util.zip.GZIPOutputStream(z)) {
+                gz.write(bytes);
+            }
+            bytes = z.toByteArray();
+            ex.getResponseHeaders().set("Content-Encoding", "gzip");
+        }
         ex.sendResponseHeaders(status, bytes.length == 0 ? -1 : bytes.length);
         if (bytes.length > 0) ex.getResponseBody().write(bytes);
+    }
+
+    /**
+     * Starts a text/event-stream response, gzipped when the caller accepts
+     * it. Each flush of the returned stream reaches the caller at once (a
+     * gzip sync flush). Closing it ends the response.
+     */
+    private static OutputStream eventStream(HttpExchange ex) throws IOException {
+        var headers = ex.getResponseHeaders();
+        headers.set("Content-Type", "text/event-stream");
+        headers.set("Cache-Control", "no-store");
+        headers.add("Vary", "Accept-Encoding");
+        boolean gzip = acceptsGzip(ex);
+        if (gzip) headers.set("Content-Encoding", "gzip");
+        ex.sendResponseHeaders(200, 0);
+        OutputStream raw = ex.getResponseBody();
+        return gzip ? new java.util.zip.GZIPOutputStream(raw, 8192, true) : raw;
     }
 }

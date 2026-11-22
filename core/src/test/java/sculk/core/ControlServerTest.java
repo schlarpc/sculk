@@ -366,6 +366,81 @@ class ControlServerTest {
         }
     }
 
+    // ---- compression (issue #9) ----
+
+    private static java.net.http.HttpResponse<InputStream> fetch(String path, String... headers) throws Exception {
+        var req = java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://" + host() + path))
+                .header("Authorization", "Bearer " + server().token());
+        for (int i = 0; i < headers.length; i += 2) req.header(headers[i], headers[i + 1]);
+        return java.net.http.HttpClient.newHttpClient().send(req.build(), java.net.http.HttpResponse.BodyHandlers.ofInputStream());
+    }
+
+    @Test
+    void bodiesAreGzippedOnlyWhenAskedFor() throws Exception {
+        EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
+        for (int i = 0; i < 50; i++) ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:gzip|" + i)));
+        String path = "/api/events?limit=50&filter=" + enc("channel == othermod:gzip");
+        var plain = fetch(path);
+        assertTrue(plain.headers().firstValue("Content-Encoding").isEmpty());
+        String want = new String(plain.body().readAllBytes(), StandardCharsets.UTF_8);
+        assertTrue(want.length() >= ControlServer.GZIP_MIN, want);
+
+        var gz = fetch(path, "Accept-Encoding", "br, gzip;q=0.8");
+        assertEquals("gzip", gz.headers().firstValue("Content-Encoding").orElse(null));
+        assertTrue(gz.headers().allValues("Vary").contains("Accept-Encoding"));
+        byte[] packed = gz.body().readAllBytes();
+        String got = new String(new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(packed)).readAllBytes(), StandardCharsets.UTF_8);
+        assertEquals(want, got);
+        assertTrue(packed.length < want.length() / 2, packed.length + " of " + want.length());
+
+        assertTrue(fetch(path, "Accept-Encoding", "gzip;q=0, deflate").headers().firstValue("Content-Encoding").isEmpty(), "q=0 refuses gzip");
+        // The web UI's files too.
+        var page = fetch("/", "Accept-Encoding", "gzip");
+        if (page.headers().firstValue("Content-Encoding").isEmpty()) {
+            assertTrue(page.body().readAllBytes().length < ControlServer.GZIP_MIN, "a page this big is gzipped");
+        }
+    }
+
+    @Test
+    void aGzippedStreamStillArrivesEventByEvent() throws Exception {
+        String marker = "ctl-gzstream-" + System.nanoTime();
+        EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
+        ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|old")));
+        var r = fetch("/api/events/stream?after=0&filter=" + enc("channel contains " + marker), "Accept-Encoding", "gzip");
+        assertEquals("gzip", r.headers().firstValue("Content-Encoding").orElse(null));
+        assertEquals("text/event-stream", r.headers().firstValue("Content-Type").orElse(null));
+        try (InputStream in = new java.util.zip.GZIPInputStream(r.body(), 64)) {
+            readUntil(in, "\"data\":\"old\"");
+            // Each flush decodes on its own, so a live event shows up without the stream ending.
+            ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|new")));
+            assertTrue(readUntil(in, "\"data\":\"new\"").contains("\ndata: {\"id\":"));
+        }
+    }
+
+    @Test
+    void aStreamOfIdsCarriesNoEvents() throws Exception {
+        String marker = "ctl-ids-" + System.nanoTime();
+        EmbeddedChannel ch = FakeGame.channel(Side.SERVER);
+        ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|old")));
+        var r = fetch("/api/events/stream?ids=true&after=0&filter=" + enc("channel contains " + marker));
+        try (InputStream in = r.body()) {
+            String first = readUntil(in, "\n\n");
+            assertTrue(first.matches("id: \\d+\n\n"), first);
+            ch.writeInbound(Unpooled.wrappedBuffer(FakeGame.frame(1, "othermod:" + marker + "|new")));
+            String next = readUntil(in, "\n\n");
+            assertTrue(next.matches("id: \\d+\n\n"), next);
+        }
+    }
+
+    @Test
+    void aGzippedScanEndsWithAWholeGzipStream() throws Exception {
+        var r = fetch("/api/events/page?from=0&count=50&filter=", "Accept", "text/event-stream", "Accept-Encoding", "gzip");
+        assertEquals("gzip", r.headers().firstValue("Content-Encoding").orElse(null));
+        // GZIPInputStream checks the trailer: the stream was closed properly.
+        String text = new String(new java.util.zip.GZIPInputStream(r.body()).readAllBytes(), StandardCharsets.UTF_8);
+        assertTrue(text.contains("event: result"), text);
+    }
+
     @Test
     void aTakenPortFallsThroughToTheNext() throws IOException {
         try (var taken = new java.net.ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {

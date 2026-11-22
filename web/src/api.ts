@@ -186,6 +186,17 @@ export class Api {
     return text.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as SculkEvent);
   }
 
+  /**
+   * The ids of new matches as they happen, and nothing else: for a view that
+   * fetches the rows itself, a fraction of the bytes of {@link stream}.
+   */
+  async *arrivals(filter: string, signal: AbortSignal): AsyncGenerator<number> {
+    const r = await this.request("GET", `/events/stream?${new URLSearchParams({ filter, ids: "true" })}`, undefined, signal);
+    for await (const { id } of sse(r)) {
+      if (id) yield Number(id);
+    }
+  }
+
   /** Live events as they happen (after {@code after}, backlog first, if given). Ends when {@code signal} aborts or the server goes away. */
   async *stream(filter: string, after: number | undefined, signal: AbortSignal): AsyncGenerator<SculkEvent> {
     const q = new URLSearchParams({ filter });
@@ -285,7 +296,7 @@ export class Api {
 }
 
 /** Server-sent events from a response, as (event name, data) pairs. */
-async function* sse(r: Response): AsyncGenerator<{ event: string; data: string }> {
+async function* sse(r: Response): AsyncGenerator<{ event: string; data: string; id: string }> {
   if (!r.body) return;
   const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
@@ -293,17 +304,23 @@ async function* sse(r: Response): AsyncGenerator<{ event: string; data: string }
     const { value, done } = await reader.read();
     if (done) return;
     buffer += value;
+    // Blocks by offset, and the rest kept once per read: a big read (a burst,
+    // over SSH or gzip) costs its length, not its length times its events.
+    let at = 0;
     let end: number;
-    while ((end = buffer.indexOf("\n\n")) >= 0) {
-      const block = buffer.slice(0, end);
-      buffer = buffer.slice(end + 2);
+    while ((end = buffer.indexOf("\n\n", at)) >= 0) {
+      const block = buffer.slice(at, end);
+      at = end + 2;
       let event = "message";
+      let id = "";
       const data: string[] = [];
       for (const line of block.split("\n")) {
         if (line.startsWith("event: ")) event = line.slice(7);
         else if (line.startsWith("data: ")) data.push(line.slice(6));
+        else if (line.startsWith("id: ")) id = line.slice(4);
       }
-      if (data.length || event !== "message") yield { event, data: data.join("\n") };
+      if (data.length || id || event !== "message") yield { event, data: data.join("\n"), id };
     }
+    buffer = buffer.slice(at);
   }
 }
