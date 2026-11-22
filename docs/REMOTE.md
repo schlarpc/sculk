@@ -60,6 +60,10 @@ little. A relay that answers `blocked:`, `restricted:`, `auth-required:` or
 - Each session's browser topic is `hex(sid)`, where `sid` is 32 random bytes
   the browser picks per attempt, so relays cannot link one browser's
   attempts together.
+- Both directions use the relays of the game's topic: the browser publishes
+  on the game's topic and subscribes to its own there, and the game
+  publishes its replies there on the browser's topic. So each server has one
+  set of relays, whatever the session.
 
 Every message is a Nostr event (NIP-01):
 
@@ -72,8 +76,8 @@ Every message is a Nostr event (NIP-01):
 | `pubkey`, `sig` | a throwaway secp256k1 key, one per session per side; BIP-340 |
 
 The game subscribes to `{"kinds": [k], "#x": [<game topic>], "since": now - 60}`,
-the browser likewise to its own topic. The 60 seconds allow for clocks that
-disagree.
+the browser likewise to its own topic (with its topic's kind). The 60
+seconds allow for clocks that disagree.
 
 ### Envelope
 
@@ -100,7 +104,10 @@ candidates gathered first), so there is no trickle.
 
 Relays do not store these events, and either side may have been
 reconnecting when one went past. So each side publishes its latest message
-again every 3 seconds until the peer's next message arrives. The game keeps
+again every 3 seconds until the peer's next message arrives. A message sent
+again is the same envelope, not encrypted afresh (the receiver drops it by
+its `n` before decrypting), in a new event: relays drop an event whose id
+they have seen. The game keeps
 publishing `approved` until the WebRTC connection is up or 30 seconds pass.
 A pending session expires after 60 seconds without approval.
 
