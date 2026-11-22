@@ -70,26 +70,65 @@ bytecode interpreter. Chicory makes one JVM method per wasm function, and at
 a mod cannot set JVM flags. `opt-level = "s"` inlines less: 28 functions are
 still over the limit, but the hot crypto is not.
 
+## AES-GCM from the JDK
+
+`--aes host` seals and opens DTLS records with `javax.crypto` through host
+imports (`rust/rtc-crypto/src/host_aes.rs`, `SculkHost.java`); HotSpot runs
+it with AES-NI and CLMUL. `--aes mixed` (host on one side, RustCrypto on
+the other) checks that the two interoperate.
+
+Costs are now thread CPU time per MB, which a busy or low-priority machine
+does not change much, though it still inflates them (SMT siblings, starved
+JIT threads: native read about 40% higher than on an idle machine). So
+compare cases within one session; `--vs` alternates two cases in one JVM.
+
+| 8 MB, alternating in one JVM, loaded machine | Sender ms/MB | Receiver ms/MB |
+|---|---:|---:|
+| `--aes rust` | 260 | 253 |
+| `--aes host` | 170 | 145 |
+
+The sender's CPU drops 35% and the receiver's 43%. At 1 MB/s, that is
+roughly 17% of a core for the mod's side on this loaded machine, against
+26% before.
+
 ## Where the time goes now
 
-A JFR profile of the `"s"` build, by crate: AES and AES-CTR 28%, str0m 27%,
-sctp-proto 20%, GHASH 5%, dimpl 4%, CRC-32C 3%.
+A JFR profile with `--aes host`: 38% of samples are in methods over
+HotSpot's 8000-byte limit, which it interprets; the JDK's GCM is about 3%.
 
-The hottest single function (15%) is str0m's `Rtc::do_poll_output`, still
-32 KB of bytecode, so it runs in HotSpot's interpreter. Others over the
-limit include `Rtc::do_handle_timeout`, `Session::handle_timeout` and
-sctp-proto's `Association::handle_event`.
+| Share | Bytecode | Function |
+|---:|---:|---|
+| 19% | 32 KB | str0m `Rtc::do_poll_output` |
+| 11% | small | SipHash (std's `RandomState`), from sctp-proto's `HashMap`s |
+| 6% | small | sctp-proto `PayloadQueue::get` |
+| 5% | 19 KB | sctp-proto `Association::handle_event` |
+| 3% | 21 KB | str0m `Rtc::do_handle_timeout` |
+| 3% | 8 KB | str0m `Rtc::poll_timeout` |
+| 3% | small | CRC-32C (sctp-proto) |
+| 2% | 38 KB | str0m `Session::handle_timeout` |
+
+`do_poll_output` is 271 lines of source. It is large because LLVM inlines
+the private functions it calls, each called once, and LLVM's bonus for
+inlining a function's last call outweighs any inline threshold. Lowering
+the threshold does not fix it:
+
+| Build (`--aes host`) | Huge methods | Sender ms/MB | Receiver ms/MB |
+|---|---:|---:|---:|
+| `opt-level = "s"`, LTO (kept) | 28 | 197–200 | 185–186 |
+| `-inline-threshold=25` | 25 | 207 | 208 |
+| `-inline-threshold=0` | 23 | 215 | 201 |
+| `lto = false` | 20 | 222 | 185 |
+
+(Separate JVMs, so only differences of more than a few percent count.)
 
 ## If more speed is needed
 
-Neither of these is needed for 1 MB/s.
-
-- **AES-GCM from the JDK, through host imports**: the crypto provider
-  (`rust/rtc-crypto`) calls a host function, and the JDK's AES-GCM uses
-  AES-NI and CLMUL. This removes about a third of the time.
-- **Smaller functions**: a lower LLVM inline threshold for the str0m and
-  sctp-proto crates, or a Chicory option that splits huge functions. This
-  would let HotSpot compile the rest of the hot path.
+- **Keep the hot functions under 8000 bytes**: `#[inline(never)]` on the
+  helpers that `do_poll_output`, `do_handle_timeout` and sctp-proto's
+  `handle_event` absorb, through patched copies of those crates; or a
+  Chicory option that splits a large function across JVM methods.
+- **A faster hasher in sctp-proto**: its maps are keyed by small integers
+  and need no SipHash; this needs a patch to sctp-proto too.
 
 ## Cost in the mod jar
 
