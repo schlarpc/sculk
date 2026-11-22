@@ -4,7 +4,8 @@
 # (scripts/remote-browser.py). The first visit waits for approval, which this
 # types at the server console (with remember); the game's own UI must then
 # load in the shell's sandboxed frame and show the game's status. A second
-# visit, with the same browser profile, must get straight in.
+# visit, with the same browser profile, must get straight in, and so must a
+# third from the shell's list of saved games, without the link.
 #
 # Needs the network (Nostr relays, STUN). Run inside `nix develop`.
 #
@@ -62,6 +63,8 @@ echo "== first visit"
 browse first || ok=0
 echo "== again, as the same browser"
 [ "$ok" = 1 ] && { browse again || ok=0; }
+echo "== from the saved games, without the link"
+[ "$ok" = 1 ] && { browse saved || ok=0; }
 
 grep -E 'remote access' "$log" | sed 's/^.*\(remote access\)/  \1/' | head -10
 [ -f "$run/config/sculk/remote/browsers.json" ] || { echo "FAIL: nothing remembered"; ok=0; }

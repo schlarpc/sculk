@@ -12,8 +12,12 @@ this page is the wire protocol, which two codebases implement:
 Status: works end to end with `remote = true` in `config/sculk.toml`: the
 game prints its link, a new browser waits for `/sculk remote accept`, one
 accepted with `remember` comes back without asking, and the page shows the
-game's own web UI. `scripts/smoke-remote.sh` tries all of it against a dev
-server and a headless Chromium.
+game's own web UI. The shell keeps each game it reaches (its key, named
+after `/api/status`'s platform until the user renames it) in IndexedDB, and
+lists them when opened without a link; a game that does not answer in 30
+seconds is said to be down or rekeyed, with a way to forget it.
+`scripts/smoke-remote.sh` tries all of it against a dev server and a
+headless Chromium.
 
 ## Overview
 

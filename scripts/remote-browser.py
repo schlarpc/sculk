@@ -1,11 +1,13 @@
 """The browser half of scripts/smoke-remote.sh: a headless Chromium, with a
 profile kept between visits, opens a game's remote access link.
 
-  remote-browser.py <link> <profile dir> <console fifo> <first|again>
+  remote-browser.py <link> <profile dir> <console fifo> <first|again|saved>
 
 first: the page must wait for approval, and show the code the game prompted
 with; this types `sculk remote accept 1 remember` at the server console.
-again: the same browser must get straight in. Either way, the game's own UI
+again: the same browser must get straight in. saved: the same browser,
+without the link, must list the game it connected to, by its platform, and
+get straight in from there. Every time, the game's own UI
 must then load in the sandboxed frame and show the game's status, and the
 live event stream must come through the tunnel.
 """
@@ -30,14 +32,25 @@ async def main() -> int:
         page = await ctx.new_page()
         page.on("console", lambda m: print(f"  console: {m.text}", flush=True))
         page.on("pageerror", lambda e: print(f"  page error: {e}", flush=True))
-        await page.goto(link)
+        if mode == "saved":
+            await page.goto(link.split("#")[0])
+            server = page.locator("button.server")
+            await server.first.wait_for(timeout=10000)
+            names = await server.all_inner_texts()
+            print(f"saved games: {names}", flush=True)
+            if len(names) != 1 or not names[0].startswith(("neoforge", "fabric", "forge")):
+                print("FAIL: the game was not kept, by its platform's name")
+                return 1
+            await server.first.click()
+        else:
+            await page.goto(link)
         asked = False
         for _ in range(240):
             t = await text(page)
             if "Waiting for approval" in t and not asked:
                 code = t.split("shows ")[1][:6]
                 print(f"page shows code {code}", flush=True)
-                if mode == "again":
+                if mode != "first":
                     print("FAIL: a remembered browser was asked again")
                     return 1
                 with open(console, "w") as c:
