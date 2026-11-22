@@ -1,0 +1,23 @@
+[package]
+name = "rtc-crypto"
+version = "0.1.0"
+description = "str0m's RustCrypto provider without rcgen, so it builds for wasm."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+str0m-proto = { version = "0.8", default-features = false, features = ["dtls"] }
+# Not dimpl's `rcgen` feature: it pulls in aws-lc-rs, which is C. The
+# certificate is made here instead (cert.rs).
+dimpl = { version = "0.9", default-features = false, features = ["rust-crypto"] }
+aes = "0.9"
+aes-gcm = "0.11"
+ctr = "0.10"
+hmac = "0.13"
+sha1 = "0.11"
+sha2 = "0.11"
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8"] }
+x509-cert = { version = "0.3", default-features = false, features = ["std", "builder"] }
+der = "0.8"
+getrandom = "0.4"

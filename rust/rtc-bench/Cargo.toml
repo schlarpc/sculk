@@ -1,0 +1,12 @@
+[package]
+name = "rtc-bench"
+version = "0.1.0"
+description = "Throughput of a str0m data channel: two peers over an in-memory link."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# No crypto feature: the provider is ours (rtc-crypto), pure Rust, so it builds for wasm.
+str0m = { version = "0.25", default-features = false }
+rtc-crypto = { path = "../rtc-crypto" }

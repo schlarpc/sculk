@@ -1,0 +1,19 @@
+# Rust code that runs in the mod as WebAssembly, under Chicory (libs/chicory).
+# Built by Nix through breakbulk: `nix build .#rtc-bench` (see flake.nix).
+[workspace]
+resolver = "3"
+members = ["rtc-bench", "rtc-crypto"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[profile.release]
+# Not 3: Chicory makes one JVM method per wasm function, and HotSpot does not
+# JIT a method over 8000 bytes of bytecode. Less inlining keeps the hot path
+# under that; 3 is about 4x slower in the JVM (bench/rtc/README.md).
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

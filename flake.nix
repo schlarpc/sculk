@@ -1,10 +1,26 @@
 {
   description = "sculk: scriptable protocol interception and injection for modded Minecraft";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Rust (rust/), built one crate per derivation; nix/rust.nix.
+    breakbulk = {
+      url = "github:schlarpc/breakbulk";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      breakbulk,
+      rust-overlay,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -79,13 +95,28 @@
         }
       );
 
-      packages = forAllSystems (pkgs: {
-        # The control server's web UI; Gradle runs `nix build .#web` and packs
-        # the result into each mod jar under sculk/web/.
-        web = pkgs.callPackage ./web { };
-        # @babel/standalone for the script transpiler, packed under sculk/babel/.
-        babel = pkgs.callPackage ./nix/babel { };
-      });
+      packages = forAllSystems (
+        pkgs:
+        let
+          rust =
+            (breakbulk.lib.mkRepository {
+              pkgs = pkgs.extend rust-overlay.overlays.default;
+              root = self;
+              modules = [ ./nix/rust.nix ];
+            }).workspaces.rust;
+        in
+        {
+          # The control server's web UI; Gradle runs `nix build .#web` and packs
+          # the result into each mod jar under sculk/web/.
+          web = pkgs.callPackage ./web { };
+          # @babel/standalone for the script transpiler, packed under sculk/babel/.
+          babel = pkgs.callPackage ./nix/babel { };
+          # str0m data channel benchmark (rust/rtc-bench), as wasm for Chicory
+          # (bench/rtc) and natively for comparison.
+          rtc-bench = rust.packages.rtc-bench;
+          rtc-bench-native = rust.target.${pkgs.stdenv.hostPlatform.rust.rustcTarget}.packages.rtc-bench;
+        }
+      );
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };
