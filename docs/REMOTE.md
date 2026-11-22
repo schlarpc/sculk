@@ -46,7 +46,8 @@ cipher; later messages are encrypted with these, with empty associated data.
 
 ### Relays
 
-Both sides take relays from the same list ([RELAYS](#relays), below), ordered for each server by
+Both sides take relays from the same list ([RELAYS](#relays), below),
+ordered for each server by
 `SHA-256(topic || url)` (the topic as ASCII hex, the URL as UTF-8), lowest
 first. The browser publishes and subscribes on the first 5; the game on the
 first 8, so that the two still meet when their copies of the list differ a
@@ -112,9 +113,20 @@ session that shows the same code.
 
 ## RELAYS
 
-Trystero's curated default list (from its `packages/nostr`, MIT, November
-2026): 30 relays checked for months of uptime, no auth, payment or proof of
-work, and working ephemeral round trips. It lives in code on both sides,
-`Nostr.RELAYS` in the game and `RELAYS` in the shell's `src/nostr.ts`; keep
-the two equal, and when updating, take Trystero's list again rather than
-editing by hand.
+Trystero's curated default list: relays checked for months of uptime, no
+auth, payment or proof of work, and working ephemeral round trips. The
+shell's build takes it from a pinned Trystero (`relays.nix` there), compiles
+it into the page, makes it the page's CSP `connect-src`, and publishes it
+as <https://sculk-ui.github.io/relays.json>. A weekly workflow there takes
+Trystero's latest, refusing a list that is malformed, has fewer than 20
+relays, or drops more than half of those served.
+
+The game (`RelayList`) fetches that file when remote access starts and
+daily, caches the last good copy in `config/sculk/cache/relays.json`, and
+falls back to the copy baked into the mod at build time (from the shell
+repo, pinned in `flake.lock`). That fetch tells GitHub Pages the server's
+address; it is the only thing remote access sends before a browser comes.
+
+Since a long-running game can hold yesterday's list while the shell has
+today's, the browser uses 5 relays and the game 8 (above), which still
+meet when a few relays have changed.

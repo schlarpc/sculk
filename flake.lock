@@ -82,7 +82,8 @@
       "inputs": {
         "breakbulk": "breakbulk",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay_2"
+        "rust-overlay": "rust-overlay_2",
+        "sculk-ui": "sculk-ui"
       }
     },
     "rust-overlay": {
@@ -126,6 +127,27 @@
         "type": "github"
       }
     },
+    "sculk-ui": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "trystero": "trystero"
+      },
+      "locked": {
+        "lastModified": 1795329694,
+        "narHash": "sha256-qj8YFLkpppM0tIg6d4QxoO+O7r/yIchme0/D67XOYlc=",
+        "ref": "refs/heads/main",
+        "rev": "e9c7ecd78bbc687cb7a54fc058354dd0c0eac953",
+        "revCount": 4,
+        "type": "git",
+        "url": "https://github.com/sculk-ui/sculk-ui.github.io"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://github.com/sculk-ui/sculk-ui.github.io"
+      }
+    },
     "systems": {
       "locked": {
         "lastModified": 1689347949,
@@ -159,6 +181,22 @@
       "original": {
         "owner": "numtide",
         "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "trystero": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794585817,
+        "narHash": "sha256-OJgk3/ig0XN8lWSJVt59GF4afMxvYv1gEq9dy/P6Bm8=",
+        "owner": "dmotz",
+        "repo": "trystero",
+        "rev": "d0e72da7954c9f920de7df194c37dce4cd92baaf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "dmotz",
+        "repo": "trystero",
         "type": "github"
       }
     }

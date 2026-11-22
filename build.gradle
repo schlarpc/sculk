@@ -60,3 +60,18 @@ tasks.register('babel', Exec) {
             'build', '.#babel', '--out-link', 'build/babel'
 }
 ext.babelDir = providers.gradleProperty('sculk.babelDir')
+
+// The Nostr relay list for remote access, from the pinned shell repo
+// (sculk-ui): `nix build .#relays`. Each platform packs it under
+// sculk/remote/ as the fallback for the copy the mod fetches from
+// https://sculk-ui.github.io/relays.json (docs/REMOTE.md), and core's tests
+// get it on their classpath. -Psculk.relaysDir=<dir> uses a copy at hand.
+tasks.register('relays', Exec) {
+    description = 'Fetches the remote access relay list with Nix into build/relays.'
+    workingDir = rootDir
+    inputs.files('flake.nix', 'flake.lock')
+    outputs.upToDateWhen { false } // Nix does its own caching, and the out-link is a symlink.
+    commandLine 'nix', '--extra-experimental-features', 'nix-command flakes',
+            'build', '.#relays', '--out-link', 'build/relays'
+}
+ext.relaysDir = providers.gradleProperty('sculk.relaysDir')

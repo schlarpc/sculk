@@ -91,6 +91,13 @@ processResources {
         filePermissions { unix('rw-r--r--') }
         dirPermissions { unix('rwxr-xr-x') }
     }
+    // The remote access relay list (see the root project's relays task).
+    if (!rootProject.relaysDir.isPresent()) dependsOn rootProject.tasks.named('relays')
+    from(rootProject.relaysDir.isPresent() ? rootProject.relaysDir.get() : rootProject.layout.buildDirectory.dir('relays')) {
+        include 'relays.json'
+        into 'sculk/remote'
+        filePermissions { unix('rw-r--r--') }
+    }
 }
 
 // runServer reads its console from Gradle's stdin, so commands can be typed

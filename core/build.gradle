@@ -56,4 +56,11 @@ processTestResources {
         filePermissions { unix('rw-r--r--') }
         dirPermissions { unix('rwxr-xr-x') }
     }
+    // The relay list under sculk/remote/, as in the mod jars.
+    if (!rootProject.relaysDir.isPresent()) dependsOn rootProject.tasks.named('relays')
+    from(rootProject.relaysDir.isPresent() ? rootProject.relaysDir.get() : rootProject.layout.buildDirectory.dir('relays')) {
+        include 'relays.json'
+        into 'sculk/remote'
+        filePermissions { unix('rw-r--r--') }
+    }
 }

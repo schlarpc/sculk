@@ -12,6 +12,14 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The remote access shell (https://sculk-ui.github.io/), for its Nostr
+    # relay list, which the mod bakes in as the fallback for the one it
+    # fetches from the site (docs/REMOTE.md).
+    sculk-ui = {
+      # git+https, not github:, which would send the configured API token.
+      url = "git+https://github.com/sculk-ui/sculk-ui.github.io";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -20,6 +28,7 @@
       nixpkgs,
       breakbulk,
       rust-overlay,
+      sculk-ui,
     }:
     let
       systems = [
@@ -111,6 +120,8 @@
           web = pkgs.callPackage ./web { };
           # @babel/standalone for the script transpiler, packed under sculk/babel/.
           babel = pkgs.callPackage ./nix/babel { };
+        # The relay list as of the pinned shell, packed under sculk/remote/.
+        relays = sculk-ui.packages.${pkgs.stdenv.hostPlatform.system}.relays;
           # str0m data channel benchmark (rust/rtc-bench), as wasm for Chicory
           # (bench/rtc) and natively for comparison.
           rtc-bench = rust.packages.rtc-bench;
