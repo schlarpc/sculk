@@ -1,0 +1,12 @@
+{
+ "comment": "Generated from the game's Nostr.java; the shell's nostr.ts must give the same. Regenerate only if docs/REMOTE.md changes.",
+ "serverKey": "31e0303fd6418d2f8c0e78b91f22e8caed0fbe48656dcf4767e4834f701b8f62",
+ "serverTopic": "1078764e5d8d6e3ae600d160686b1a4879ca93cb0628582f3391b0439adc73de",
+ "kind": 24216,
+ "filterSince": 1795000000,
+ "filter": {"kinds":[24216],"#x":["1078764e5d8d6e3ae600d160686b1a4879ca93cb0628582f3391b0439adc73de"],"since":1794999940},
+ "relays": ["wss://a.example","wss://b.example","wss://c.example","wss://d.example","wss://e.example","wss://f.example"],
+ "relaysForServerTopic": ["wss://a.example","wss://c.example","wss://d.example","wss://b.example","wss://f.example","wss://e.example"],
+ "event": {"secretKey": "b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef", "aux": "0000000000000000000000000000000000000000000000000000000000000001", "createdAt": 1795000000, "topic": "1078764e5d8d6e3ae600d160686b1a4879ca93cb0628582f3391b0439adc73de", "content": "c2N1bGsgcmVtb3RlIHYx",
+  "json": "{\"id\":\"615c460da88fa812f66dfa3c36f639550da32891bdf7e158af76cf8e4dd845c2\",\"pubkey\":\"dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659\",\"created_at\":1795000000,\"kind\":24216,\"tags\":[[\"x\",\"1078764e5d8d6e3ae600d160686b1a4879ca93cb0628582f3391b0439adc73de\"]],\"content\":\"c2N1bGsgcmVtb3RlIHYx\",\"sig\":\"fe6a81ec279fd5d60955a3477325181f6a906d1555d4108400392cd07db924ff2f8184e3ac2d887ad2d12b9472cb54e3b45b93c3f995fb1f3059411571ed86b8\"}"}
+}
