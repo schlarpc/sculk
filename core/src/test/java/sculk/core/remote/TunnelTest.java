@@ -20,6 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -33,7 +34,11 @@ class TunnelTest {
     private final AtomicReference<String> seenAuth = new AtomicReference<>();
     private final AtomicReference<String> seenCookie = new AtomicReference<>();
     private final AtomicReference<String> seenEncoding = new AtomicReference<>();
-    private final CountDownLatch streamClosed = new CountDownLatch(1);
+    /** One permit for each event stream the server saw end early. */
+    private final Semaphore streamClosed = new Semaphore(0);
+    /** While set, the channel is full: a send says so on {@link #blocked}, then waits. */
+    private volatile CountDownLatch full;
+    private final Semaphore blocked = new Semaphore(0);
     private Tunnel tunnel;
 
     @BeforeEach
@@ -75,7 +80,7 @@ class TunnelTest {
                     Thread.sleep(50);
                 }
             } catch (IOException | InterruptedException e) {
-                streamClosed.countDown();
+                streamClosed.release();
             } finally {
                 ex.close();
             }
@@ -83,7 +88,14 @@ class TunnelTest {
         server.start();
         readers = Executors.newCachedThreadPool();
         URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/");
-        tunnel = new Tunnel(out::add, () -> new Tunnel.Upstream() {
+        tunnel = new Tunnel(m -> {
+            CountDownLatch f = full;
+            if (f != null) {
+                blocked.release();
+                f.await();
+            }
+            out.add(m);
+        }, () -> new Tunnel.Upstream() {
             @Override
             public URI base() {
                 return base;
@@ -177,17 +189,49 @@ class TunnelTest {
         StringBuilder got = new StringBuilder();
         while (!got.toString().contains("data: 3")) got.append(next().text());
         tunnel.receive(Tunnel.message(5, Tunnel.CANCEL, new byte[0]));
-        assertTrue(streamClosed.await(10, TimeUnit.SECONDS), "the server saw the stream end");
+        assertTrue(streamClosed.tryAcquire(10, TimeUnit.SECONDS), "the server saw the stream end");
+    }
+
+    @Test
+    void aStreamIdUsedAgainIsStillCancellable() throws Exception {
+        request(5, "GET", "/api/stream", null, null);
+        assertEquals(Tunnel.RESPONSE, next().type());
+        // The first stream's reader is held in a send until the second stream is in place.
+        full = new CountDownLatch(1);
+        assertTrue(blocked.tryAcquire(10, TimeUnit.SECONDS));
+        tunnel.receive(Tunnel.message(5, Tunnel.CANCEL, new byte[0]));
+        request(5, "GET", "/api/stream", null, null);
+        CountDownLatch f = full;
+        full = null;
+        f.countDown();
+        // By the time the server notices, that reader has finished, and must not have taken the second with it.
+        assertTrue(streamClosed.tryAcquire(10, TimeUnit.SECONDS), "the first stream ended");
+        for (Msg m = next(); m.type() != Tunnel.RESPONSE; m = next()) assertEquals(Tunnel.RESPONSE_BODY, m.type());
+        tunnel.receive(Tunnel.message(5, Tunnel.CANCEL, new byte[0]));
+        assertTrue(streamClosed.tryAcquire(10, TimeUnit.SECONDS), "the second stream ended");
     }
 
     @Test
     void badPathsAreRefused() throws Exception {
-        for (String path : new String[] {"http://evil/", "//evil/x", "relative", "/a b"}) {
+        for (String path : new String[] {"http://evil/", "//evil/x", "relative", "/a b", "/%zz", "/a%2"}) {
             out.clear();
             request(7, "GET", path, null, null);
             Msg m = next();
             assertEquals(Tunnel.ERROR, m.type(), path);
         }
+    }
+
+    @Test
+    void aRequestTheClientWillNotSendIsRefusedAndForgotten() throws Exception {
+        // More of them than MAX_STREAMS: each must give its place back.
+        for (int id = 1; id <= Tunnel.MAX_STREAMS + 1; id++) {
+            request(id, "GET", "/api/hello", null, "{\"Accept\":\"a\\r\\nX: 1\"}");
+            Msg m = next();
+            assertEquals(Tunnel.ERROR, m.type());
+            assertEquals("bad request", m.text());
+        }
+        request(100, "GET", "/api/hello", null, null);
+        assertEquals("{\"hi\":true}", answer(100)[1]);
     }
 
     @Test

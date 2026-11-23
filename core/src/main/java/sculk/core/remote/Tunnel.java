@@ -56,7 +56,8 @@ public final class Tunnel {
      * is, and the shell decodes it, so DTLS and SCTP carry a fraction of the bytes.
      */
     private static final List<String> RESPONSE_HEADERS = List.of("content-type", "content-encoding", "cache-control");
-    private static final Pattern PATH = Pattern.compile("/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*");
+    /** A {@code %} must begin an escape, or {@link URI#resolve(String)} would throw. */
+    private static final Pattern PATH = Pattern.compile("/(?:[A-Za-z0-9._~!$&'()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*");
 
     /** Where messages to the browser go. */
     public interface Link {
@@ -74,7 +75,16 @@ public final class Tunnel {
     private final Link link;
     private final java.util.function.Supplier<Upstream> upstream;
     private final ExecutorService readers;
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    /**
+     * No proxy and no redirects: the request carries the control token, which
+     * goes to the control server and nowhere else, whatever the JVM's proxy
+     * properties say.
+     */
+    private final HttpClient http = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .proxy(HttpClient.Builder.NO_PROXY)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
     private final Map<Integer, Stream> streams = new ConcurrentHashMap<>();
     private volatile boolean closed;
 
@@ -154,7 +164,7 @@ public final class Tunnel {
                 Stream s = streams.get(id);
                 if (s == null) return;
                 if (s.body.size() + data.length > MAX_REQUEST) {
-                    streams.remove(id);
+                    streams.remove(id, s);
                     fail(id, "request too large");
                     return;
                 }
@@ -177,24 +187,35 @@ public final class Tunnel {
     private void start(Stream s) {
         Upstream up = upstream.get();
         if (up == null) {
-            streams.remove(s.id);
+            forget(s);
             fail(s.id, "the control server is off (its control setting), so there is nothing to show");
             return;
         }
-        HttpRequest.Builder req = HttpRequest.newBuilder(up.base().resolve(s.path))
-                .header("Authorization", "Bearer " + up.token());
-        s.headers.forEach((k, v) -> req.header(k, v));
-        byte[] body = s.body.toByteArray();
-        req.method(s.method, body.length == 0 && !s.method.equals("POST")
-                ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
-        s.pending = http.sendAsync(req.build(), HttpResponse.BodyHandlers.ofInputStream())
+        HttpRequest request;
+        try {
+            HttpRequest.Builder req = HttpRequest.newBuilder(up.base().resolve(s.path))
+                    .header("Authorization", "Bearer " + up.token());
+            s.headers.forEach((k, v) -> req.header(k, v));
+            byte[] body = s.body.toByteArray();
+            req.method(s.method, body.length == 0 && !s.method.equals("POST")
+                    ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
+            request = req.build();
+        } catch (RuntimeException e) {
+            // What the client will not send (a header value with a line break in
+            // it, say). Thrown from here it would leave the stream open for good.
+            forget(s);
+            fail(s.id, "bad request");
+            return;
+        }
+        s.pending = http.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
                 .whenComplete((response, error) -> {
                     if (error != null) {
-                        streams.remove(s.id);
-                        if (!s.cancelled) fail(s.id, "the control server did not answer: " + error.getMessage());
+                        forget(s);
+                        if (!stopped(s)) fail(s.id, "the control server did not answer: " + error.getMessage());
                         return;
                     }
-                    if (s.cancelled) {
+                    if (stopped(s)) {
+                        forget(s);
                         close(response.body());
                         return;
                     }
@@ -215,18 +236,32 @@ public final class Tunnel {
             link.send(message(s.id, RESPONSE, head.toString().getBytes(StandardCharsets.UTF_8)));
             byte[] buf = new byte[CHUNK];
             int n;
-            while (!s.cancelled && (n = in.read(buf)) >= 0) {
+            while (!stopped(s) && (n = in.read(buf)) >= 0) {
                 if (n > 0) link.send(message(s.id, RESPONSE_BODY, buf, 0, n));
             }
-            if (!s.cancelled) link.send(message(s.id, RESPONSE_END, new byte[0]));
+            if (!stopped(s)) link.send(message(s.id, RESPONSE_END, new byte[0]));
         } catch (IOException e) {
-            if (!s.cancelled) fail(s.id, "the control server stopped answering");
+            if (!stopped(s)) fail(s.id, "the control server stopped answering");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
-            streams.remove(s.id);
+            forget(s);
             close(in);
         }
+    }
+
+    /**
+     * Removes this stream and no other: once it is cancelled the browser may
+     * open another under the same id, which a late removal by id would take
+     * out of the count, and out of reach of CANCEL and {@link #close}.
+     */
+    private void forget(Stream s) {
+        streams.remove(s.id, s);
+    }
+
+    /** Cancelled, or the tunnel closed (which may miss a stream that was added as it closed). */
+    private boolean stopped(Stream s) {
+        return s.cancelled || closed;
     }
 
     private void cancel(Stream s) {
