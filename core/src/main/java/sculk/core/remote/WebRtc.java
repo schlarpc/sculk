@@ -38,6 +38,10 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Peer callbacks run on the WebRtc thread, and {@link Connection} may be
  * used only there: from elsewhere, go through {@link #execute}.
+ *
+ * <p>All connections share one wasm instance, and a trap in it (a panic in
+ * the Rust) leaves it unusable. Then every connection ends, their peers are
+ * told, and the next connection gets a new instance ({@link #trapped}).
  */
 public final class WebRtc implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger("sculk");
@@ -47,6 +51,14 @@ public final class WebRtc implements AutoCloseable {
     private static final long STUN_REFRESH_MS = 5 * 60_000;
     /** How long an answer waits for a first STUN reply, so it can include the public address. */
     private static final long STUN_WAIT_MS = 1_500;
+    /** A failed lookup of a STUN server's name is not repeated before this. */
+    private static final long STUN_RESOLVE_RETRY_MS = 30_000;
+    /** Connections at once, connected or not; an offer beyond them is not answered. */
+    static final int MAX_CONNECTIONS = 16;
+    /** A connection whose ICE has been disconnected this long is over: the browser left without saying so. */
+    static final long ICE_TIMEOUT_MS = 15_000;
+    /** Warnings that anyone's datagrams can cause are logged this often at most. */
+    private static final long WARN_EVERY_MS = 10_000;
 
     /** One browser's connection, as the game sees it. Called on the WebRtc thread. */
     public interface Peer {
@@ -62,7 +74,10 @@ public final class WebRtc implements AutoCloseable {
         default void closed(Connection c) {}
     }
 
-    private final WebRtcModule module = new WebRtcModule();
+    /** Replaced after a trap ({@link #trapped}); only the WebRtc thread uses it. */
+    private WebRtcModule module = new WebRtcModule();
+    /** The instance whose trap has been logged, so it is logged once. */
+    private WebRtcModule trappedModule;
     private final boolean hostAes;
     private final Selector selector;
     private final List<Sock> socks = new ArrayList<>();
@@ -71,6 +86,13 @@ public final class WebRtc implements AutoCloseable {
     private final Thread thread;
     private final ByteBuffer buf = ByteBuffer.allocate(65536);
     private volatile boolean closed;
+    /** The STUN servers' addresses, as last resolved (null: not yet), and when to resolve each again. */
+    private final InetSocketAddress[] stunAddrs = new InetSocketAddress[Stun.SERVERS.size()];
+    private final long[] stunResolveAt = new long[Stun.SERVERS.size()];
+    private final boolean[] stunResolving = new boolean[Stun.SERVERS.size()];
+    volatile long iceTimeoutMs = ICE_TIMEOUT_MS; // shorter in tests
+    private long warnedNanos = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(WARN_EVERY_MS);
+    private int unlogged;
 
     /** One socket: a local address, and what STUN says it looks like from outside. */
     private static final class Sock {
@@ -78,7 +100,9 @@ public final class WebRtc implements AutoCloseable {
         final InetSocketAddress local;
         final byte[] localBytes;
         InetSocketAddress mapped;
+        /** The request in flight, and the server it went to: only that server's reply counts. */
         byte[] stunTxn;
+        InetSocketAddress stunTo;
         long stunNext;
         int stunServer;
 
@@ -97,6 +121,8 @@ public final class WebRtc implements AutoCloseable {
         long deadlineNanos;
         boolean connected;
         boolean ended;
+        /** When ICE lost the browser (nanoTime); 0 while it has it. */
+        long iceLostNanos;
         final Map<Integer, String> channels = new HashMap<>();
 
         Connection(int handle, Peer peer) {
@@ -115,6 +141,9 @@ public final class WebRtc implements AutoCloseable {
             } catch (WebRtcModule.ModuleError e) {
                 LOG.debug("webrtc: send: {}", e.getMessage());
                 return false;
+            } catch (WebRtcModule.Trap e) {
+                trapped(e); // here, not thrown on: the caller is a peer, which need not know of traps
+                return false;
             }
         }
 
@@ -124,6 +153,9 @@ public final class WebRtc implements AutoCloseable {
             try {
                 return ended ? 0 : module.buffered(handle, channel);
             } catch (WebRtcModule.ModuleError e) {
+                return 0;
+            } catch (WebRtcModule.Trap e) {
+                trapped(e);
                 return 0;
             }
         }
@@ -135,6 +167,8 @@ public final class WebRtc implements AutoCloseable {
                 if (!ended) module.setBufferedLow(handle, channel, bytes);
             } catch (WebRtcModule.ModuleError e) {
                 LOG.debug("webrtc: low mark: {}", e.getMessage());
+            } catch (WebRtcModule.Trap e) {
+                trapped(e);
             }
         }
 
@@ -197,7 +231,9 @@ public final class WebRtc implements AutoCloseable {
     /**
      * Answers a browser's offer. The connection is created at once, and
      * {@code peer} hears about it from then on; the future gives the answer
-     * to send back, with every candidate in it (no trickle).
+     * to send back, with every candidate in it (no trickle). It fails, and
+     * no connection is made, for a bad offer or one beyond
+     * {@link #MAX_CONNECTIONS}.
      */
     public CompletableFuture<String> answer(String offer, Peer peer) {
         var result = new CompletableFuture<String>();
@@ -211,14 +247,23 @@ public final class WebRtc implements AutoCloseable {
                     schedule(this, 100);
                     return;
                 }
-                Connection c = newConnection(peer);
+                if (conns.size() >= MAX_CONNECTIONS) {
+                    result.completeExceptionally(new IOException("too many connections (" + conns.size() + ")"));
+                    return;
+                }
+                Connection c = null;
                 try {
+                    c = newConnection(peer);
                     String answer = module.acceptOffer(c.handle, offer);
                     drain(c);
                     result.complete(answer);
                 } catch (WebRtcModule.ModuleError e) {
                     end(c);
                     result.completeExceptionally(new IOException("bad offer: " + e.getMessage()));
+                } catch (RuntimeException e) {
+                    if (c != null) end(c);
+                    result.completeExceptionally(new IOException("no answer: " + e.getMessage()));
+                    throw e; // to safely(), which deals with a trap
                 }
             }
         };
@@ -244,6 +289,8 @@ public final class WebRtc implements AutoCloseable {
     }
 
     private Connection newConnection(Peer peer) {
+        // After a trap. Here and not at the trap, so one that keeps failing is tried per connection, not in a loop.
+        if (module.broken()) module = new WebRtcModule();
         Connection c = new Connection(module.create(hostAes), peer);
         conns.put(c.handle, c);
         for (Sock s : socks) {
@@ -274,6 +321,7 @@ public final class WebRtc implements AutoCloseable {
                 f.complete(task.run());
             } catch (Exception e) {
                 f.completeExceptionally(e);
+                if (e instanceof WebRtcModule.Trap t) trapped(t);
             }
         });
         return f;
@@ -297,55 +345,79 @@ public final class WebRtc implements AutoCloseable {
     private void loop() {
         try {
             while (!closed) {
-                long now = System.nanoTime();
-                long next = now + TimeUnit.SECONDS.toNanos(1);
-                for (Connection c : conns.values()) next = Math.min(next, c.deadlineNanos);
-                for (Sock s : socks) next = Math.min(next, s.stunNext);
-                for (var t : timers) next = Math.min(next, t.getKey());
-                long waitMs = Math.max(0, TimeUnit.NANOSECONDS.toMillis(next - now));
-                // Always select, even with tasks waiting: that is what reads
-                // the sockets, and a task may be waiting on what they bring.
-                if (!tasks.isEmpty() || waitMs == 0) selector.selectNow();
-                else selector.select(waitMs);
-                for (Runnable t; (t = tasks.poll()) != null; ) safely(t::run);
-                for (SelectionKey key : selector.selectedKeys()) readAll((Sock) key.attachment());
-                selector.selectedKeys().clear();
-                now = System.nanoTime();
-                for (Sock s : socks) if (s.stunNext <= now) stun(s, now);
-                for (Connection c : new ArrayList<>(conns.values())) {
-                    if (c.deadlineNanos <= now) {
-                        safely(() -> {
-                            module.timeout(c.handle);
-                            drain(c);
-                        });
-                    }
-                    if (!c.connected && !c.ended && System.currentTimeMillis() - c.started > CONNECT_TIMEOUT_MS) {
-                        LOG.info("webrtc: connection did not connect in {} s", CONNECT_TIMEOUT_MS / 1000);
-                        end(c);
-                    }
+                try {
+                    pass();
+                } catch (RuntimeException e) {
+                    // Nothing known gets here, but one odd datagram must not end remote access.
+                    if (e instanceof WebRtcModule.Trap t) trapped(t);
+                    else if (!closed) warn(e);
                 }
-                List<Runnable> due = new ArrayList<>();
-                timers.removeIf(t -> {
-                    if (t.getKey() <= System.nanoTime()) {
-                        due.add(t.getValue());
-                        return true;
-                    }
-                    return false;
-                });
-                due.forEach(t -> safely(t::run));
             }
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException e) {
             if (!closed) LOG.error("webrtc: stopped: {}", e.toString());
         } finally {
-            for (Connection c : new ArrayList<>(conns.values())) end(c);
-            for (Sock s : socks) {
-                try {
-                    s.channel.close();
-                } catch (IOException ignored) {
-                    // closing anyway
+            try {
+                for (Connection c : new ArrayList<>(conns.values())) end(c);
+            } finally {
+                for (Sock s : socks) {
+                    try {
+                        s.channel.close();
+                    } catch (IOException ignored) {
+                        // closing anyway
+                    }
                 }
             }
         }
+    }
+
+    /** One turn of the loop: wait for something to do, and do it. */
+    private void pass() throws IOException {
+        long now = System.nanoTime();
+        long next = now + TimeUnit.SECONDS.toNanos(1);
+        for (Connection c : conns.values()) next = Math.min(next, c.deadlineNanos);
+        for (Sock s : socks) next = Math.min(next, s.stunNext);
+        for (var t : timers) next = Math.min(next, t.getKey());
+        long waitMs = Math.max(0, TimeUnit.NANOSECONDS.toMillis(next - now));
+        // Always select, even with tasks waiting: that is what reads
+        // the sockets, and a task may be waiting on what they bring.
+        if (!tasks.isEmpty() || waitMs == 0) selector.selectNow();
+        else selector.select(waitMs);
+        for (Runnable t; (t = tasks.poll()) != null; ) safely(t::run);
+        try {
+            for (SelectionKey key : selector.selectedKeys()) readAll((Sock) key.attachment());
+        } finally {
+            selector.selectedKeys().clear();
+        }
+        now = System.nanoTime();
+        for (Sock s : socks) if (s.stunNext <= now) stun(s, now);
+        for (Connection c : new ArrayList<>(conns.values())) {
+            if (c.ended) continue; // by an earlier one's peer, or a trap
+            if (c.deadlineNanos <= now) {
+                safely(() -> {
+                    module.timeout(c.handle);
+                    drain(c);
+                });
+            }
+            if (!c.connected && !c.ended && System.currentTimeMillis() - c.started > CONNECT_TIMEOUT_MS) {
+                LOG.info("webrtc: connection did not connect in {} s", CONNECT_TIMEOUT_MS / 1000);
+                end(c);
+            }
+            // A browser that closes says so over DTLS. One that vanishes says nothing, and
+            // without this its connection, tunnel and event streams would stay for good.
+            if (!c.ended && c.iceLostNanos != 0 && now - c.iceLostNanos > TimeUnit.MILLISECONDS.toNanos(iceTimeoutMs)) {
+                LOG.info("webrtc: connection lost: ICE disconnected for {} s", iceTimeoutMs / 1000);
+                end(c);
+            }
+        }
+        List<Runnable> due = new ArrayList<>();
+        timers.removeIf(t -> {
+            if (t.getKey() <= System.nanoTime()) {
+                due.add(t.getValue());
+                return true;
+            }
+            return false;
+        });
+        due.forEach(t -> safely(t::run));
     }
 
     private interface Step {
@@ -355,9 +427,52 @@ public final class WebRtc implements AutoCloseable {
     private void safely(Step s) {
         try {
             s.run();
+        } catch (WebRtcModule.Trap e) {
+            trapped(e);
         } catch (Exception e) {
             LOG.warn("webrtc: {}", e.toString());
         }
+    }
+
+    /**
+     * The module trapped, so its instance is finished and every connection
+     * with it. They end here, which tells their peers; the next connection
+     * starts a new instance. One trap may be reported here several times,
+     * by each call that met it; those after the first find nothing left to do.
+     */
+    private void trapped(WebRtcModule.Trap e) {
+        if (trappedModule != module) {
+            trappedModule = module;
+            LOG.error("webrtc: {}; ending {} connection(s), new ones start afresh", e.getMessage(), conns.size());
+        }
+        for (Connection c : new ArrayList<>(conns.values())) end(c);
+    }
+
+    /** Fails the module as a panic in it would, for tests. The loop finds out as it would then: at its next call. */
+    CompletableFuture<Void> breakModule() {
+        return call(() -> {
+            try {
+                module.trap();
+            } catch (WebRtcModule.Trap expected) {
+                // left for the loop to meet
+            }
+            return null;
+        });
+    }
+
+    /**
+     * Logs a warning that a stranger's datagrams can cause, so at most once
+     * per {@link #WARN_EVERY_MS}: logged each time, a flood of them (a
+     * spoofed source address is all it takes) is a flood of log.
+     */
+    private void warn(Exception e) {
+        unlogged++;
+        long now = System.nanoTime();
+        if (now - warnedNanos < TimeUnit.MILLISECONDS.toNanos(WARN_EVERY_MS)) return;
+        if (unlogged == 1) LOG.warn("webrtc: {}", e.toString());
+        else LOG.warn("webrtc: {} (the last of {} such failures)", e.toString(), unlogged);
+        warnedNanos = now;
+        unlogged = 0;
     }
 
     private void readAll(Sock s) throws IOException {
@@ -368,7 +483,7 @@ public final class WebRtc implements AutoCloseable {
             buf.flip();
             byte[] data = new byte[buf.remaining()];
             buf.get(data);
-            if (Stun.isStun(data) && s.stunTxn != null && Arrays.equals(Stun.transactionId(data), s.stunTxn)) {
+            if (Stun.answers(data, s.stunTxn, s.stunTo, from)) {
                 InetSocketAddress mapped = Stun.mappedAddress(data);
                 if (mapped != null) {
                     if (!mapped.equals(s.mapped)) LOG.debug("webrtc: {} is {} from outside", s.local, mapped);
@@ -379,35 +494,88 @@ public final class WebRtc implements AutoCloseable {
                 continue;
             }
             byte[] fromBytes = WebRtcModule.addr(from);
-            for (Connection c : conns.values()) {
-                if (module.accepts(c.handle, fromBytes, s.localBytes, data)) {
-                    safely(() -> {
-                        module.receive(c.handle, fromBytes, s.localBytes, data);
-                        drain(c);
-                    });
-                    break;
+            try {
+                for (Connection c : conns.values()) {
+                    if (module.accepts(c.handle, fromBytes, s.localBytes, data)) {
+                        receive(c, fromBytes, s.localBytes, data);
+                        break;
+                    }
                 }
+            } catch (WebRtcModule.Trap e) {
+                trapped(e);
             }
         }
     }
 
+    private void receive(Connection c, byte[] from, byte[] to, byte[] data) {
+        try {
+            module.receive(c.handle, from, to, data);
+            drain(c);
+        } catch (WebRtcModule.Trap e) {
+            trapped(e);
+        } catch (Exception e) {
+            warn(e);
+        }
+    }
+
     private void stun(Sock s, long now) {
-        String server = Stun.SERVERS.get(s.stunServer++ % Stun.SERVERS.size());
         s.stunNext = now + TimeUnit.MILLISECONDS.toNanos(STUN_RETRY_MS);
         if (s.local.getAddress().isLoopbackAddress()) {
             s.stunNext = Long.MAX_VALUE; // nobody outside to ask
             return;
         }
-        try {
-            int colon = server.lastIndexOf(':');
-            var to = new InetSocketAddress(InetAddress.getByName(server.substring(0, colon)),
-                    Integer.parseInt(server.substring(colon + 1)));
-            if ((to.getAddress() instanceof Inet4Address) != (s.local.getAddress() instanceof Inet4Address)) return;
-            s.stunTxn = Stun.transactionId();
-            s.channel.send(ByteBuffer.wrap(Stun.bindingRequest(s.stunTxn)), to);
-        } catch (IOException | RuntimeException e) {
-            LOG.debug("webrtc: STUN {} from {}: {}", server, s.local, e.toString());
+        // The next server in turn whose address is known and of this socket's kind.
+        for (int i = 0; i < stunAddrs.length; i++) {
+            int n = s.stunServer++ % stunAddrs.length;
+            resolve(n, now);
+            InetSocketAddress to = stunAddrs[n];
+            if (to == null || (to.getAddress() instanceof Inet4Address) != (s.local.getAddress() instanceof Inet4Address)) continue;
+            try {
+                s.stunTxn = Stun.transactionId();
+                s.stunTo = to;
+                s.channel.send(ByteBuffer.wrap(Stun.bindingRequest(s.stunTxn)), to);
+            } catch (IOException | RuntimeException e) {
+                LOG.debug("webrtc: STUN {} from {}: {}", to, s.local, e.toString());
+            }
+            return;
         }
+    }
+
+    /**
+     * Looks up a STUN server's name again if it is time to, on a thread of
+     * its own: a lookup can block for seconds, and on this thread every
+     * session would wait with it. Until it answers, {@link #stun} uses the
+     * address it had.
+     */
+    private void resolve(int n, long now) {
+        if (stunResolving[n] || now < stunResolveAt[n]) return;
+        stunResolving[n] = true;
+        String server = Stun.SERVERS.get(n);
+        Thread t = new Thread(() -> {
+            InetSocketAddress found = null;
+            try {
+                int colon = server.lastIndexOf(':');
+                found = new InetSocketAddress(InetAddress.getByName(server.substring(0, colon)),
+                        Integer.parseInt(server.substring(colon + 1)));
+            } catch (IOException | RuntimeException e) {
+                LOG.debug("webrtc: STUN {}: {}", server, e.toString());
+            }
+            InetSocketAddress to = found;
+            execute(() -> resolved(n, to));
+        }, "sculk-webrtc-dns");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void resolved(int n, InetSocketAddress to) {
+        long now = System.nanoTime();
+        stunResolving[n] = false;
+        stunResolveAt[n] = now + TimeUnit.MILLISECONDS.toNanos(to != null ? STUN_REFRESH_MS : STUN_RESOLVE_RETRY_MS);
+        if (to == null) return;
+        boolean first = stunAddrs[n] == null;
+        stunAddrs[n] = to;
+        // Sockets that were waiting for an address ask now, not at their next retry.
+        if (first) for (Sock s : socks) if (s.mapped == null && s.stunTxn == null && s.stunNext != Long.MAX_VALUE) s.stunNext = now;
     }
 
     /** Takes every output the connection has, until it waits or ends. */
@@ -437,7 +605,13 @@ public final class WebRtc implements AutoCloseable {
                     c.peer.connected(c);
                 }
                 case WebRtcModule.ICE_STATE -> {
-                    if (out[0] == 4 && c.connected) LOG.debug("webrtc: ICE disconnected");
+                    // Disconnected may yet recover: the loop ends the connection if it stays so.
+                    if (out[0] != 4) {
+                        c.iceLostNanos = 0;
+                    } else if (c.iceLostNanos == 0) {
+                        c.iceLostNanos = System.nanoTime();
+                        LOG.debug("webrtc: ICE disconnected");
+                    }
                 }
                 case WebRtcModule.CLOSED -> end(c);
                 default -> {}
@@ -470,7 +644,11 @@ public final class WebRtc implements AutoCloseable {
         if (c.ended) return;
         c.ended = true;
         conns.remove(c.handle);
-        module.free(c.handle);
+        try {
+            if (!module.broken()) module.free(c.handle);
+        } catch (WebRtcModule.Trap e) {
+            trapped(e); // the others; this one is ended already
+        }
         safely(() -> c.peer.closed(c));
     }
 

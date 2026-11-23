@@ -22,6 +22,11 @@ import sculk.shaded.com.dylibso.chicory.wasm.WasmModule;
  * One instance of rust/sculk-webrtc, compiled to JVM classes at build time
  * (libs/webrtc), with typed calls over its exports. See the crate's lib.rs
  * for the interface. Not thread-safe: {@link WebRtc} uses it from one thread.
+ *
+ * <p>A trap ends the instance: the crate aborts on a panic, with its
+ * connection table still borrowed, so every later call would trap too. The
+ * first one marks the instance {@link #broken}, and from then on each call
+ * throws {@link Trap} without entering the module; the owner makes another.
  */
 final class WebRtcModule {
     static final String WASM = "/sculk/remote/sculk_webrtc.wasm";
@@ -38,11 +43,19 @@ final class WebRtcModule {
     private final ExportFunction input, outputPtr, outputLen;
     private final ExportFunction rtcNew, rtcFree, addHost, addSrflx, acceptOffer, offer, acceptAnswer;
     private final ExportFunction accepts, receive, timeout, poll, write, buffered, setBufferedLow;
+    private boolean broken;
 
     /** A call into the module failed; the message is the module's. */
     static final class ModuleError extends Exception {
         ModuleError(String message) {
             super(message);
+        }
+    }
+
+    /** The module trapped, in this call or an earlier one: this instance is of no more use. */
+    static final class Trap extends RuntimeException {
+        Trap(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -96,19 +109,54 @@ final class WebRtcModule {
         setBufferedLow = instance.export("rtc_set_buffered_low");
     }
 
+    /** Whether a call has trapped. Every call throws {@link Trap} from then on. */
+    boolean broken() {
+        return broken;
+    }
+
+    /** Every entry to the module goes through here, so no trap goes unnoticed. */
+    private long call(ExportFunction f, long... args) {
+        if (broken) throw new Trap("the WebRTC module has stopped", null);
+        try {
+            long[] r = f.apply(args);
+            return r == null || r.length == 0 ? 0 : r[0];
+        } catch (RuntimeException | StackOverflowError e) {
+            throw trap(e);
+        }
+    }
+
+    private Trap trap(Throwable e) {
+        broken = true;
+        return new Trap("the WebRTC module trapped: " + e, e);
+    }
+
+    /** Traps, as a panic in the module does: for tests. An input buffer of 4 GiB is more than it can have. */
+    void trap() {
+        call(input, -1); // as a u32
+    }
+
     private void put(byte[]... parts) {
         int len = 0;
         for (byte[] p : parts) len += p.length;
-        int ptr = (int) input.apply(len)[0];
-        for (byte[] p : parts) {
-            memory.write(ptr, p);
-            ptr += p.length;
+        int ptr = (int) call(input, len);
+        try {
+            for (byte[] p : parts) {
+                memory.write(ptr, p);
+                ptr += p.length;
+            }
+        } catch (RuntimeException e) {
+            throw trap(e); // a pointer outside its memory: the module is not to be trusted further
         }
     }
 
     /** The output buffer, as left by the last call. */
     byte[] output() {
-        return memory.readBytes((int) outputPtr.apply()[0], (int) outputLen.apply()[0]);
+        int ptr = (int) call(outputPtr), len = (int) call(outputLen);
+        try {
+            return memory.readBytes(ptr, len);
+        } catch (RuntimeException e) {
+            throw trap(e);
+        }
     }
 
     private int check(long r) throws ModuleError {
@@ -118,73 +166,73 @@ final class WebRtcModule {
 
     /** A new connection; {@code hostAes} seals DTLS records with the JDK's AES-GCM. */
     int create(boolean hostAes) {
-        return (int) rtcNew.apply(hostAes ? 1 : 0)[0];
+        return (int) call(rtcNew, hostAes ? 1 : 0);
     }
 
     void free(int h) {
-        rtcFree.apply(h);
+        call(rtcFree, h);
     }
 
     void addHost(int h, InetSocketAddress a) throws ModuleError {
         put(addr(a));
-        check(addHost.apply(h)[0]);
+        check(call(addHost, h));
     }
 
     void addSrflx(int h, InetSocketAddress publicAddr, InetSocketAddress base) throws ModuleError {
         put(addr(publicAddr), addr(base));
-        check(addSrflx.apply(h)[0]);
+        check(call(addSrflx, h));
     }
 
     /** The answer to a browser's offer. */
     String acceptOffer(int h, String sdp) throws ModuleError {
         put(sdp.getBytes(StandardCharsets.UTF_8));
-        check(acceptOffer.apply(h)[0]);
+        check(call(acceptOffer, h));
         return new String(output(), StandardCharsets.UTF_8);
     }
 
     /** An offer with one data channel: the browser's side, for tests. */
     String offer(int h, String label) throws ModuleError {
         put(label.getBytes(StandardCharsets.UTF_8));
-        check(offer.apply(h)[0]);
+        check(call(offer, h));
         return new String(output(), StandardCharsets.UTF_8);
     }
 
     void acceptAnswer(int h, String sdp) throws ModuleError {
         put(sdp.getBytes(StandardCharsets.UTF_8));
-        check(acceptAnswer.apply(h)[0]);
+        check(call(acceptAnswer, h));
     }
 
     boolean accepts(int h, byte[] from, byte[] to, byte[] datagram) {
         put(from, to, datagram);
-        return accepts.apply(h)[0] > 0;
+        return call(accepts, h) > 0;
     }
 
     void receive(int h, byte[] from, byte[] to, byte[] datagram) throws ModuleError {
         put(from, to, datagram);
-        check(receive.apply(h)[0]);
+        check(call(receive, h));
     }
 
     void timeout(int h) throws ModuleError {
-        check(timeout.apply(h)[0]);
+        check(call(timeout, h));
     }
 
     /** The next output's code; its details are in {@link #output()}. */
     int poll(int h) throws ModuleError {
-        return check(poll.apply(h)[0]);
+        return check(call(poll, h));
     }
 
     /** Whether the channel took the data (false: its buffer is full). */
     boolean write(int h, int channel, byte[] data, boolean binary) throws ModuleError {
         put(data);
-        return check(write.apply(h, channel, binary ? 1 : 0)[0]) == 1;
+        return check(call(write, h, channel, binary ? 1 : 0)) == 1;
     }
 
     int buffered(int h, int channel) throws ModuleError {
-        return check(buffered.apply(h, channel)[0]);
+        return check(call(buffered, h, channel));
     }
 
     void setBufferedLow(int h, int channel, int threshold) throws ModuleError {
-        check(setBufferedLow.apply(h, channel, threshold)[0]);
+        check(call(setBufferedLow, h, channel, threshold));
     }
 
     /** An address as the module takes it: IPv6 (IPv4 mapped), then the port, big-endian. */

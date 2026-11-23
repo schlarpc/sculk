@@ -50,6 +50,16 @@ final class Stun {
         return Arrays.copyOfRange(d, 8, 20);
     }
 
+    /**
+     * Whether {@code d}, which came from {@code from}, answers the request
+     * {@code transactionId} sent to {@code server}. The id alone does not
+     * say so: anyone who saw the request pass can send an answer with it,
+     * and with it an address of their choosing to offer browsers.
+     */
+    static boolean answers(byte[] d, byte[] transactionId, InetSocketAddress server, InetSocketAddress from) {
+        return transactionId != null && isStun(d) && Arrays.equals(transactionId(d), transactionId) && from.equals(server);
+    }
+
     /** The mapped address in a Binding success response, or null if it is not one or has none. */
     static InetSocketAddress mappedAddress(byte[] d) {
         if (!isStun(d)) return null;
