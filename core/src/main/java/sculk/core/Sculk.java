@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import sculk.core.remote.RemoteAccess;
 import sculk.core.command.SculkCommand;
 import sculk.core.control.ControlServer;
 import sculk.core.control.EventStore;
@@ -162,7 +163,12 @@ public final class Sculk {
         if (Settings.bool("remote")) {
             try {
                 Path base = platform.configDir().resolve("sculk");
-                sculk.remote = new sculk.core.remote.RemoteAccess(base.resolve("remote"), base.resolve("cache"),
+                // The key and the remembered browsers are not configuration to
+                // pass on: beside sculk-control.json, where a modpack export
+                // that takes config/ along does not take them.
+                Path secrets = Path.of("sculk", "remote");
+                RemoteAccess.moveFrom(base.resolve("remote"), secrets);
+                sculk.remote = new RemoteAccess(secrets, base.resolve("cache"),
                         Settings.intValue("remotePort"), line -> sculk.chat(line, null), () -> {
                             ControlServer c = sculk.control;
                             if (c == null) return null;

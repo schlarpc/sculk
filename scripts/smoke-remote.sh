@@ -29,7 +29,7 @@ online-mode=false
 level-type=minecraft\:flat
 PROPS
 # Start from a game that remembers no browser, and from a browser with no key.
-rm -rf "$run/config/sculk/remote" "$run/smoke-remote-profile"
+rm -rf "$run/sculk/remote" "$run/config/sculk/remote" "$run/smoke-remote-profile"
 
 cd "$root"
 shell=${SCULK_SHELL:-$(nix build .#shell --no-link --print-out-paths)}
@@ -47,7 +47,7 @@ web=$!
 # The browser this leaves remembered, and its key, go too: a later run of
 # this dev server by hand should not still trust them.
 trap 'exec 3>&-; kill -- -"$pgid" 2>/dev/null || true; kill "$web" 2>/dev/null || true; rm -f "$console"
-      rm -rf "$run/config/sculk/remote/browsers.json" "$run/smoke-remote-profile"' EXIT
+      rm -rf "$run/sculk/remote/browsers.json" "$run/smoke-remote-profile"' EXIT
 
 for _ in $(seq 1 180); do
     grep -q 'Done (' "$log" && break
@@ -71,5 +71,5 @@ echo "== from the saved games, without the link"
 [ "$ok" = 1 ] && { browse saved || ok=0; }
 
 grep -E 'remote access' "$log" | sed 's/^.*\(remote access\)/  \1/' | head -10
-[ -f "$run/config/sculk/remote/browsers.json" ] || { echo "FAIL: nothing remembered"; ok=0; }
+[ -f "$run/sculk/remote/browsers.json" ] || { echo "FAIL: nothing remembered"; ok=0; }
 if [ "$ok" = 1 ]; then echo "remote access OK"; else echo "remote access FAILED"; exit 1; fi

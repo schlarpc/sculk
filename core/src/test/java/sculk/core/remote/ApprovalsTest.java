@@ -139,6 +139,27 @@ class ApprovalsTest {
     }
 
     @Test
+    void filesFromTheOldPlaceAreMovedOnce() throws Exception {
+        Path old = dir.resolve("config/sculk/remote");
+        Path now = dir.resolve("sculk/remote");
+        Files.createDirectories(old);
+        var key = RemoteAccess.loadOrCreateKey(old.resolve("server.key"));
+        Files.writeString(old.resolve("browsers.json"), "{\"browsers\":[]}\n");
+        RemoteAccess.moveFrom(old, now);
+        assertFalse(Files.exists(old), "nothing left under config/");
+        assertTrue(Files.exists(now.resolve("browsers.json")));
+        assertArrayEquals(X25519.raw(key.getPublic()), X25519.raw(RemoteAccess.loadOrCreateKey(now.resolve("server.key")).getPublic()));
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(now.resolve("server.key"))));
+
+        // A key that turns up there again (a pack's) does not replace this game's.
+        Files.createDirectories(old);
+        RemoteAccess.loadOrCreateKey(old.resolve("server.key"));
+        RemoteAccess.moveFrom(old, now);
+        assertTrue(Files.exists(old.resolve("server.key")));
+        assertArrayEquals(X25519.raw(key.getPublic()), X25519.raw(RemoteAccess.loadOrCreateKey(now.resolve("server.key")).getPublic()));
+    }
+
+    @Test
     void theServerKeyPersists() throws Exception {
         Path file = dir.resolve("server.key");
         var k1 = RemoteAccess.loadOrCreateKey(file);

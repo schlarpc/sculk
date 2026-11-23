@@ -204,7 +204,7 @@ what an approved browser can do.
 `/sculk remote revoke <number>` forgets a browser, closes its connections,
 and refuses any it was still making. It cannot undo what the browser did
 while it was in: after revoking one that was not to be trusted, delete
-`config/sculk/remote/server.key` (the game makes a new key and link), look
+`sculk/remote/server.key` in the game directory (the game makes a new key and link), look
 through `browsers.json` there and the scripts directory, and restart.
 
 On a dedicated server the `/sculk` commands need permission level 4 or the
@@ -217,10 +217,13 @@ Two more things are trusted, and worth knowing:
   game remembers. The game cannot check the page. Its build is reproducible
   (the shell's README), and a game only prints the link: nothing stops a
   cautious operator serving the same files elsewhere.
-- **`config/sculk/remote/`.** `server.key` is the game's identity and
-  `browsers.json` its remembered browsers. A modpack export that takes
-  `config/` along gives both to everyone who installs it: leave that
-  directory out.
+- **`sculk/remote/` in the game directory.** `server.key` is the game's
+  identity and `browsers.json` its remembered browsers; whoever is given
+  both has the game's link answer to them and its browsers let in. They are
+  kept out of `config/` (and moved from `config/sculk/remote/`, where they
+  were at first) because modpack exports take `config/` along. Launchers
+  have no way for a mod to mark files as not for export, so when exporting
+  an instance, leave the `sculk` folder unticked.
 
 ## RELAYS
 

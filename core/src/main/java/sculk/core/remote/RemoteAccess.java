@@ -21,7 +21,7 @@ import sculk.core.platform.ChatLine;
  * and the pieces that reach browsers: {@link RelayList}, {@link
  * GameSignaling}, {@link Approvals} and {@link WebRtc}.
  *
- * <p>Its files, in {@code config/sculk/remote/}, readable by the owner only:
+ * <p>Its files, in {@code sculk/remote/} in the game directory (not under {@code config/}, which modpack exports take along), readable by the owner only:
  * {@code server.key}, the X25519 private key the link names, and
  * {@code browsers.json}, the browsers that come back without asking.
  */
@@ -51,7 +51,7 @@ public final class RemoteAccess implements AutoCloseable {
     /**
      * Starts remote access: loads or makes the key, and starts listening.
      *
-     * @param dir where its files are ({@code config/sculk/remote})
+     * @param dir where its files are ({@code sculk/remote})
      * @param cacheDir where the relay list is cached ({@code config/sculk/cache})
      * @param port the UDP port for WebRTC; 0 for any
      * @param chat shows a line to the player, or the server console
@@ -157,6 +157,27 @@ public final class RemoteAccess implements AutoCloseable {
         });
     }
 
+    /**
+     * Moves the files of a game that kept them in {@code old}
+     * ({@code config/sculk/remote}, at first) to {@code dir}, unless
+     * {@code dir} has a key already: its link and its remembered browsers
+     * stay good.
+     */
+    public static void moveFrom(Path old, Path dir) throws IOException {
+        if (!Files.isRegularFile(old.resolve("server.key")) || Files.exists(dir.resolve("server.key"))) return;
+        Files.createDirectories(dir);
+        for (String name : List.of("browsers.json", "server.key")) { // the key last: it is what says this is done
+            Path from = old.resolve(name);
+            if (Files.isRegularFile(from)) Files.move(from, dir.resolve(name), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+        try {
+            Files.deleteIfExists(old);
+        } catch (IOException e) {
+            // Something else is in it: leave it.
+        }
+        LOG.info("remote access: moved the server key and remembered browsers from {} to {}", old, dir.toAbsolutePath());
+    }
+
     /** The server key in {@code file} (base64 of the raw private key), made on first use. */
     static KeyPair loadOrCreateKey(Path file) throws IOException {
         if (Files.isRegularFile(file)) {
@@ -166,7 +187,7 @@ public final class RemoteAccess implements AutoCloseable {
         byte[] raw = ((XECPrivateKey) k.getPrivate()).getScalar()
                 .orElseThrow(() -> new IOException("this JVM does not expose X25519 private keys"));
         Approvals.writeOwnerOnly(file, Base64.getEncoder().encodeToString(raw) + "\n");
-        LOG.info("remote access: made a new server key in {}", file);
+        LOG.info("remote access: made a new server key in {}", file.toAbsolutePath());
         return k;
     }
 
