@@ -7,8 +7,7 @@ import java.util.HexFormat;
 
 /** The pieces of docs/REMOTE.md's signaling that both sides share. */
 public final class Signaling {
-    /** The Noise prologue. */
-    public static final byte[] PROLOGUE = "sculk remote v1".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] PROLOGUE = "sculk remote v1".getBytes(StandardCharsets.US_ASCII);
     public static final int SID = 32;
     /** Publish the latest message again this often until the peer answers. */
     public static final long RESEND_MS = 3000;
@@ -20,6 +19,17 @@ public final class Signaling {
     public static final long FINAL_MS = 30_000;
 
     private Signaling() {}
+
+    /**
+     * The Noise prologue: {@code "sculk remote v1" || sid}. With the sid in
+     * it, a first message someone recorded opens no session under another sid.
+     */
+    public static byte[] prologue(byte[] sid) {
+        if (sid.length != SID) throw new IllegalArgumentException("sid: " + sid.length + " bytes");
+        byte[] out = Arrays.copyOf(PROLOGUE, PROLOGUE.length + SID);
+        System.arraycopy(sid, 0, out, PROLOGUE.length, SID);
+        return out;
+    }
 
     /** {@code sid || n || body}: one message, in an event's content. */
     public record Envelope(byte[] sid, int n, byte[] body) {
@@ -49,9 +59,14 @@ public final class Signaling {
         }
     }
 
-    /** The six-digit code both sides show: SHA-256("sculk/v1/code" || h), first four bytes, mod 10^6. */
-    public static String approvalCode(byte[] handshakeHash) {
-        byte[] d = Nostr.sha256("sculk/v1/code".getBytes(StandardCharsets.US_ASCII), handshakeHash);
+    /**
+     * The six-digit code the browser shows and the player types:
+     * SHA-256("sculk/v1/code" || secret), first four bytes, mod 10^6, where
+     * {@code secret} is the session's ({@link NoiseXK.Transport#secret}).
+     * Nobody else can compute it, so nobody else can show it.
+     */
+    public static String approvalCode(byte[] secret) {
+        byte[] d = Nostr.sha256("sculk/v1/code".getBytes(StandardCharsets.US_ASCII), secret);
         long v = ((d[0] & 0xffL) << 24) | ((d[1] & 0xffL) << 16) | ((d[2] & 0xffL) << 8) | (d[3] & 0xffL);
         return String.format("%06d", v % 1_000_000);
     }

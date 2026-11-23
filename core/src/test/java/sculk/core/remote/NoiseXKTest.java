@@ -76,6 +76,9 @@ class NoiseXKTest {
                 assertArrayEquals(hex(v, "handshake_hash"), init.handshakeHash(), source);
             }
             assertArrayEquals(init.handshakeHash(), resp.handshakeHash(), source);
+            // Split()'s third output, which the approval code is derived from: the shell pins the same.
+            assertArrayEquals(hex(v, "secret"), it.secret(), source);
+            assertArrayEquals(hex(v, "secret"), rt.secret(), source);
             // The responder learns the initiator's static key.
             assertArrayEquals(X25519.raw(X25519.fromPrivate(hex(v, "init_static")).getPublic()),
                     resp.remoteStatic(), source);
@@ -90,6 +93,22 @@ class NoiseXKTest {
         var resp = NoiseXK.responder(server, new byte[0]);
         byte[] m1 = init.writeMessage(new byte[0]);
         assertThrows(GeneralSecurityException.class, () -> resp.readMessage(m1));
+    }
+
+    @Test
+    void aFalseMessageLeavesTheHandshakeAbleToReadTheRealOne() throws Exception {
+        KeyPair server = X25519.generate();
+        var init = NoiseXK.initiator(X25519.generate(), X25519.raw(server.getPublic()), new byte[0]);
+        var resp = NoiseXK.responder(server, new byte[0]);
+        assertThrows(GeneralSecurityException.class, () -> resp.readMessage(new byte[48]));
+        resp.readMessage(init.writeMessage(new byte[0]));
+        byte[] m2 = resp.writeMessage(new byte[0]);
+        assertThrows(GeneralSecurityException.class, () -> init.readMessage(new byte[48]));
+        init.readMessage(m2);
+        byte[] m3 = init.writeMessage("offer".getBytes(StandardCharsets.UTF_8));
+        assertThrows(GeneralSecurityException.class, () -> resp.readMessage(new byte[80]));
+        assertArrayEquals("offer".getBytes(StandardCharsets.UTF_8), resp.readMessage(m3));
+        assertArrayEquals(init.split().secret(), resp.split().secret());
     }
 
     @Test

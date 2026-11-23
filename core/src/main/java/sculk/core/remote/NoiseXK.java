@@ -31,8 +31,7 @@ import javax.crypto.spec.SecretKeySpec;
  *
  * The game is the responder. After the third message, {@link #split} gives
  * the two transport ciphers, {@link #remoteStatic} the browser's key (for the
- * allowlist), and {@link #handshakeHash} the value the approval code is
- * derived from. One instance per handshake, used from one thread.
+ * allowlist), and a secret from which the approval code is derived. One instance per handshake, used from one thread.
  */
 public final class NoiseXK {
     public static final String PROTOCOL = "Noise_XK_25519_AESGCM_SHA256";
@@ -122,11 +121,31 @@ public final class NoiseXK {
      * Reads the peer's next handshake message and returns its payload.
      *
      * @throws GeneralSecurityException if it does not authenticate; the
-     *     handshake is then dead and must be dropped
+     *     handshake is then as it was before, and can still read the real
+     *     message (anyone can send a false one: nothing before this
+     *     authenticates the sender)
      */
     public byte[] readMessage(byte[] message) throws GeneralSecurityException {
         if (isComplete() || ourTurn()) throw new IllegalStateException("not our turn to read (step " + step + ")");
         if (message.length > MAX_MESSAGE) throw new GeneralSecurityException("message over " + MAX_MESSAGE + " bytes");
+        byte[] ck = sym.ck, h = sym.h, rs0 = rs, re0 = re;
+        SecretKeySpec key = sym.cs.key;
+        long n = sym.cs.n;
+        try {
+            return read(message);
+        } catch (GeneralSecurityException | RuntimeException ex) {
+            // Every step replaces these and changes none in place.
+            sym.ck = ck;
+            sym.h = h;
+            sym.cs.key = key;
+            sym.cs.n = n;
+            rs = rs0;
+            re = re0;
+            throw ex;
+        }
+    }
+
+    private byte[] read(byte[] message) throws GeneralSecurityException {
         int at = 0;
         switch (step) {
             case 0 -> { // -> e, es (we are the responder)
@@ -175,17 +194,22 @@ public final class NoiseXK {
         return sym.h.clone();
     }
 
-    /** The two transport ciphers: ours to send with, and ours to receive with. */
+    /**
+     * The two transport ciphers: ours to send with, and ours to receive with.
+     * Noise's Split() with a third output of the same HKDF: a secret that
+     * only the two sides know, unlike the handshake hash, which anyone who
+     * saw the messages and knows the server's key can compute.
+     */
     public Transport split() {
         if (!isComplete()) throw new IllegalStateException("handshake not complete");
-        byte[][] k = Symmetric.hkdf(sym.ck, new byte[0], 2);
+        byte[][] k = Symmetric.hkdf(sym.ck, new byte[0], 3);
         var c1 = new CipherState(k[0]);
         var c2 = new CipherState(k[1]);
-        return initiator ? new Transport(c1, c2) : new Transport(c2, c1);
+        return initiator ? new Transport(c1, c2, k[2]) : new Transport(c2, c1, k[2]);
     }
 
-    /** The ciphers after the handshake. Each direction's nonces count up from 0. */
-    public record Transport(CipherState send, CipherState receive) {}
+    /** The ciphers after the handshake (each direction's nonces count up from 0), and the session's secret. */
+    public record Transport(CipherState send, CipherState receive, byte[] secret) {}
 
     /** A key and a nonce counter: Noise's CipherState, with AES-256-GCM. */
     public static final class CipherState {

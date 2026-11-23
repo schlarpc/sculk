@@ -180,7 +180,7 @@ public final class Sculk {
                                 }
                             };
                         });
-                LOG.info("remote access: {} (each new browser needs /sculk remote accept)", sculk.remote.link());
+                LOG.info("remote access: {} (each new browser shows a code, for /sculk remote accept <code>)", sculk.remote.link());
             } catch (IOException | RuntimeException e) {
                 LOG.error("cannot start remote access", e);
             }

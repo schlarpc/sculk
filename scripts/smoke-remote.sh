@@ -2,7 +2,7 @@
 # Remote access, end to end: boot a platform's dev server with remote = true,
 # serve the shell locally, and have a headless Chromium open the game's link
 # (scripts/remote-browser.py). The first visit waits for approval, which this
-# types at the server console (with remember); the game's own UI must then
+# gives by typing the page's code at the server console (with remember); the game's own UI must then
 # load in the shell's sandboxed frame and show the game's status. A second
 # visit, with the same browser profile, must get straight in, and so must a
 # third from the shell's list of saved games, without the link.
@@ -24,6 +24,7 @@ mkdir -p "$run"
 echo "eula=true" > "$run/eula.txt"
 cat > "$run/server.properties" <<PROPS
 server-port=$port
+server-ip=127.0.0.1
 online-mode=false
 level-type=minecraft\:flat
 PROPS
@@ -43,7 +44,10 @@ pgid=$!
 exec 3> "$console"
 (cd "$shell" && exec python3 -m http.server "$shell_port" --bind 127.0.0.1 > /dev/null 2>&1) &
 web=$!
-trap 'exec 3>&-; kill -- -"$pgid" 2>/dev/null || true; kill "$web" 2>/dev/null || true; rm -f "$console"' EXIT
+# The browser this leaves remembered, and its key, go too: a later run of
+# this dev server by hand should not still trust them.
+trap 'exec 3>&-; kill -- -"$pgid" 2>/dev/null || true; kill "$web" 2>/dev/null || true; rm -f "$console"
+      rm -rf "$run/config/sculk/remote/browsers.json" "$run/smoke-remote-profile"' EXIT
 
 for _ in $(seq 1 180); do
     grep -q 'Done (' "$log" && break

@@ -3,8 +3,8 @@ profile kept between visits, opens a game's remote access link.
 
   remote-browser.py <link> <profile dir> <console fifo> <first|again|saved>
 
-first: the page must wait for approval, and show the code the game prompted
-with; this types `sculk remote accept 1 remember` at the server console.
+first: the page must wait for approval and show its code; this types
+`sculk remote accept <code> remember` at the server console, as the page says.
 again: the same browser must get straight in. saved: the same browser,
 without the link, must list the game it connected to, by its platform, and
 get straight in from there. Every time, the game's own UI
@@ -14,6 +14,7 @@ live event stream must come through the tunnel.
 import asyncio
 import glob
 import os
+import re
 import sys
 
 from playwright.async_api import async_playwright
@@ -48,13 +49,13 @@ async def main() -> int:
         for _ in range(240):
             t = await text(page)
             if "Waiting for approval" in t and not asked:
-                code = t.split("shows ")[1][:6]
+                code = re.search(r"/sculk remote accept (\d{6}) remember", t).group(1)
                 print(f"page shows code {code}", flush=True)
                 if mode != "first":
                     print("FAIL: a remembered browser was asked again")
                     return 1
                 with open(console, "w") as c:
-                    c.write("sculk remote accept 1 remember\n")
+                    c.write(f"sculk remote accept {code} remember\n")
                 asked = True
             if "Connected" in t or await page.locator("iframe").count() > 0:
                 break

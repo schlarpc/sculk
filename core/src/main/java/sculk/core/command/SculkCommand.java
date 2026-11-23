@@ -7,6 +7,7 @@ import static com.mojang.brigadier.arguments.LongArgumentType.longArg;
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.StringArgumentType.greedyString;
 
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
@@ -37,7 +38,7 @@ import sculk.core.script.ScriptManager;
  *   <li>{@code /sculk mcp list}, {@code accept [number]}, {@code revoke
  *       <number>}: MCP clients that connect without the token wait for the
  *       player to accept them; {@code /sculk mcp token} prints the token;</li>
- *   <li>{@code /sculk remote link}, {@code open}, {@code list}, {@code accept <number>
+ *   <li>{@code /sculk remote link}, {@code open}, {@code list}, {@code accept <code>
  *       [remember]}, {@code deny <number>}, {@code revoke <number>}: remote
  *       access from any browser (docs/REMOTE.md); each new browser waits
  *       for the player to accept it, and a remembered one comes back
@@ -126,12 +127,13 @@ public final class SculkCommand {
                 .then(LiteralArgumentBuilder.<S>literal("list")
                         .executes(ctx -> withRemote(ctx.getSource(), reply, r -> remoteList(ctx.getSource(), r, reply))))
                 .then(LiteralArgumentBuilder.<S>literal("accept")
-                        .then(SculkCommand.<S>browserNumber(Approvals.Browser::isPending)
+                        // The code on the browser's page, typed: nothing here completes or shows it.
+                        .then(RequiredArgumentBuilder.<S, String>argument("code", StringArgumentType.word())
                                 .executes(ctx -> withRemote(ctx.getSource(), reply,
-                                        r -> remoteAccept(ctx.getSource(), r, getInteger(ctx, "number"), false, reply)))
+                                        r -> remoteAccept(ctx.getSource(), r, StringArgumentType.getString(ctx, "code"), false, reply)))
                                 .then(LiteralArgumentBuilder.<S>literal("remember")
                                         .executes(ctx -> withRemote(ctx.getSource(), reply,
-                                                r -> remoteAccept(ctx.getSource(), r, getInteger(ctx, "number"), true, reply))))))
+                                                r -> remoteAccept(ctx.getSource(), r, StringArgumentType.getString(ctx, "code"), true, reply))))))
                 .then(LiteralArgumentBuilder.<S>literal("deny")
                         .then(SculkCommand.<S>browserNumber(Approvals.Browser::isPending)
                                 .executes(ctx -> withRemote(ctx.getSource(), reply, r -> {
@@ -140,7 +142,7 @@ public final class SculkCommand {
                                     return 1;
                                 }))))
                 .then(LiteralArgumentBuilder.<S>literal("revoke")
-                        .then(SculkCommand.<S>browserNumber(b -> b.isRemembered() || b.connected() > 0)
+                        .then(SculkCommand.<S>browserNumber(b -> true)
                                 .executes(ctx -> withRemote(ctx.getSource(), reply, r -> {
                                     int n = getInteger(ctx, "number");
                                     r.revoke(n);
@@ -310,7 +312,7 @@ public final class SculkCommand {
         ChatLine line = ChatLine.of("remote access: " + remote.link());
         if (openUrl != null) line = line.text(" ").button("open", "/sculk remote open", "Open it in this computer's browser");
         reply.send(source, line, false);
-        reply.ok(source, "anyone with the link can ask to connect; each new browser still needs /sculk remote accept");
+        reply.ok(source, "anyone with the link can ask to connect; each new browser shows a code, and waits for /sculk remote accept <code>");
         return 1;
     }
 
@@ -322,21 +324,22 @@ public final class SculkCommand {
         }
         for (Approvals.Browser b : list) {
             List<String> state = new ArrayList<>();
-            if (b.isPending()) state.add("waiting, code " + b.code());
+            if (b.isPending()) state.add("waiting for /sculk remote accept <the code on its page>");
             if (b.connected() > 0) state.add("connected");
             if (b.isRemembered()) state.add("remembered");
             if (state.isEmpty()) state.add("seen");
             ChatLine line = ChatLine.of("#" + b.number + " " + b.shortKey() + "…: " + String.join(", ", state));
-            if (b.isPending()) line = line.text(" ").button("accept", "/sculk remote accept " + b.number, "Let it in until the game exits");
+            if (b.isPending()) line = line.text(" ").button("deny", "/sculk remote deny " + b.number, "Refuse it");
             reply.send(source, line, false);
         }
         return 1;
     }
 
-    private static <S> int remoteAccept(S source, RemoteAccess remote, int number, boolean remember, Reply<S> reply)
+    private static <S> int remoteAccept(S source, RemoteAccess remote, String code, boolean remember, Reply<S> reply)
             throws java.io.IOException {
-        var b = remote.approvals().accept(number, remember);
-        reply.ok(source, "approved browser #" + b.number + (remember ? ", and it will be let in next time" : " until the game exits"));
+        var b = remote.approvals().accept(code, remember);
+        reply.ok(source, "approved browser #" + b.number + (remember ? ", and it will be let in next time" : " this once")
+                + "; /sculk remote revoke " + b.number + " ends it");
         return 1;
     }
 
@@ -434,7 +437,7 @@ public final class SculkCommand {
         if (remoteLink != null) {
             return List.of(
                     "open " + remoteLink + " in any browser: remote access connects it to this server, no port forwarding",
-                    "a new browser waits for approval: /sculk remote list shows it, /sculk remote accept <number> lets it in");
+                    "a new browser shows a code and waits for approval: /sculk remote accept <code> lets it in");
         }
         List<String> lines = new ArrayList<>(localUiHelp(control, id));
         lines.add("or, with no port to forward: set remote = true in config/sculk.toml and restart, for a link that works in any browser (docs/REMOTE.md)");

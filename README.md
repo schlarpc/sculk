@@ -69,7 +69,9 @@ at the server console.
 `config/sculk.toml`, restart, and open the link the server prints
 (`https://sculk-ui.github.io/#…`) in any browser. Nothing needs a port
 opened or forwarded, the connection is end-to-end encrypted, and each new
-browser waits for `/sculk remote accept` at the console. See
+browser shows a code and waits for `/sculk remote accept <code>` at the
+console. Accepting a browser lets it do all the web UI can, which includes
+running code in the server. See
 [docs/REMOTE.md](docs/REMOTE.md).
 
 **Over SSH**, forward the port from your computer

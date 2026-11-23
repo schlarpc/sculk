@@ -23,13 +23,15 @@ import sculk.core.platform.ChatLine;
 
 /**
  * Which browsers may connect (docs/REMOTE.md, "Approval"): the ones
- * remembered in {@code browsers.json}, and the ones waiting for the player.
- * Each browser this run knows of has a number, which the {@code /sculk
- * remote} commands use.
+ * remembered in {@code browsers.json}, and the ones waiting for the player,
+ * who lets one in by typing the code its page shows. Each browser this run
+ * knows of has a number, which the other {@code /sculk remote} commands use.
  */
 public final class Approvals {
     /** Prompts in chat at once; more waiting browsers are only listed. */
     static final int MAX_PROMPTS = 3;
+    /** A browser that is neither remembered, waiting nor connected is dropped after this. */
+    private static final long IDLE_NS = TimeUnit.MINUTES.toNanos(5);
 
     /** A browser: its key, its number, and what it is doing. */
     public static final class Browser {
@@ -41,6 +43,9 @@ public final class Approvals {
         /** Set while it waits for approval. */
         CompletableFuture<Boolean> pending;
         String code;
+        /** Counts its revocations: a connection approved under an older count is not let in. */
+        int epoch;
+        long activeNs = System.nanoTime();
         final List<WebRtc.Connection> connections = new ArrayList<>();
 
         Browser(int number, byte[] key) {
@@ -60,11 +65,6 @@ public final class Approvals {
 
         public boolean isRemembered() {
             return remembered;
-        }
-
-        /** The code it was shown, while it waits. */
-        public String code() {
-            return code;
         }
 
         public int connected() {
@@ -119,7 +119,10 @@ public final class Approvals {
      * within {@link Signaling#APPROVAL_MS}. ({@link GameSignaling.Approver})
      */
     synchronized CompletableFuture<Boolean> approve(byte[] browserKey, String code) {
+        long now = System.nanoTime();
+        browsers.values().removeIf(x -> !x.remembered && !x.isPending() && x.connections.isEmpty() && now - x.activeNs > IDLE_NS);
         Browser b = browser(browserKey);
+        b.activeNs = now;
         if (b.remembered) return CompletableFuture.completedFuture(true);
         if (b.isPending()) b.pending.complete(false); // an older attempt from the same browser
         CompletableFuture<Boolean> mine = new CompletableFuture<>();
@@ -128,27 +131,43 @@ public final class Approvals {
         timers.schedule(() -> mine.complete(false), Signaling.APPROVAL_MS, TimeUnit.MILLISECONDS);
         long waiting = browsers.values().stream().filter(Browser::isPending).count();
         if (waiting <= MAX_PROMPTS) {
-            String accept = "/sculk remote accept " + b.number;
-            chat.accept(ChatLine.of("Browser #" + b.number + " wants remote access. Its page shows " + code
-                            + "; accept only if it matches: ")
-                    .button("accept", accept, "Let this browser in until the game exits")
-                    .text(" ")
-                    .button("accept and remember", accept + " remember", "Let this browser in, now and next time")
-                    .text(" ")
+            // Not the code: the player types what their own page shows, so a
+            // browser they are not looking at cannot be the one let in.
+            chat.accept(ChatLine.of("Browser #" + b.number + " wants remote access, which lets it run code in this game."
+                            + " If it is yours, type the code its page shows: /sculk remote accept <code>"
+                            + " (then \"remember\" to let it back in next time) ")
                     .button("deny", "/sculk remote deny " + b.number, "Refuse it"));
         }
         return mine;
     }
 
-    /** Approves waiting browser {@code number}; with {@code remember}, it comes back without asking. */
-    public synchronized Browser accept(int number, boolean remember) throws IOException {
-        Browser b = byNumber(number);
-        if (!b.isPending()) throw new IllegalArgumentException("browser #" + number + " is not waiting");
+    /**
+     * Approves the waiting browser whose page shows {@code code}; with
+     * {@code remember}, it comes back without asking. Two waiting browsers
+     * with one code are both refused: one of them may have been made to match.
+     */
+    public synchronized Browser accept(String code, boolean remember) throws IOException {
+        List<Browser> shown = browsers.values().stream().filter(b -> b.isPending() && b.code.equals(code)).toList();
+        if (shown.isEmpty()) {
+            throw new IllegalArgumentException("no waiting browser shows " + code + "; the code is on the browser's page, and lasts a minute");
+        }
+        if (shown.size() > 1) {
+            shown.forEach(b -> b.pending.complete(false));
+            throw new IllegalArgumentException(shown.size() + " waiting browsers show " + code + ", so both are refused; reload the page for a new code");
+        }
+        Browser b = shown.get(0);
         if (remember) {
             b.remembered = true;
             b.rememberedAt = Instant.now().toString();
-            save();
+            try {
+                save();
+            } catch (IOException | RuntimeException e) {
+                b.remembered = false;
+                b.rememberedAt = null;
+                throw e;
+            }
         }
+        b.activeNs = System.nanoTime();
         b.pending.complete(true);
         return b;
     }
@@ -160,17 +179,29 @@ public final class Approvals {
         return b;
     }
 
-    /** Forgets a remembered browser; returns its connections, for the caller to close. */
-    public synchronized List<WebRtc.Connection> revoke(int number) throws IOException {
+    /**
+     * Forgets a browser, for this run at least: it is no longer remembered,
+     * and a connection of its that is still being made will not be let in.
+     * Returns its connections, for the caller to close; {@link #save} then
+     * makes it last.
+     */
+    public synchronized List<WebRtc.Connection> revoke(int number) {
         Browser b = byNumber(number);
-        if (!b.remembered && b.connected() == 0) {
-            throw new IllegalArgumentException("browser #" + number + " is neither remembered nor connected");
-        }
-        if (b.remembered) {
-            b.remembered = false;
-            save();
-        }
+        b.remembered = false;
+        b.rememberedAt = null;
+        b.epoch++;
+        if (b.isPending()) b.pending.complete(false);
         return new ArrayList<>(b.connections);
+    }
+
+    /** What {@link #allowed} must be given later: taken when a browser is approved. */
+    synchronized int epoch(byte[] key) {
+        return browser(key).epoch;
+    }
+
+    /** Whether a browser approved at {@code epoch} has not been revoked since. */
+    synchronized boolean allowed(byte[] key, int epoch) {
+        return browser(key).epoch == epoch;
     }
 
     synchronized void connected(byte[] key, WebRtc.Connection c) {
@@ -178,10 +209,13 @@ public final class Approvals {
     }
 
     synchronized void disconnected(byte[] key, WebRtc.Connection c) {
-        browser(key).connections.remove(c);
+        Browser b = browser(key);
+        b.connections.remove(c);
+        b.activeNs = System.nanoTime();
     }
 
-    private synchronized void save() throws IOException {
+    /** Writes the remembered browsers to {@code browsers.json}. */
+    public synchronized void save() throws IOException {
         JsonArray list = new JsonArray();
         for (Browser b : browsers.values()) {
             if (!b.remembered) continue;

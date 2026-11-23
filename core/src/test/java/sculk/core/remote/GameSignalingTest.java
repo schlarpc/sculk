@@ -23,7 +23,7 @@ class GameSignalingTest {
     private static final List<String> RELAYS = IntStream.range(0, 12).mapToObj(i -> "wss://r" + i).toList();
 
     /** The browser's side, as the shell does it, minus WebRTC. */
-    static final class TestBrowser implements AutoCloseable {
+    static class TestBrowser implements AutoCloseable {
         final KeyPair key = X25519.generate();
         final byte[] sid = new byte[Signaling.SID];
         final String sidHex;
@@ -35,6 +35,7 @@ class GameSignalingTest {
         NoiseXK.Transport transport;
         int nextIn;
         volatile String lastContent;
+        byte[] first;
         final java.util.concurrent.ScheduledExecutorService resend =
                 java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
@@ -47,7 +48,7 @@ class GameSignalingTest {
             new SecureRandom().nextBytes(sid);
             sidHex = HexFormat.of().formatHex(sid);
             serverTopic = topic;
-            noise = NoiseXK.initiator(key, serverKey, Signaling.PROLOGUE);
+            noise = NoiseXK.initiator(key, serverKey, Signaling.prologue(sid));
             pool = new RelayPool(Nostr.relaysFor(serverTopic, RELAYS), Nostr.BROWSER_RELAYS, net,
                     () -> System.currentTimeMillis() / 1000, e -> onEvent(e.get("content").getAsString()));
             pool.subscribe(sidHex);
@@ -56,6 +57,7 @@ class GameSignalingTest {
         }
 
         void send(int n, byte[] body) {
+            if (n == 0) first = body;
             lastContent = new Signaling.Envelope(sid, n, body).encode();
             publish();
         }
@@ -103,7 +105,7 @@ class GameSignalingTest {
 
     @Test
     void theApprovalCodeIsPinned() {
-        // The cacophony vector's handshake hash; the shell's tests pin the same.
+        // The shell's tests pin the same code for the same 32 bytes.
         assertEquals("144909", Signaling.approvalCode(
                 HexFormat.of().parseHex("4f5a40e425d3adcdb2c715d988e4ef8763ed0f8aa0fe78e2d2879d71b2d38186")));
     }
@@ -124,7 +126,7 @@ class GameSignalingTest {
             assertEquals("approved", s.get("status").getAsString());
             assertEquals("ANSWER to OFFER", s.get("sdp").getAsString());
             assertEquals(HexFormat.of().formatHex(X25519.raw(b.key.getPublic())), HexFormat.of().formatHex(seen.get()));
-            assertEquals(Signaling.approvalCode(b.noise.handshakeHash()), code.get());
+            assertEquals(Signaling.approvalCode(b.transport.secret()), code.get());
         }
     }
 
@@ -165,6 +167,44 @@ class GameSignalingTest {
              var b = new TestBrowser(net, X25519.raw(other.getPublic()), g.topic())) {
             assertNull(b.statuses.poll(2, TimeUnit.SECONDS));
             assertNull(asked.get(), "approval was never asked");
+        }
+    }
+
+    @Test
+    void falseMessagesDoNotEndASession() throws Exception {
+        var net = new FakeRelays.Net();
+        KeyPair server = X25519.generate();
+        try (var g = game(net, server, (key, c) -> CompletableFuture.completedFuture(true));
+             var b = new TestBrowser(net, X25519.raw(server.getPublic())) {
+                 @Override
+                 void send(int n, byte[] body) {
+                     // Someone who saw the sid gets a third message in first.
+                     if (n == 1) super.send(1, new byte[64]);
+                     super.send(n, body);
+                 }
+             }) {
+            assertEquals("approved", b.next().get("status").getAsString());
+        }
+    }
+
+    @Test
+    void aRecordedFirstMessageOpensNoOtherSession() throws Exception {
+        var net = new FakeRelays.Net();
+        KeyPair server = X25519.generate();
+        try (var g = game(net, server, (key, c) -> CompletableFuture.completedFuture(true));
+             var b = new TestBrowser(net, X25519.raw(server.getPublic()))) {
+            assertEquals("approved", b.next().get("status").getAsString());
+            // The same first message under other sids: each fails, and holds no session.
+            byte[] first = b.first;
+            for (int i = 0; i < GameSignaling.MAX_SESSIONS + 2; i++) {
+                byte[] sid = new byte[Signaling.SID];
+                new SecureRandom().nextBytes(sid);
+                b.pool.publish(b.signer.event(b.serverTopic, new Signaling.Envelope(sid, 0, first).encode(),
+                        System.currentTimeMillis() / 1000 + i + 1));
+            }
+            try (var again = new TestBrowser(net, X25519.raw(server.getPublic()))) {
+                assertEquals("approved", again.next().get("status").getAsString(), "there is still room");
+            }
         }
     }
 

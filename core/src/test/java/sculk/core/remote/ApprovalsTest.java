@@ -47,10 +47,12 @@ class ApprovalsTest {
         assertFalse(decision.isDone());
         assertEquals(1, chat.size());
         String line = chat.get(0).plain();
-        assertTrue(line.contains("#1") && line.contains("123456"), line);
-        assertTrue(chat.get(0).toString().contains("/sculk remote accept 1"), "has an accept button");
+        assertTrue(line.contains("#1") && line.contains("/sculk remote accept <code>"), line);
+        assertFalse(chat.get(0).toString().contains("123456"), "the code is the page's to show, and the player's to type");
+        assertThrows(IllegalArgumentException.class, () -> a.accept("654321", false), "not a code a browser shows");
+        assertFalse(decision.isDone());
 
-        a.accept(1, false);
+        a.accept("123456", false);
         assertTrue(decision.getNow(false));
         assertFalse(a.browsers().get(0).isRemembered());
         assertFalse(Files.exists(dir.resolve("browsers.json")), "nothing remembered");
@@ -60,7 +62,7 @@ class ApprovalsTest {
     void rememberedBrowsersComeBackWithoutAsking() throws Exception {
         var a = approvals();
         var first = a.approve(key(2), "111111");
-        a.accept(1, true);
+        a.accept("111111", true);
         assertTrue(first.getNow(false));
         Path file = dir.resolve("browsers.json");
         assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
@@ -78,7 +80,7 @@ class ApprovalsTest {
         var decision = a.approve(key(3), "333333");
         a.deny(1);
         assertFalse(decision.getNow(true));
-        assertThrows(IllegalArgumentException.class, () -> a.accept(1, false), "no longer waiting");
+        assertThrows(IllegalArgumentException.class, () -> a.accept("333333", false), "no longer waiting");
     }
 
     @Test
@@ -88,18 +90,44 @@ class ApprovalsTest {
         var fresh = a.approve(key(4), "555555");
         assertFalse(old.getNow(true), "the older attempt is refused");
         assertFalse(fresh.isDone());
-        assertEquals("555555", a.browsers().get(0).code());
+        assertThrows(IllegalArgumentException.class, () -> a.accept("444444", false), "the older code is gone");
+        a.accept("555555", false);
+        assertTrue(fresh.getNow(false));
         assertEquals(1, a.browsers().size(), "one browser, one number");
+    }
+
+    @Test
+    void twoBrowsersShowingOneCodeAreBothRefused() throws Exception {
+        var a = approvals();
+        var mine = a.approve(key(6), "424242");
+        var other = a.approve(key(7), "424242");
+        assertThrows(IllegalArgumentException.class, () -> a.accept("424242", true));
+        assertFalse(mine.getNow(true));
+        assertFalse(other.getNow(true));
+        assertFalse(Files.exists(dir.resolve("browsers.json")), "nothing remembered");
+    }
+
+    @Test
+    void aRevokeReachesAConnectionStillBeingMade() throws Exception {
+        var a = approvals();
+        a.approve(key(8), "888888");
+        a.accept("888888", true);
+        int epoch = a.epoch(key(8));
+        assertTrue(a.allowed(key(8), epoch));
+        a.revoke(1);
+        assertFalse(a.allowed(key(8), epoch), "approved before the revoke: not let in after it");
+        assertFalse(a.approve(key(8), "999999").isDone(), "and asked again");
     }
 
     @Test
     void revokingForgets() throws Exception {
         var a = approvals();
         a.approve(key(5), "666666");
-        a.accept(1, true);
+        a.accept("666666", true);
         a.revoke(1);
+        a.save();
         assertFalse(approvals().approve(key(5), "777777").isDone(), "asks again after a restart");
-        assertThrows(IllegalArgumentException.class, () -> a.revoke(1), "nothing left to revoke");
+        assertThrows(IllegalArgumentException.class, () -> a.revoke(2), "no such browser");
     }
 
     @Test

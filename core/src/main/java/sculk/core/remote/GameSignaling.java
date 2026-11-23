@@ -39,7 +39,7 @@ public final class GameSignaling implements AutoCloseable {
     public interface Approver {
         /**
          * Called once a browser's handshake completes, with its static key and
-         * the code both sides show. Complete with true to approve; a remembered
+         * the code its page shows. Complete with true to approve; a remembered
          * key can complete at once. Must not block.
          */
         CompletableFuture<Boolean> approve(byte[] browserKey, String code);
@@ -75,7 +75,7 @@ public final class GameSignaling implements AutoCloseable {
         Session(byte[] sid, String sidHex) {
             this.sid = sid;
             this.sidHex = sidHex;
-            this.noise = NoiseXK.responder(serverKey, Signaling.PROLOGUE);
+            this.noise = NoiseXK.responder(serverKey, Signaling.prologue(sid));
         }
     }
 
@@ -158,22 +158,35 @@ public final class GameSignaling implements AutoCloseable {
             return;
         }
         byte[] body = env.body();
-        while (body != null && sessions.get(s.sidHex) == s) {
+        while (body != null && sessions.get(s.sidHex) == s && handle(s, s.nextIn, body)) {
             s.nextIn++;
-            handle(s, s.nextIn - 1, body);
             body = s.held.remove(s.nextIn);
         }
     }
 
-    private void handle(Session s, int n, byte[] body) {
+    /**
+     * Handles the browser's message {@code n}; false if it was not the
+     * browser's, and the real one may still come. The sid and n are in the
+     * clear, so anyone watching can send a false message for a session: it
+     * must not cost the browser its session.
+     */
+    private boolean handle(Session s, int n, byte[] body) {
+        byte[] payload = null;
+        try {
+            if (n <= 1) payload = s.noise.readMessage(body);
+        } catch (GeneralSecurityException | RuntimeException e) {
+            LOG.debug("remote signaling {}: message {} dropped ({})", s.sidHex.substring(0, 8), n, e.toString());
+            if (n == 0) {
+                // Nothing came of this sid. Not ended(): the real first message may follow.
+                cancel(s.deadline);
+                sessions.remove(s.sidHex);
+            }
+            return false;
+        }
         try {
             switch (n) {
-                case 0 -> { // Noise message 1; answer with message 2
-                    s.noise.readMessage(body);
-                    send(s, s.noise.writeMessage(new byte[0]));
-                }
+                case 0 -> send(s, s.noise.writeMessage(new byte[0])); // Noise message 1; answer with message 2
                 case 1 -> { // Noise message 3, carrying the offer
-                    byte[] payload = s.noise.readMessage(body);
                     s.transport = s.noise.split();
                     stopResend(s);
                     JsonObject p = JsonParser.parseString(new String(payload, StandardCharsets.UTF_8)).getAsJsonObject();
@@ -185,16 +198,17 @@ public final class GameSignaling implements AutoCloseable {
                 }
             }
         } catch (GeneralSecurityException | RuntimeException e) {
-            // Not from someone who holds the server's key, or not well formed.
+            // From the browser, and not well formed.
             LOG.debug("remote signaling {}: dropped ({})", s.sidHex.substring(0, 8), e.toString());
             end(s, null);
         }
+        return true;
     }
 
     private void askApproval(Session s, String offer) {
         s.state = State.APPROVAL;
         cancel(s.deadline);
-        String code = Signaling.approvalCode(s.noise.handshakeHash());
+        String code = Signaling.approvalCode(s.transport.secret());
         CompletableFuture<Boolean> decision = approver.approve(s.noise.remoteStatic(), code);
         if (!decision.isDone()) sendStatus(s, "{\"status\":\"pending\"}");
         s.deadline = thread.schedule(() -> {

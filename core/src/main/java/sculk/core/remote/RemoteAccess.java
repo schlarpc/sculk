@@ -87,10 +87,11 @@ public final class RemoteAccess implements AutoCloseable {
         return approvals;
     }
 
-    /** Forgets a remembered browser and drops its connections. */
+    /** Forgets a browser and drops its connections, whether or not the file can then be written. */
     public void revoke(int number) throws IOException {
         List<WebRtc.Connection> conns = approvals.revoke(number);
         webrtc.execute(() -> conns.forEach(WebRtc.Connection::close));
+        approvals.save();
     }
 
     private void refreshRelays() {
@@ -109,19 +110,29 @@ public final class RemoteAccess implements AutoCloseable {
 
     /** GameSignaling asks for the answer to an approved browser's offer. */
     private CompletableFuture<String> answer(byte[] browserKey, String offer) {
+        // Approved just now. Connecting takes a while yet, and a revoke in
+        // that time finds no connection to close: so each step asks again.
+        int epoch = approvals.epoch(browserKey);
         return webrtc.answer(offer, new WebRtc.Peer() {
             ChannelLink link;
             Tunnel tunnel;
 
+            private boolean revoked(WebRtc.Connection c) {
+                if (approvals.allowed(browserKey, epoch)) return false;
+                webrtc.execute(c::close);
+                return true;
+            }
+
             @Override
             public void connected(WebRtc.Connection c) {
                 approvals.connected(browserKey, c);
+                if (revoked(c)) return;
                 LOG.info("remote access: browser #{} connected", approvals.browser(browserKey).number);
             }
 
             @Override
             public void opened(WebRtc.Connection c, int channel, String label) {
-                if (!label.equals("sculk") || tunnel != null) return;
+                if (!label.equals("sculk") || tunnel != null || revoked(c)) return;
                 link = new ChannelLink(webrtc, c, channel);
                 tunnel = new Tunnel(link, upstream, readers);
             }

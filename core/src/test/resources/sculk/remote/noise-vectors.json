@@ -1,5 +1,5 @@
 {
- "comment": "Noise_XK_25519_AESGCM_SHA256 test vectors from the sources named in each (their empty psk fields dropped). Messages alternate initiator, responder, initiator, ...; from the fourth on they are transport messages.",
+ "comment": "Noise_XK_25519_AESGCM_SHA256 test vectors from the sources named in each (their empty psk fields dropped). Messages alternate initiator, responder, initiator, ...; from the fourth on they are transport messages. \"secret\" is ours, not the sources': the third output of Split()'s HKDF, which the approval code is derived from, pinned so that the game and the shell agree.",
  "vectors": [
   {
    "protocol_name": "Noise_XK_25519_AESGCM_SHA256",
@@ -37,7 +37,8 @@
      "ciphertext": "5b75e02c3584b6b202de94cc05d6063970c9da7e67283c258820381207706cd767b5b1152d"
     }
    ],
-   "source": "https://github.com/haskell-cryptography/cacophony/blob/master/vectors/cacophony.txt (Unlicense)"
+   "source": "https://github.com/haskell-cryptography/cacophony/blob/master/vectors/cacophony.txt (Unlicense)",
+   "secret": "38a19d9b02ba16bb5c5f4b4a1f8893a71824026689a708e7ea9d3c0611ca632a"
   },
   {
    "protocol_name": "Noise_XK_25519_AESGCM_SHA256",
@@ -70,7 +71,8 @@
      "ciphertext": "8945d8f40b8e09cc99a09d85aae9d589df34a0512aaaa7c16185aa17b9577885518fdb44062ef0d92a95797669de75db"
     }
    ],
-   "source": "https://github.com/mcginty/snow/blob/main/tests/vectors/snow.txt (Apache-2.0)"
+   "source": "https://github.com/mcginty/snow/blob/main/tests/vectors/snow.txt (Apache-2.0)",
+   "secret": "d0468261fdf1d7181dd04f416ce3501f8927dd98aa2651da6a29fac9a4893fa3"
   }
  ]
 }

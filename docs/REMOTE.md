@@ -10,8 +10,9 @@ this page is the wire protocol, which two codebases implement:
   [sculk-ui/sculk-ui.github.io](https://github.com/sculk-ui/sculk-ui.github.io).
 
 Status: works end to end with `remote = true` in `config/sculk.toml`: the
-game prints its link, a new browser waits for `/sculk remote accept`, one
-accepted with `remember` comes back without asking, and the page shows the
+game prints its link, a new browser shows a code and waits for
+`/sculk remote accept <code>`, one accepted with `remember` comes back
+without asking, and the page shows the
 game's own web UI. The shell keeps each game it reaches (its key, named
 after `/api/status`'s platform until the user renames it) in IndexedDB, and
 lists them when opened without a link; a game that does not answer in 30
@@ -27,8 +28,8 @@ headless Chromium.
 2. Browser and game meet on public Nostr relays and run a Noise XK handshake
    in signed Nostr events. Relays see hashed topics and ciphertext.
 3. After the handshake the game knows the browser's static key. A remembered
-   key is approved at once; any other waits for approval in game, where both
-   sides show the same short code.
+   key is approved at once; any other waits for approval in game: its page
+   shows a short code, and the player types it.
 4. Once approved, the game answers the browser's WebRTC offer, and the two
    connect directly. DTLS protects the data; the fingerprints it relies on
    came through Noise, so nothing in between could have swapped them.
@@ -36,7 +37,9 @@ headless Chromium.
 ## Noise
 
 `Noise_XK_25519_AESGCM_SHA256`, revision 34. The browser is the initiator,
-the game the responder, and the prologue is the ASCII bytes `sculk remote v1`.
+the game the responder, and the prologue is the ASCII bytes `sculk remote v1`
+followed by the session's `sid` (below): a first message someone recorded
+opens no session under another `sid`.
 
 ```
 <- s
@@ -48,6 +51,8 @@ the game the responder, and the prologue is the ASCII bytes `sculk remote v1`.
 
 After message 3, `Split()` gives each side a sending and a receiving
 cipher; later messages are encrypted with these, with empty associated data.
+Its HKDF is asked for a third output, the session's `secret`, which the
+[approval code](#approval-code) comes from.
 
 ## Nostr
 
@@ -96,6 +101,11 @@ sid (32 bytes) || n (1 byte) || body
 from 0. Relays deliver duplicates (each event comes from up to 5 relays) and
 can reorder, so the receiver keeps the next `n` it expects from the peer,
 drops lower ones, and holds higher ones until the gap fills.
+
+`sid` and `n` are in the clear and nothing signs them, so anyone watching a
+relay can send a message that claims to be a session's next. One that does
+not authenticate is dropped and changes nothing: the Noise state is left as
+it was, and the real message, sent again, is still read.
 
 | From | n | Body |
 |---|---:|---|
@@ -155,16 +165,59 @@ bodies.
 In the browser, the game's web UI runs in the shell's `frame.html`: a frame
 sandboxed without `allow-same-origin`, so with an opaque origin, away from
 the shell's keys and storage, whose CSP allows only its own loader and the
-`blob:` URLs it makes, and no connections. The loader fetches the UI
+`blob:` URLs it makes, and no fetches or loads from anywhere. (A peer
+connection is not a fetch: the CSP's `webrtc 'block'` stops it where the
+browser knows that directive, and elsewhere a game's UI could still send
+its own game's data out that way.) The loader does nothing unless its
+origin is opaque, so another site that frames `frame.html` without the
+sandbox gets nothing to run with the shell's origin. The loader fetches the UI
 (`index.html`, its stylesheet, fonts and script) through the tunnel and
 gives it the tunnel as `sculkEmbedding.fetch`, its only way out.
 
 ## Approval code
 
-Both sides show `SHA-256("sculk/v1/code" || handshake hash)`, its first four
-bytes as a big-endian integer modulo 1,000,000, as six digits. It comes
-from the session itself, so someone else holding the link cannot start a
-session that shows the same code.
+The browser's page shows `SHA-256("sculk/v1/code" || secret)`, its first
+four bytes as a big-endian integer modulo 1,000,000, as six digits, and the
+player types it: `/sculk remote accept <code>`, with `remember` to let the
+browser back in next time. The game computes the same code for each waiting
+browser, shows it nowhere, and lets in the one whose code it is given.
+
+`secret` is the third output of `Split()`'s HKDF, which only the two ends of
+a session have. (The handshake hash would not do: it is a hash of the
+server's key and of what the relays carried, so anyone holding the link can
+compute a session's, and steer their own by varying their last message.)
+So someone else holding the link cannot learn the code on the player's
+page, and typing it cannot let in a browser the player is not looking at.
+They can still guess: each of their waiting sessions (at most 8) is one
+chance in a million, and two waiting browsers with one code are both
+refused.
+
+## What approval grants
+
+An approved browser has the control server, as the control token would give
+it: the tunnel passes every path. That includes scripts, which run with the
+game's own rights, so **accepting a browser lets it run code on the game's
+computer**; the prompt says so. The header list and the token staying in
+the game keep the tunnel's requests well formed, and are not a limit on
+what an approved browser can do.
+
+`/sculk remote revoke <number>` forgets a browser, closes its connections,
+and refuses any it was still making. It cannot undo what the browser did
+while it was in: after revoking one that was not to be trusted, delete
+`config/sculk/remote/server.key` (the game makes a new key and link), look
+through `browsers.json` there and the scripts directory, and restart.
+
+Two more things are trusted, and worth knowing:
+
+- **The page.** The browser's key lives in the page at `sculk-ui.github.io`,
+  so whoever can change what that origin serves can act as every browser a
+  game remembers. The game cannot check the page. Its build is reproducible
+  (the shell's README), and a game only prints the link: nothing stops a
+  cautious operator serving the same files elsewhere.
+- **`config/sculk/remote/`.** `server.key` is the game's identity and
+  `browsers.json` its remembered browsers. A modpack export that takes
+  `config/` along gives both to everyone who installs it: leave that
+  directory out.
 
 ## RELAYS
 
@@ -180,7 +233,9 @@ The game (`RelayList`) fetches that file when remote access starts and
 daily, caches the last good copy in `config/sculk/cache/relays.json`, and
 falls back to the copy baked into the mod at build time (from the shell
 repo, pinned in `flake.lock`). That fetch tells GitHub Pages the server's
-address; it is the only thing remote access sends before a browser comes.
+address. Before any browser comes, remote access also connects to its
+relays (which see the game's address and its topic, a hash of its key),
+and asks Google's and Cloudflare's STUN servers for its public address.
 
 Since a long-running game can hold yesterday's list while the shell has
 today's, the browser uses 5 relays and the game 8 (above), which still
