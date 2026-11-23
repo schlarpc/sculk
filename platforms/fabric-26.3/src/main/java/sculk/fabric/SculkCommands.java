@@ -17,14 +17,14 @@ final class SculkCommands {
 
     static void register(boolean dedicatedServer) {
         if (dedicatedServer) {
-            // 26.3 checks permissions by name; LEVEL_GAMEMASTERS is SculkCommand.OPERATOR_LEVEL.
+            // 26.3 checks permissions by name; LEVEL_OWNERS is SculkCommand.OPERATOR_LEVEL.
             SculkCommand.Reply<CommandSourceStack> reply = (s, line, error) -> {
                 Component c = Chat.render(line);
                 if (error) s.sendFailure(c);
                 else s.sendSuccess(() -> c, false);
             };
             CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> dispatcher.register(
-                    SculkCommand.tree(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS), reply, null)));
+                    SculkCommand.tree(Commands.hasPermission(Commands.LEVEL_OWNERS), reply, null)));
         } else {
             Client.register();
         }

@@ -52,8 +52,13 @@ import sculk.core.script.ScriptManager;
  * </ul>
  */
 public final class SculkCommand {
-    /** The permission level a dedicated server requires: 2, the game's own level for cheat commands. */
-    public static final int OPERATOR_LEVEL = 2;
+    /**
+     * The permission level a dedicated server requires: 4, the console's and
+     * an owner's. These commands hand out the control server (an MCP client
+     * or a remote browser accepted here can run code in the server), which
+     * is more than level 2 means: command blocks and functions run at 2.
+     */
+    public static final int OPERATOR_LEVEL = 4;
 
     /** How a platform answers the player who ran the command: a line, as feedback or as an error. */
     @FunctionalInterface

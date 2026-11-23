@@ -25,9 +25,9 @@ final class SculkCommands {
 
     static void register(boolean dedicatedServer) {
         if (dedicatedServer) {
-            // 26.3 checks permissions by name; LEVEL_GAMEMASTERS is SculkCommand.OPERATOR_LEVEL.
+            // 26.3 checks permissions by name; LEVEL_OWNERS is SculkCommand.OPERATOR_LEVEL.
             NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) -> e.getDispatcher().register(
-                    SculkCommand.tree(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS), REPLY, null)));
+                    SculkCommand.tree(Commands.hasPermission(Commands.LEVEL_OWNERS), REPLY, null)));
         } else {
             Client.register();
         }

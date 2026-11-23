@@ -207,6 +207,9 @@ while it was in: after revoking one that was not to be trusted, delete
 `config/sculk/remote/server.key` (the game makes a new key and link), look
 through `browsers.json` there and the scripts directory, and restart.
 
+On a dedicated server the `/sculk` commands need permission level 4 or the
+console, since they hand out this access.
+
 Two more things are trusted, and worth knowing:
 
 - **The page.** The browser's key lives in the page at `sculk-ui.github.io`,

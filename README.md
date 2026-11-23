@@ -58,7 +58,9 @@ it.
 | `/sculk ui [event]` | open the web UI in your browser, signed in, at that event if given; on a dedicated server, say how to reach it |
 
 In a game client these are client commands, so they work on any server; a
-dedicated server offers them to operators.
+dedicated server offers them at its console and to operators of level 4
+(not to command blocks or functions: whoever can run them can run code in
+the server).
 
 **On a dedicated server**, the web UI listens on the server machine's
 loopback only (`http://127.0.0.1:25580/`), and there is no browser there to
