@@ -166,9 +166,9 @@ In the browser, the game's web UI runs in the shell's `frame.html`: a frame
 sandboxed without `allow-same-origin`, so with an opaque origin, away from
 the shell's keys and storage, whose CSP allows only its own loader and the
 `blob:` URLs it makes, and no fetches or loads from anywhere. (A peer
-connection is not a fetch: the CSP's `webrtc 'block'` stops it where the
-browser knows that directive, and elsewhere a game's UI could still send
-its own game's data out that way.) The loader does nothing unless its
+connection is not a fetch, and no CSP that browsers honour stops one: a
+game's UI could still send its own game's data out that way, and nothing
+else is within its reach.) The loader does nothing unless its
 origin is opaque, so another site that frames `frame.html` without the
 sandbox gets nothing to run with the shell's origin. The loader fetches the UI
 (`index.html`, its stylesheet, fonts and script) through the tunnel and
