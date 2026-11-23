@@ -203,10 +203,13 @@ class WebRtcTest {
     void answersNoMoreThanTheCap() throws Exception {
         try (var game = engine(); var browser = engine()) {
             String offer = browser.offer("sculk", new WebRtc.Peer() {}).get(10, TimeUnit.SECONDS).getValue();
+            // A cap of two: sixteen answers take a slow machine longer than a
+            // connection that never connects lasts, and then there is room again.
+            game.maxConnections = 2;
             // The same offer each time: nothing connects, but each answer is a connection until it times out.
-            // Asked for together, as each answer waits a while for STUN, and in turn the first would time out.
+            // Asked for together, as each answer waits a while for STUN.
             var answers = new java.util.ArrayList<CompletableFuture<String>>();
-            for (int i = 0; i < WebRtc.MAX_CONNECTIONS; i++) answers.add(game.answer(offer, new WebRtc.Peer() {}));
+            for (int i = 0; i < game.maxConnections; i++) answers.add(game.answer(offer, new WebRtc.Peer() {}));
             var closed = new CompletableFuture<Void>();
             var over = game.answer(offer, new WebRtc.Peer() {
                 @Override
@@ -214,10 +217,10 @@ class WebRtcTest {
                     closed.complete(null);
                 }
             });
-            var e = assertThrows(ExecutionException.class, () -> over.get(10, TimeUnit.SECONDS));
+            var e = assertThrows(ExecutionException.class, () -> over.get(30, TimeUnit.SECONDS));
             assertTrue(e.getCause().getMessage().contains("too many connections"), e.getCause().toString());
             assertFalse(closed.isDone(), "no connection was made, so none closed");
-            for (var answer : answers) assertTrue(answer.get(10, TimeUnit.SECONDS).contains("a=fingerprint:sha-256"));
+            for (var answer : answers) assertTrue(answer.get(30, TimeUnit.SECONDS).contains("a=fingerprint:sha-256"));
         }
     }
 }

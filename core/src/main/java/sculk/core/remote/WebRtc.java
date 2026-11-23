@@ -91,6 +91,7 @@ public final class WebRtc implements AutoCloseable {
     private final long[] stunResolveAt = new long[Stun.SERVERS.size()];
     private final boolean[] stunResolving = new boolean[Stun.SERVERS.size()];
     volatile long iceTimeoutMs = ICE_TIMEOUT_MS; // shorter in tests
+    volatile int maxConnections = MAX_CONNECTIONS; // fewer in tests
     private long warnedNanos = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(WARN_EVERY_MS);
     private int unlogged;
 
@@ -247,7 +248,7 @@ public final class WebRtc implements AutoCloseable {
                     schedule(this, 100);
                     return;
                 }
-                if (conns.size() >= MAX_CONNECTIONS) {
+                if (conns.size() >= maxConnections) {
                     result.completeExceptionally(new IOException("too many connections (" + conns.size() + ")"));
                     return;
                 }
