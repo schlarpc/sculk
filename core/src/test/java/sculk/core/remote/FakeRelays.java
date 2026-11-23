@@ -80,6 +80,11 @@ final class FakeRelays {
                 }
             }
 
+            /** Sends {@code event} down this connection's subscriptions, whatever its topic or worth. */
+            void deliver(String event) {
+                for (String sub : subs.keySet()) events.text("[\"EVENT\",\"" + sub + "\"," + event + "]");
+            }
+
             @Override
             public void close() {
                 open = false;
@@ -106,6 +111,77 @@ final class FakeRelays {
                 conns.remove(c);
                 c.events.closed("1006 gone");
             }
+        }
+    }
+
+    /**
+     * A relay on a real socket, for {@link RelayPool#webSockets}: it shakes
+     * hands, then sends one text message in fragments that never ends, to
+     * each connection in turn until that one is cut off.
+     */
+    static final class Endless implements AutoCloseable {
+        /** Where it stops by itself, had nobody cut it off. */
+        static final long GIVE_UP = 64L << 20;
+
+        private final java.net.ServerSocket server = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress());
+        /** Connections the other end dropped mid-message. */
+        final java.util.concurrent.atomic.AtomicInteger cut = new java.util.concurrent.atomic.AtomicInteger();
+        /** Set when a connection took {@link #GIVE_UP} bytes of one message. */
+        volatile boolean swallowed;
+
+        Endless() throws java.io.IOException {
+            Thread t = new Thread(this::serve, "endless-relay");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        String url() {
+            return "ws://127.0.0.1:" + server.getLocalPort();
+        }
+
+        private void serve() {
+            while (!server.isClosed()) {
+                try (var socket = server.accept()) {
+                    var in = new java.io.BufferedReader(new java.io.InputStreamReader(
+                            socket.getInputStream(), java.nio.charset.StandardCharsets.ISO_8859_1));
+                    String key = null;
+                    for (String line; (line = in.readLine()) != null && !line.isEmpty(); ) {
+                        if (line.toLowerCase(java.util.Locale.ROOT).startsWith("sec-websocket-key:")) {
+                            key = line.substring(line.indexOf(':') + 1).trim();
+                        }
+                    }
+                    if (key == null) continue;
+                    String accept = java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-1")
+                            .digest((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes(java.nio.charset.StandardCharsets.ISO_8859_1)));
+                    var out = socket.getOutputStream();
+                    out.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                            + "Sec-WebSocket-Accept: " + accept + "\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                    // A text frame, then continuations, none final: 16 KiB of "a" each.
+                    byte[] frame = new byte[4 + 16384];
+                    java.util.Arrays.fill(frame, (byte) 'a');
+                    frame[0] = 0x01;
+                    frame[1] = 126;
+                    frame[2] = 0x40;
+                    frame[3] = 0x00;
+                    try {
+                        for (long sent = 0; sent < GIVE_UP; sent += frame.length) {
+                            out.write(frame);
+                            frame[0] = 0x00;
+                        }
+                        swallowed = true;
+                        return;
+                    } catch (java.io.IOException e) {
+                        cut.incrementAndGet();
+                    }
+                } catch (java.io.IOException | java.security.NoSuchAlgorithmException e) {
+                    // closed, or a client that left during the handshake: next
+                }
+            }
+        }
+
+        @Override
+        public void close() throws java.io.IOException {
+            server.close();
         }
     }
 }

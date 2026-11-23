@@ -7,14 +7,16 @@ import com.google.gson.JsonParser;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -31,6 +33,12 @@ import org.slf4j.LoggerFactory;
  * to all of them, subscribes on all of them, and hands each event on once
  * however many relays deliver it.
  *
+ * <p>The relays are public and not trusted: what one sends is bounded
+ * ({@link #MESSAGE_MAX}, and no more is read from it until that is dealt
+ * with), an event counts only under the id its own fields hash to, and
+ * anything else it says is at most logged, cut short. Signatures are not
+ * checked: the Noise handshake in the content is what authenticates.
+ *
  * <p>A relay that refuses for good ({@code blocked:}, {@code restricted:},
  * {@code auth-required:}, {@code pow:}) is dropped and the next in order
  * taken; one that disconnects is retried with backoff. Publishing is
@@ -45,6 +53,16 @@ public final class RelayPool implements AutoCloseable {
     private static final int SEEN_MAX = 4096;
     private static final long BACKOFF_MIN_MS = 1000;
     private static final long BACKOFF_MAX_MS = 60_000;
+    /**
+     * The most one message from a relay may hold, in chars. An event's
+     * content is a Noise message of at most 65535 bytes in base64, so a real
+     * one is under 100 KiB; a relay that sends more is up to no good.
+     */
+    static final int MESSAGE_MAX = 256 * 1024;
+    private static final int LOG_MAX = 200;
+    private static final Pattern HEX64 = Pattern.compile("[0-9a-f]{64}");
+    private static final Pattern BASE64 = Pattern.compile("[A-Za-z0-9+/=]*");
+    private static final Pattern INTEGER = Pattern.compile("0|[1-9][0-9]{0,17}");
 
     /** One connection; the real one is a WebSocket, tests use a fake relay. */
     interface Link {
@@ -57,7 +75,8 @@ public final class RelayPool implements AutoCloseable {
     interface LinkEvents {
         void opened();
 
-        void text(String text);
+        /** A whole message; the link reads no more until the stage returned completes. */
+        CompletionStage<?> text(String text);
 
         void closed(String why);
     }
@@ -105,10 +124,19 @@ public final class RelayPool implements AutoCloseable {
         }
 
         @Override
-        public void text(String text) {
+        public CompletionStage<?> text(String text) {
+            var done = new CompletableFuture<Void>();
             run(() -> {
-                if (active.get(url) == this) receive(this, text);
+                try {
+                    if (active.get(url) == this) receive(this, text);
+                } catch (RuntimeException e) {
+                    // Whatever a relay can make this throw is its nonsense, not ours.
+                    LOG.debug("nostr {}: ignored a message ({})", url, clean(e.toString()));
+                } finally {
+                    done.complete(null);
+                }
             });
+            return done;
         }
 
         @Override
@@ -118,7 +146,7 @@ public final class RelayPool implements AutoCloseable {
                 open = false;
                 link = null;
                 if (closed) return;
-                LOG.debug("nostr {}: closed ({}); retrying in {} ms", url, why, backoff);
+                LOG.debug("nostr {}: closed ({}); retrying in {} ms", url, clean(why), backoff);
                 long delay = backoff;
                 backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
                 thread.schedule(() -> {
@@ -220,7 +248,7 @@ public final class RelayPool implements AutoCloseable {
     }
 
     private void retire(Relay r, String why) {
-        LOG.info("nostr {}: dropped ({})", r.url, why);
+        LOG.info("nostr {}: dropped ({})", r.url, clean(why));
         active.remove(r.url);
         retired.add(r.url);
         if (r.link != null) r.link.close();
@@ -244,6 +272,23 @@ public final class RelayPool implements AutoCloseable {
         }
     }
 
+    /** What a relay said, fit for the log: one line, printable ASCII, cut short. */
+    static String clean(String s) {
+        if (s == null) return "";
+        var out = new StringBuilder(Math.min(s.length(), LOG_MAX + 1));
+        for (int i = 0; i < s.length() && i < LOG_MAX; i++) {
+            char c = s.charAt(i);
+            out.append(c >= 0x20 && c < 0x7f ? c : '?');
+        }
+        if (s.length() > LOG_MAX) out.append('~');
+        return out.toString();
+    }
+
+    /** {@code e} if it is a JSON string, else null. */
+    private static String string(JsonElement e) {
+        return e != null && e.isJsonPrimitive() && e.getAsJsonPrimitive().isString() ? e.getAsString() : null;
+    }
+
     private void receive(Relay r, String text) {
         JsonArray msg;
         try {
@@ -253,35 +298,40 @@ public final class RelayPool implements AutoCloseable {
         } catch (RuntimeException e) {
             return; // a relay talking nonsense is ignored, not fatal
         }
-        String type = msg.get(0).isJsonPrimitive() ? msg.get(0).getAsString() : "";
+        String type = string(msg.get(0));
+        if (type == null) return;
         switch (type) {
             case "EVENT" -> {
                 if (msg.size() < 3 || !msg.get(2).isJsonObject()) return;
                 JsonObject event = msg.get(2).getAsJsonObject();
                 String topic = topicOf(event);
-                if (topic == null || !topics.contains(topic) || !msg.get(1).getAsString().equals(subId(topic))) return;
-                if (!event.has("id") || !event.get("id").isJsonPrimitive()) return;
-                String id = event.get("id").getAsString();
+                if (topic == null || !topics.contains(topic) || !subId(topic).equals(string(msg.get(1)))) return;
+                // The id is the event's own hash, not the relay's word for it:
+                // else one relay could send junk under a real event's id, and
+                // the real one, from the others, would be dropped as seen.
+                String id = idOf(event, topic);
+                if (id == null || !id.equals(string(event.get("id")))) return;
                 if (seen.contains(id)) return;
                 remember(id);
                 onEvent.accept(event);
             }
             case "OK" -> {
                 // ["OK", id, accepted, message]
-                if (msg.size() >= 4 && !msg.get(2).getAsBoolean()) {
-                    String why = msg.get(3).getAsString();
-                    if (TERMINAL.matcher(why).matches()) {
-                        retire(r, why);
-                    } else {
-                        LOG.debug("nostr {}: refused an event ({})", r.url, why);
-                    }
+                if (msg.size() < 4 || !msg.get(2).isJsonPrimitive() || !msg.get(2).getAsJsonPrimitive().isBoolean()) return;
+                String why = string(msg.get(3));
+                if (why == null || msg.get(2).getAsBoolean()) return;
+                if (TERMINAL.matcher(why).matches()) {
+                    retire(r, why);
+                } else {
+                    LOG.debug("nostr {}: refused an event ({})", r.url, clean(why));
                 }
             }
             case "CLOSED" -> {
                 // ["CLOSED", subId, message]: a refused subscription
-                String why = msg.size() >= 3 ? msg.get(2).getAsString() : "";
+                String why = msg.size() >= 3 ? string(msg.get(2)) : null;
+                if (why == null) return;
                 if (TERMINAL.matcher(why).matches()) retire(r, why);
-                else LOG.debug("nostr {}: subscription closed ({})", r.url, why);
+                else LOG.debug("nostr {}: subscription closed ({})", r.url, clean(why));
             }
             default -> {
                 // EOSE, NOTICE, AUTH: nothing to do
@@ -289,15 +339,40 @@ public final class RelayPool implements AutoCloseable {
         }
     }
 
+    /** The topic of an event tagged as ours are, {@code [["x", topic]]} and no more; else null. */
     private static String topicOf(JsonObject event) {
         if (!event.has("tags") || !event.get("tags").isJsonArray()) return null;
-        for (JsonElement t : event.getAsJsonArray("tags")) {
-            if (t.isJsonArray() && t.getAsJsonArray().size() >= 2
-                    && "x".equals(t.getAsJsonArray().get(0).getAsString())) {
-                return t.getAsJsonArray().get(1).getAsString();
-            }
-        }
-        return null;
+        JsonArray tags = event.getAsJsonArray("tags");
+        if (tags.size() != 1 || !tags.get(0).isJsonArray()) return null;
+        JsonArray tag = tags.get(0).getAsJsonArray();
+        if (tag.size() != 2 || !"x".equals(string(tag.get(0)))) return null;
+        String topic = string(tag.get(1));
+        return topic != null && HEX64.matcher(topic).matches() ? topic : null;
+    }
+
+    /**
+     * The id NIP-01 gives an event with these fields, as {@link Nostr.Signer}
+     * and the shell compute it; null for an event neither would have made.
+     * Theirs hold only ASCII that JSON does not escape, so the serialization
+     * is plain concatenation, and taking no other kind leaves a relay no
+     * second spelling of one event.
+     */
+    private static String idOf(JsonObject event, String topic) {
+        String pubkey = string(event.get("pubkey"));
+        String content = string(event.get("content"));
+        String createdAt = integer(event.get("created_at"));
+        String kind = integer(event.get("kind"));
+        if (pubkey == null || content == null || createdAt == null || kind == null) return null;
+        if (!HEX64.matcher(pubkey).matches() || !BASE64.matcher(content).matches()) return null;
+        String serial = "[0,\"" + pubkey + "\"," + createdAt + "," + kind + ",[[\"x\",\"" + topic + "\"]],\"" + content + "\"]";
+        return HexFormat.of().formatHex(Nostr.sha256(serial.getBytes(StandardCharsets.US_ASCII)));
+    }
+
+    /** {@code e} as written, if it is a JSON number written as a plain whole one, else null. */
+    private static String integer(JsonElement e) {
+        if (e == null || !e.isJsonPrimitive() || !e.getAsJsonPrimitive().isNumber()) return null;
+        String s = e.getAsString();
+        return INTEGER.matcher(s).matches() ? s : null;
     }
 
     /** Links over {@code java.net.http} WebSockets. */
@@ -334,6 +409,7 @@ public final class RelayPool implements AutoCloseable {
             http.newWebSocketBuilder()
                     .buildAsync(URI.create(url), new WebSocket.Listener() {
                         private final StringBuilder partial = new StringBuilder();
+                        private boolean over;
 
                         @Override
                         public void onOpen(WebSocket ws) {
@@ -348,25 +424,41 @@ public final class RelayPool implements AutoCloseable {
 
                         @Override
                         public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
-                            partial.append(data);
-                            if (last) {
-                                String text = partial.toString();
+                            if (over) return null;
+                            if (partial.length() + data.length() > MESSAGE_MAX) {
+                                // Not kept, and not asked for more: a relay
+                                // must not be able to fill the game's heap.
+                                over = true;
                                 partial.setLength(0);
-                                events.text(text);
+                                partial.trimToSize();
+                                ws.abort();
+                                events.closed("a message over " + MESSAGE_MAX + " chars");
+                                return null;
                             }
-                            ws.request(1);
+                            partial.append(data);
+                            if (!last) {
+                                ws.request(1);
+                                return null;
+                            }
+                            String text = partial.toString();
+                            partial.setLength(0);
+                            // The next frame is asked for once this message is
+                            // dealt with, so a relay that sends faster than the
+                            // pool's thread works waits in its own socket, not
+                            // in that thread's queue.
+                            events.text(text).whenComplete((x, e) -> ws.request(1));
                             return null;
                         }
 
                         @Override
                         public CompletionStage<?> onClose(WebSocket ws, int status, String reason) {
-                            events.closed(status + " " + reason);
+                            if (!over) events.closed(status + " " + reason);
                             return null;
                         }
 
                         @Override
                         public void onError(WebSocket ws, Throwable error) {
-                            events.closed(error.toString());
+                            if (!over) events.closed(error.toString()); // told once already
                         }
                     })
                     .whenComplete((ws, error) -> {

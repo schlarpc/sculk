@@ -31,6 +31,10 @@ class RelayListTest {
         return IntStream.range(0, 25).mapToObj(i -> "wss://r" + i + "." + host).toList();
     }
 
+    private static List<String> with(List<String> relays, String more) {
+        return java.util.stream.Stream.concat(relays.stream(), java.util.stream.Stream.of(more)).toList();
+    }
+
     private static String json(List<String> relays) {
         return "{\"source\":\"test\",\"relays\":[" + String.join(",", relays.stream().map(r -> "\"" + r + "\"").toList()) + "]}";
     }
@@ -86,6 +90,13 @@ class RelayListTest {
             json(List.of(relays("x.example").toArray(String[]::new)).stream()
                     .map(r -> r.replace("wss://", "ws://")).toList()), // not wss
             json(java.util.stream.Stream.concat(relays("x.example").stream(), relays("x.example").stream().limit(1)).toList()),
+            json(IntStream.range(0, RelayList.MAX_RELAYS + 1).mapToObj(i -> "wss://r" + i + ".x.example").toList()), // too many
+            // addresses, as a URL parser reads them, not names
+            json(with(relays("x.example"), "wss://192.168.1.1")),
+            json(with(relays("x.example"), "wss://10.0.0.1:8080/")),
+            json(with(relays("x.example"), "wss://relay.example.7")),
+            json(with(relays("x.example"), "wss://127.0.0.0x1")),
+            "{\"relays\":[],\"pad\":\"" + "x".repeat(RelayList.MAX_BYTES) + "\"}", // too big to read at all
         }) {
             served.set(bad);
             assertThrows(IOException.class, list::refresh, bad);
@@ -94,6 +105,32 @@ class RelayListTest {
         served.set(null);
         assertThrows(IOException.class, list::refresh);
         assertTrue(Files.notExists(cache));
+    }
+
+    @Test
+    void aFullListOfNamesIsTaken() {
+        List<String> most = IntStream.range(0, RelayList.MAX_RELAYS).mapToObj(i -> "wss://r" + i + ".x.example").toList();
+        assertEquals(most, RelayList.parse(json(most)));
+        // Digits are fine anywhere but in the last label, alone.
+        List<String> named = with(relays("x.example"), "wss://1.2.3.4.example");
+        named = with(named, "wss://relay.0x.example:443/");
+        named = with(named, "wss://relay.4chan1");
+        assertEquals(named, RelayList.parse(json(named)));
+    }
+
+    @Test
+    void aBodyWithoutEndIsNotReadToTheEnd() throws IOException {
+        // A good list, then padding: within the limit it is taken, beyond it
+        // refused, though the JSON is as good.
+        String list = json(relays("fetched.example"));
+        var list1 = new RelayList(dir.resolve("relays.json"), source, relays("baked.example"));
+        served.set(list + " ".repeat(RelayList.MAX_BYTES - list.length()));
+        list1.refresh();
+        assertEquals(relays("fetched.example"), list1.current());
+        var list2 = new RelayList(dir.resolve("other.json"), source, relays("baked.example"));
+        served.set(list + " ".repeat(RelayList.MAX_BYTES - list.length() + 1));
+        assertThrows(IOException.class, list2::refresh);
+        assertEquals(relays("baked.example"), list2.current());
     }
 
     @Test

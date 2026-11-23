@@ -36,9 +36,19 @@ public final class RelayList {
     static final String BAKED = "/sculk/remote/relays.json";
     /** As in the shell's relays.nix. */
     static final int MIN_RELAYS = 20;
+    /** The list has about 30; one far longer is not the shell's. */
+    static final int MAX_RELAYS = 200;
+    /** Plenty for {@link #MAX_RELAYS} URLs; the fetch reads no more than this. */
+    static final int MAX_BYTES = 64 * 1024;
 
     private static final Pattern URL = Pattern.compile(
             "wss://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]+)?/?");
+    /**
+     * A host a URL parser reads as an IPv4 address: its last label is a
+     * number, decimal or 0x hex. Relays have names; an address in the list
+     * would be someone pointing the game at a machine, perhaps on its own network.
+     */
+    private static final Pattern NUMERIC_HOST = Pattern.compile("wss://[^:/]*\\.([0-9]+|0x[0-9a-f]*)(:[0-9]+)?/?");
 
     private final Path cacheFile;
     private final URI source;
@@ -80,24 +90,32 @@ public final class RelayList {
                 .header("User-Agent", "sculk")
                 .GET()
                 .build();
-        HttpResponse<String> response;
+        HttpResponse<InputStream> response;
         try {
-            response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted", e);
         }
-        if (response.statusCode() != 200) throw new IOException(source + ": HTTP " + response.statusCode());
+        String body;
+        // Read to a limit, whatever the server says or sends: closing the
+        // stream early drops the rest of the response.
+        try (InputStream in = response.body()) {
+            if (response.statusCode() != 200) throw new IOException(source + ": HTTP " + response.statusCode());
+            byte[] bytes = in.readNBytes(MAX_BYTES + 1);
+            if (bytes.length > MAX_BYTES) throw new IOException(source + ": over " + MAX_BYTES + " bytes");
+            body = new String(bytes, StandardCharsets.UTF_8);
+        }
         List<String> fetched;
         try {
-            fetched = parse(response.body());
+            fetched = parse(body);
         } catch (IllegalArgumentException e) {
             throw new IOException(source + ": " + e.getMessage(), e);
         }
         current = fetched;
         Files.createDirectories(cacheFile.getParent());
         Path tmp = cacheFile.resolveSibling(cacheFile.getFileName() + ".tmp");
-        Files.writeString(tmp, response.body(), StandardCharsets.UTF_8);
+        Files.writeString(tmp, body, StandardCharsets.UTF_8);
         Files.move(tmp, cacheFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
@@ -115,9 +133,11 @@ public final class RelayList {
         JsonArray array = ((JsonObject) root).getAsJsonArray("relays");
         List<String> out = new ArrayList<>();
         var seen = new HashSet<String>();
+        if (array.size() > MAX_RELAYS) throw new IllegalArgumentException(array.size() + " relays");
         for (JsonElement e : array) {
             String url = e.isJsonPrimitive() ? e.getAsString() : "";
             if (!URL.matcher(url).matches()) throw new IllegalArgumentException("not a plain wss:// URL: " + url);
+            if (NUMERIC_HOST.matcher(url).matches()) throw new IllegalArgumentException("an address, not a name: " + url);
             if (!seen.add(url)) throw new IllegalArgumentException("duplicate: " + url);
             out.add(url);
         }

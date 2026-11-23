@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 class RelayPoolTest {
@@ -108,11 +109,60 @@ class RelayPoolTest {
             p.subscribe(TOPIC);
             await(() -> p.openRelays().size() == 1, "open");
             var conn = net.relay("wss://r1").conns.get(0);
-            for (String junk : new String[] {"", "{}", "[]", "[1,2]", "[\"EVENT\"]", "[\"EVENT\",\"x\",{}]", "[\"OK\"]"}) {
+            for (String junk : new String[] {
+                "", "{}", "[]", "[1,2]", "[\"EVENT\"]", "[\"EVENT\",\"x\",{}]", "[\"OK\"]",
+                // the right shape with the wrong types
+                "[[\"EVENT\"]]", "[\"EVENT\",[],{\"tags\":[[\"x\",5]]}]", "[\"EVENT\",{},{\"tags\":[[{},[]]]}]",
+                "[\"EVENT\",[],{\"id\":{},\"tags\":[[\"x\",\"" + TOPIC + "\"]]}]",
+                "[\"OK\",\"x\",[],{}]", "[\"OK\",\"x\",false,[\"pow:\"]]", "[\"OK\",\"x\",\"false\",\"pow: no\"]",
+                "[\"CLOSED\",\"x\",{}]", "[\"CLOSED\",\"x\",[\"blocked:\"]]",
+            }) {
                 conn.events.text(junk);
             }
             Thread.sleep(200);
-            assertFalse(p.openRelays().isEmpty());
+            assertEquals(List.of("wss://r1"), p.openRelays());
         }
+    }
+
+    @Test
+    void anEventCountsOnlyUnderItsOwnId() throws Exception {
+        var net = new FakeRelays.Net();
+        List<JsonObject> got = Collections.synchronizedList(new ArrayList<>());
+        try (var p = pool(net, URLS, 2, got)) {
+            p.subscribe(TOPIC);
+            await(() -> Stream.of("wss://r1", "wss://r2").allMatch(
+                    u -> net.relay(u).conns.stream().anyMatch(c -> !c.subs.isEmpty())), "subscribed");
+            String event = new Nostr.Signer().event(TOPIC, "aGk=", 1_000_000L);
+            // r1 gets in first with other content under the real event's id;
+            // r2 is honest. Were r1 believed, r2's copy would be a duplicate.
+            var liar = net.relay("wss://r1").conns.get(0);
+            liar.deliver(event.replace("\"aGk=\"", "\"bGllcw==\""));
+            liar.deliver(event.replace("\"created_at\":1000000,", "\"created_at\":1000001,"));
+            liar.deliver(event.replace("\"created_at\":1000000,", "\"created_at\":1e6,")); // not as it was hashed
+            net.relay("wss://r2").conns.get(0).deliver(event);
+            await(() -> !got.isEmpty(), "the real event delivered");
+            liar.deliver(event); // and r1 may yet tell the truth, once is enough
+            Thread.sleep(200);
+            assertEquals(1, got.size());
+            assertEquals("aGk=", got.get(0).get("content").getAsString());
+        }
+    }
+
+    @Test
+    void aMessageWithoutEndCostsTheRelayItsConnection() throws Exception {
+        try (var relay = new FakeRelays.Endless();
+                var p = new RelayPool(List.of(relay.url()), 1, RelayPool.webSockets(), () -> 1_000_000L, e -> {})) {
+            // Cut off, and then treated as any relay that dropped: tried
+            // again after the backoff, and cut off again.
+            await(() -> relay.cut.get() >= 2 || relay.swallowed, "cut off twice");
+            assertFalse(relay.swallowed, "the pool took " + FakeRelays.Endless.GIVE_UP + " bytes of one message");
+        }
+    }
+
+    @Test
+    void whatARelaySaysIsLoggedShortAndOnOneLine() {
+        assertEquals("pow: 20", RelayPool.clean("pow: 20"));
+        assertEquals("a?b??c?", RelayPool.clean("a\nb\r\u001bc\u2028"));
+        assertEquals(201, RelayPool.clean("x".repeat(100_000)).length());
     }
 }
